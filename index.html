@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NB-CC</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-nb-bg text-nb-text" style="background: #0d0d0d; color: rgba(255,255,255,0.9); margin: 0; min-height: 100vh;">
+    <div id="root">
+      <!-- 预加载提示：若 React 未挂载会一直显示 -->
+      <div id="preload-fallback" style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:12px;">
+        <div style="width:32px;height:32px;border:2px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+        <span style="color:rgba(255,255,255,0.7);font-size:14px;">Loading NovAIC...</span>
+      </div>
+    </div>
+    <style>@keyframes spin{to{transform:rotate(360deg);}}</style>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

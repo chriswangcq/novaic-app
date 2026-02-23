@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "novaic"
+version = "0.2.0"
+description = "NovAIC - The AI Computer Engine. PC is for humans, AIC is for AI."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    { name = "NovAIC Contributors" }
+]
+keywords = ["mcp", "ai", "agent", "desktop", "automation", "ai-computer", "novaic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+]
+
+dependencies = [
+    "aiohttp>=3.9.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.1.0",
+    "playwright>=1.40.0",
+    "python-dotenv>=1.0.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+novaic = "novaic_mcp_vmuse.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/novaic/novaic"
+Documentation = "https://docs.novaic.dev"
+Repository = "https://github.com/novaic/novaic"
+Issues = "https://github.com/novaic/novaic/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I"]

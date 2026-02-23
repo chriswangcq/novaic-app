@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; }
+        #screen { width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="screen"></div>
+    <script type="module">
+        // 使用本地 ESM 源码，避免 CDN 和打包问题
+        import RFB from './novnc-core/rfb.js';
+        
+        const params = new URLSearchParams(window.location.search);
+        const wsUrl = params.get('ws') || 'ws://localhost:6080';
+        
+        console.log('[VNC] Connecting to:', wsUrl);
+        
+        const rfb = new RFB(document.getElementById('screen'), wsUrl, {
+            shared: true,
+            credentials: {}
+        });
+        
+        rfb.scaleViewport = true;
+        rfb.resizeSession = false;
+        rfb.clipViewport = true;
+        
+        rfb.addEventListener('connect', () => {
+            console.log('[VNC] Connected');
+            window.parent?.postMessage({ type: 'vnc-connected' }, '*');
+        });
+        
+        rfb.addEventListener('disconnect', (e) => {
+            console.log('[VNC] Disconnected', e.detail);
+            window.parent?.postMessage({ type: 'vnc-disconnected', clean: e.detail?.clean }, '*');
+        });
+        
+        rfb.addEventListener('securityfailure', (e) => {
+            console.error('[VNC] Security failure:', e.detail);
+        });
+    </script>
+</body>
+</html>

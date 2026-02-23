@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>VNC Test</title>
+    <style>
+        body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; }
+        #log { padding: 20px; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+        #screen { border: 1px solid #333; }
+    </style>
+</head>
+<body>
+    <div id="log">Loading noVNC...</div>
+    <div id="screen"></div>
+    
+    <script type="module">
+        const log = (msg) => {
+            document.getElementById('log').textContent += '\n' + new Date().toISOString().substr(11, 8) + ' ' + msg;
+            console.log(msg);
+        };
+        
+        try {
+            log('Importing RFB from local ESM...');
+            const { default: RFB } = await import('./novnc-core/rfb.js');
+            log('RFB imported successfully');
+            
+            const wsUrl = 'ws://localhost:6080';
+            log('Connecting to: ' + wsUrl);
+            
+            const screen = document.getElementById('screen');
+            screen.style.width = '800px';
+            screen.style.height = '600px';
+            
+            const rfb = new RFB(screen, wsUrl, {
+                shared: true,
+                credentials: {}
+            });
+            
+            rfb.scaleViewport = true;
+            rfb.resizeSession = false;
+            
+            rfb.addEventListener('connect', () => log('EVENT: connected!'));
+            rfb.addEventListener('disconnect', (e) => log('EVENT: disconnected, clean=' + e.detail?.clean));
+            rfb.addEventListener('securityfailure', (e) => log('EVENT: security failure: ' + e.detail?.reason));
+            rfb.addEventListener('credentialsrequired', (e) => log('EVENT: credentials required: ' + JSON.stringify(e.detail)));
+            
+            log('RFB object created, waiting for events...');
+        } catch (e) {
+            log('ERROR: ' + e.message);
+            log('Stack: ' + e.stack);
+        }
+    </script>
+</body>
+</html>

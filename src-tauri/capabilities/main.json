@@ -1,0 +1,14 @@
+{
+  "identifier": "main-cap",
+  "description": "Allow frontend to listen to Tauri events and open URLs/files.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default",
+    "core:event:allow-listen",
+    "shell:allow-open"
+  ]
+}
+
+
+
+
