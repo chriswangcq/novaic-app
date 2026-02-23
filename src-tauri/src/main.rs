@@ -1427,6 +1427,11 @@ fn kill_zombie_processes() {
 /// v2.11: Uses unified novaic-backend binary for all modes (gateway, master, worker)
 /// v2.12: Supports both onefile mode (novaic-backend) and onedir mode (novaic-backend/novaic-backend)
 fn get_backend_info(app: &AppHandle) -> (PathBuf, bool, Option<PathBuf>) {
+    if split_runtime::external_services_mode() {
+        // Split-only mode: backend binary discovery is intentionally disabled.
+        return (PathBuf::from("/split-only/no-local-backend"), true, None);
+    }
+
     // Try to use bundled binary first (production mode)
     if let Ok(resource_dir) = app.path().resource_dir() {
         // Check onefile mode first: binary is directly at novaic-backend (relative to resource_dir)
@@ -1780,11 +1785,11 @@ fn main() {
             println!("[App] Data directory: {:?}", data_dir);
             append_startup_diagnostic(&data_dir, "app-bootstrap", "start", "tauri setup started");
 
-            // Validate split config early: fail-fast with explicit diagnostic when
-            // NOVAIC_EXTERNAL_SERVICES_MODE is active but NOVAIC_GATEWAY_URL is absent.
+            // Validate split-only config early. Missing required env must abort startup.
             if let Err(ref cfg_err) = split_runtime::validate_split_config() {
                 append_startup_diagnostic(&data_dir, "split-config-validation", "error", cfg_err.clone());
                 eprintln!("[split-config-validation] {}", cfg_err);
+                return Err(cfg_err.clone().into());
             } else if split_runtime::external_services_mode() {
                 append_startup_diagnostic(&data_dir, "split-config-validation", "ok",
                     format!("explicit gateway URL: {}", split_runtime::gateway_base_url()));
@@ -1892,9 +1897,7 @@ fn main() {
             
             tauri::async_runtime::spawn(async move {
                 if split_runtime::external_services_mode() {
-                    // Round 009: strict enforcement — require NOVAIC_GATEWAY_URL to be
-                    // explicitly set. Abort with SPLIT_CONFIG_STRICT_ABORT instead of
-                    // silently falling back to the default monorepo localhost port.
+                    // Split-only enforcement: NOVAIC_GATEWAY_URL must be explicitly set.
                     let external_gateway = match split_runtime::gateway_url_explicit() {
                         Some(url) => url,
                         None => {
@@ -1902,9 +1905,8 @@ fn main() {
                                 &data_dir_for_gateway,
                                 "external-services",
                                 "error",
-                                "SPLIT_CONFIG_STRICT_ABORT: NOVAIC_EXTERNAL_SERVICES_MODE is active \
-                                 but NOVAIC_GATEWAY_URL is not set. Refusing to fall back to \
-                                 localhost:19999. Set NOVAIC_GATEWAY_URL=http://<host>:<port>.",
+                                "SPLIT_CONFIG_STRICT_ABORT: NOVAIC_GATEWAY_URL is not set in split-only mode. \
+                                 Set NOVAIC_GATEWAY_URL=http://<host>:<port>.",
                             );
                             eprintln!(
                                 "[external-services] SPLIT_CONFIG_STRICT_ABORT: \

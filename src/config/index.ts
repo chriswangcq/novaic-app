@@ -23,9 +23,16 @@ declare global {
 }
 
 /** API 配置 */
+const rawGatewayUrl = import.meta.env.VITE_GATEWAY_URL?.trim();
+if (!rawGatewayUrl) {
+  throw new Error(
+    'SPLIT_CONFIG_ERROR: VITE_GATEWAY_URL is required in split-only mode (example: http://127.0.0.1:19999)'
+  );
+}
+
 export const API_CONFIG = {
   /** Gateway 服务 URL */
-  GATEWAY_URL: import.meta.env.VITE_GATEWAY_URL || 'http://127.0.0.1:19999',
+  GATEWAY_URL: rawGatewayUrl,
   
   /** Gateway 端口（从 URL 提取或默认） */
   GATEWAY_PORT: 19999,

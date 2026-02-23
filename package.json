@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "rm -rf src-tauri/resources/novaic-mcp-vmuse && cp -r ../novaic-mcp-vmuse src-tauri/resources/ && cd src-tauri && ./setup-dmg-support.sh && cd .. && env -u CI tauri build",
+    "tauri:build": "test -n \"$NOVAIC_MCP_VMUSE_REPO\" && test -d \"$NOVAIC_MCP_VMUSE_REPO\" && rm -rf src-tauri/resources/novaic-mcp-vmuse && cp -r \"$NOVAIC_MCP_VMUSE_REPO\" src-tauri/resources/novaic-mcp-vmuse && cd src-tauri && ./setup-dmg-support.sh && cd .. && env -u CI tauri build",
     "tauri:setup-dmg": "cd src-tauri && ./setup-dmg-support.sh",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write src/"

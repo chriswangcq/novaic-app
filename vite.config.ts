@@ -54,8 +54,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      // 使用 src/lib 下的 noVNC ESM 源码
-      'novnc-rfb': path.resolve(__dirname, './src/lib/novnc/rfb.js'),
+      // Use installed noVNC package path in split-only repos.
+      'novnc-rfb': path.resolve(__dirname, './node_modules/@novnc/novnc/lib/rfb.js'),
     },
   },
 });

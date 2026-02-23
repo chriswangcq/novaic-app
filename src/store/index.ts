@@ -277,7 +277,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           const health = await api.getHealth();
-          if (health.status === 'healthy') {
+          const healthStatus = String((health as { status?: string }).status || '').toLowerCase();
+          if (healthStatus === 'healthy' || healthStatus === 'ok') {
             gatewayReady = true;
             console.log('[Store] Gateway is ready');
             break;

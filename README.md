@@ -74,6 +74,7 @@ npm install
 npm run tauri:dev
 
 # Build for production
+export NOVAIC_MCP_VMUSE_REPO=../novaic-mcp-vmuse
 npm run tauri:build
 ```
 

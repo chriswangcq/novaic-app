@@ -40,7 +40,6 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/novaic-backend": "novaic-backend",
       "resources/config/services.json": "config/services.json",
       "resources/vmcontrol": "vmcontrol",
       "resources/novaic-mcp-vmuse": "novaic-mcp-vmuse",

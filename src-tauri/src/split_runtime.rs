@@ -1,30 +1,19 @@
 use std::path::PathBuf;
 
-/// Split runtime configuration helpers.
+/// Split runtime configuration helpers (split-only mode).
 ///
-/// These helpers centralize environment-driven endpoint resolution so desktop
-/// startup can run either in bundled monorepo mode or external split-service mode.
-///
-/// Split-mode activation:
-///   NOVAIC_TOOLS_SERVER_SPLIT_REPO=<path>  — desktop spawns main_tools.py from split repo;
-///                                            monorepo fallback is disabled.
+/// Desktop runtime is hard-enforced to external split-service mode.
+/// Missing required split configuration must fail fast at startup.
 
-const DEFAULT_GATEWAY_BASE_URL: &str = "http://127.0.0.1:19999";
 #[allow(dead_code)]
 const DEFAULT_AGENT_BASE_URL: &str = "http://127.0.0.1:20000";
 const DEFAULT_TOOLS_SERVER_BASE_URL: &str = "http://127.0.0.1:19998";
 
 pub fn gateway_base_url() -> String {
-    std::env::var("NOVAIC_GATEWAY_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_GATEWAY_BASE_URL.to_string())
+    gateway_url_explicit().unwrap_or_default()
 }
 
 /// Returns the gateway URL only when NOVAIC_GATEWAY_URL is set explicitly.
-/// Returns None when the value would come from the built-in default.
-/// Use this in split mode to detect implicit localhost fallback.
 pub fn gateway_url_explicit() -> Option<String> {
     std::env::var("NOVAIC_GATEWAY_URL")
         .ok()
@@ -32,18 +21,11 @@ pub fn gateway_url_explicit() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// Validates split-mode configuration at startup.
-/// Returns Err with a human-readable diagnostic when split mode is active
-/// but required environment variables are absent.
-/// Call this early in main() and surface the error via startup diagnostics.
+/// Validates required split-only configuration at startup.
 pub fn validate_split_config() -> Result<(), String> {
-    if !external_services_mode() {
-        return Ok(());
-    }
     if gateway_url_explicit().is_none() {
         return Err(
-            "SPLIT_CONFIG_ERROR: external_services_mode=true but NOVAIC_GATEWAY_URL is not set; \
-             desktop would silently fall back to localhost:19999 (monorepo port). \
+            "SPLIT_CONFIG_ERROR: split-only mode requires NOVAIC_GATEWAY_URL; \
              Set NOVAIC_GATEWAY_URL=http://<host>:<port> explicitly."
                 .to_string(),
         );
@@ -52,13 +34,7 @@ pub fn validate_split_config() -> Result<(), String> {
 }
 
 pub fn external_services_mode() -> bool {
-    std::env::var("NOVAIC_EXTERNAL_SERVICES_MODE")
-        .ok()
-        .map(|v| {
-            let lowered = v.trim().to_ascii_lowercase();
-            matches!(lowered.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(!cfg!(debug_assertions))
+    true
 }
 
 #[allow(dead_code)]
