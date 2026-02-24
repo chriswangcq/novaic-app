@@ -2049,8 +2049,12 @@ fn main() {
                     let tools_server_url = local_url(PORT_TOOLS_SERVER);
                     let tool_result_service_url = local_url(PORT_TOOL_RESULT_SERVICE);
                     
+                    // Worker binary path: resource_dir/backends/novaic-agent-runtime
+                    let worker_binary = backend_path_clone.join("backends/novaic-agent-runtime");
+                    println!("[Workers] Using binary: {:?}", worker_binary);
+                    
                     // Watchdog: 监控 sending 消息，触发 MessageProcess Saga (1 个)
-                    match Command::new(&backend_path_clone)
+                    match Command::new(&worker_binary)
                         .arg("watchdog")
                         .arg("--gateway-url")
                         .arg(&gateway_url)
@@ -2070,7 +2074,7 @@ fn main() {
                     
                     // Task Workers: 通用任务执行器
                     for i in 1..=num_task_workers {
-                        match Command::new(&backend_path_clone)
+                        match Command::new(&worker_binary)
                             .arg("task-worker")
                             .arg("--gateway-url")
                             .arg(&gateway_url)
@@ -2097,7 +2101,7 @@ fn main() {
                     
                     // Saga Workers: Saga 流程编排
                     for i in 1..=num_saga_workers {
-                        match Command::new(&backend_path_clone)
+                        match Command::new(&worker_binary)
                             .arg("saga-worker")
                             .arg("--gateway-url")
                             .arg(&gateway_url)
@@ -2119,7 +2123,7 @@ fn main() {
                     }
                     
                     // Health: 监控并回收超时任务/Saga (1 个)
-                    match Command::new(&backend_path_clone)
+                    match Command::new(&worker_binary)
                         .arg("health")
                         .arg("--gateway-url")
                         .arg(&gateway_url)
@@ -2144,7 +2148,7 @@ fn main() {
                     }
                     
                     // Scheduler: 定时唤醒调度器 (1 个)
-                    match Command::new(&backend_path_clone)
+                    match Command::new(&worker_binary)
                         .arg("scheduler")
                         .arg("--gateway-url")
                         .arg(&gateway_url)
