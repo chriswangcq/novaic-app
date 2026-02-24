@@ -108,21 +108,17 @@ fn ensure_ports_available(data_dir: &PathBuf, ports: &[(u16, &str)]) -> Result<(
 fn resolve_vmcontrol_binary_path(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
-    if let Ok(from_env) = std::env::var("NOVAIC_VMCONTROL_BIN") {
-        if !from_env.trim().is_empty() {
-            candidates.push(PathBuf::from(from_env.trim()));
-        }
-    }
-
+    // Check resource_dir first (packaged mode)
     if let Ok(resource_dir) = app.path().resource_dir() {
         candidates.push(resource_dir.join("vmcontrol/vmcontrol"));
     }
 
+    // Dev mode: check relative to executable
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let src_tauri_dir = exe_dir.join("../..");
-            candidates.push(src_tauri_dir.join("vmcontrol/target/debug/vmcontrol"));
             candidates.push(src_tauri_dir.join("vmcontrol/target/release/vmcontrol"));
+            candidates.push(src_tauri_dir.join("vmcontrol/target/debug/vmcontrol"));
         }
     }
 
@@ -138,7 +134,7 @@ fn resolve_vmcontrol_binary_path(app: &AppHandle) -> Result<PathBuf, String> {
         .collect::<Vec<_>>()
         .join(", ");
     Err(format!(
-        "VmControl binary not found. Checked: [{}]. You can set NOVAIC_VMCONTROL_BIN to override.",
+        "VmControl binary not found. Checked: [{}]",
         checked
     ))
 }
@@ -440,15 +436,22 @@ impl GatewayProcess {
         let tool_result_service_url = local_url(PORT_TOOL_RESULT_SERVICE);
         let runtime_orchestrator_port = PORT_RUNTIME_ORCHESTRATOR.to_string();
 
+        // Prepare log files
+        let log_dir = std::path::Path::new(&data_dir_str).join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::File::create(log_dir.join("gateway.log"))
+            .map_err(|e| format!("Failed to create gateway log file: {}", e))?;
+        let log_file_err = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file: {}", e))?;
+
         let child = if is_binary {
-            // Production mode: run unified novaic-backend binary
-            // v2.11: Uses `novaic-backend gateway --port PORT --data-dir PATH`
-            if !gateway_path.exists() {
-                return Err(format!("Backend binary not found at {:?}", gateway_path));
+            // Packaged mode: use novaic-gateway binary from backends/
+            let gateway_bin = PathBuf::from(&resource_dir_str).join("backends/novaic-gateway");
+            if !gateway_bin.exists() {
+                return Err(format!("Gateway binary not found at {:?}", gateway_bin));
             }
-            
-            Command::new(gateway_path)
-                .arg("gateway")  // Subcommand
+            println!("[Gateway] Starting binary: {:?}", gateway_bin);
+            Command::new(&gateway_bin)
                 .arg("--host")
                 .arg("127.0.0.1")
                 .arg("--port")
@@ -467,43 +470,30 @@ impl GatewayProcess {
                 .arg(&file_service_url)
                 .arg("--tool-result-service-url")
                 .arg(&tool_result_service_url)
-                .current_dir(&data_dir_str)
-                .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
-                .env("NOVAIC_DB_FILE", "gateway.db")
-                .env("NOVAIC_TOOLS_SERVER_URL", &tools_server_url)
-                .env("RUNTIME_ORCHESTRATOR_URL", &runtime_orchestrator_url)
-                .env("RUNTIME_ORCHESTRATOR_HOST", LOOPBACK_HOST)
-                .env("RUNTIME_ORCHESTRATOR_PORT", &runtime_orchestrator_port)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
-                // Use null to discard output - prevents pipe buffer from filling up
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
                 .spawn()
                 .map_err(|e| format!("Failed to start Gateway binary: {}", e))?
         } else {
-            // Development mode: run Python via novaic_main.py
-            let gateway_dir = gateway_path;
-            let venv_python = gateway_dir.join("venv/bin/python");
+            // Dev mode: run from split repo source (gateway_path is split_root)
+            let split_path = gateway_path.join("novaic-gateway");
+            let main_gateway = split_path.join("main_gateway.py");
+            if !main_gateway.exists() {
+                return Err(format!("[Gateway] main_gateway.py not found at {:?}", split_path));
+            }
+            let venv_python = split_path.join("venv/bin/python");
             let python = if venv_python.exists() {
                 venv_python.to_string_lossy().to_string()
-            } else if cfg!(target_os = "windows") {
-                "python".to_string()
             } else {
                 "python3".to_string()
             };
-
-            let novaic_main = gateway_dir.join("novaic_main.py");
-            if !novaic_main.exists() {
-                return Err(format!("novaic_main.py not found at {:?}", novaic_main));
-            }
-
-            println!("[Gateway] Using Python: {}", python);
-
-            // v2.11: Use unified novaic_main.py entry point
+            // Dev mode resource_dir: novaic-app/src-tauri/target/release/
+            let resource_dir = gateway_path.join("novaic-app/src-tauri/target/release");
+            println!("[Gateway] Dev mode: spawning from {:?}, resource_dir: {:?}", split_path, resource_dir);
             Command::new(&python)
-                .arg(&novaic_main)
-                .arg("gateway")
+                .arg("main_gateway.py")
                 .arg("--host")
                 .arg("127.0.0.1")
                 .arg("--port")
@@ -522,16 +512,10 @@ impl GatewayProcess {
                 .arg(&file_service_url)
                 .arg("--tool-result-service-url")
                 .arg(&tool_result_service_url)
-                .current_dir(gateway_dir)
-                .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
-                .env("NOVAIC_DB_FILE", "gateway.db")
-                .env("NOVAIC_TOOLS_SERVER_URL", &tools_server_url)
-                .env("RUNTIME_ORCHESTRATOR_URL", &runtime_orchestrator_url)
-                .env("RUNTIME_ORCHESTRATOR_HOST", LOOPBACK_HOST)
-                .env("RUNTIME_ORCHESTRATOR_PORT", &runtime_orchestrator_port)
+                .current_dir(&split_path)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
-                // Dev mode: inherit console so we can see logs directly
+                .env("NOVAIC_RESOURCE_DIR", resource_dir.to_string_lossy().to_string())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
                 .spawn()
@@ -667,182 +651,75 @@ impl ToolsServerProcess {
         let runtime_orchestrator_url = local_url(PORT_RUNTIME_ORCHESTRATOR);
         let tool_result_service_url = local_url(PORT_TOOL_RESULT_SERVICE);
 
+        // Prepare log files
+        let log_dir = std::path::Path::new(&data_dir_str).join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::File::create(log_dir.join("tools-server.log"))
+            .map_err(|e| format!("Failed to create tools-server log file: {}", e))?;
+        let log_file_err = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file: {}", e))?;
+
         let child = if is_binary {
-            // Packaged mode: check split repo override before falling back to monorepo binary.
-            let split_repo_env = std::env::var("NOVAIC_TOOLS_SERVER_SPLIT_REPO")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty());
-            let split_repo_auto = if split_runtime::external_services_mode() {
-                split_runtime::tools_server_repo_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-            } else {
-                None
-            };
-            let packaged_split_repo = split_repo_env.or(split_repo_auto);
-
-            // Always prepare log files for packaged mode (used by both paths).
-            let log_dir = std::path::Path::new(&data_dir_str).join("logs");
-            std::fs::create_dir_all(&log_dir).ok();
-            let log_file = std::fs::File::create(log_dir.join("tools-server.log"))
-                .map_err(|e| format!("Failed to create tools-server log file: {}", e))?;
-            let log_file_err = log_file.try_clone()
-                .map_err(|e| format!("Failed to clone log file: {}", e))?;
-
-            if let Some(ref split_repo_dir) = packaged_split_repo {
-                // Packaged split-first: spawn main_tools.py from split repo via Python.
-                let split_path = std::path::Path::new(split_repo_dir);
-                let main_tools = split_path.join("main_tools.py");
-                if !main_tools.exists() {
-                    return Err(format!(
-                        "[Tools Server] PACKAGED SPLIT MODE: NOVAIC_TOOLS_SERVER_SPLIT_REPO={:?} but main_tools.py not found; refusing to fall back to monorepo binary",
-                        split_repo_dir
-                    ));
-                }
-                let venv_python = split_path.join("venv/bin/python");
-                let python = if venv_python.exists() {
-                    venv_python.to_string_lossy().to_string()
-                } else if cfg!(target_os = "windows") {
-                    "python".to_string()
-                } else {
-                    "python3".to_string()
-                };
-                println!("[Tools Server] PACKAGED SPLIT MODE: spawning from {:?}", split_repo_dir);
-                Command::new(&python)
-                    .arg("main_tools.py")
-                    .current_dir(split_path)
-                    .env("NOVAIC_TOOLS_PORT", self.port.to_string())
-                    .env("NOVAIC_GATEWAY_URL", &gateway_url)
-                    .env("NOVAIC_RUNTIME_ORCHESTRATOR_URL", &runtime_orchestrator_url)
-                    .env("NOVAIC_TOOL_RESULT_SERVICE_URL", &tool_result_service_url)
-                    .env("NOVAIC_DATA_DIR", &data_dir_str)
-                    .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
-                    .env("NOVAIC_TOOLS_SERVER_SPLIT_REPO", split_repo_dir)
-                    .env("NO_PROXY", "localhost,127.0.0.1,::1")
-                    .env("no_proxy", "localhost,127.0.0.1,::1")
-                    .stdout(Stdio::from(log_file))
-                    .stderr(Stdio::from(log_file_err))
-                    .spawn()
-                    .map_err(|e| format!("Failed to start split Tools Server (packaged): {}", e))?
-            } else {
-                // Packaged monorepo mode: use the compiled novaic-backend binary.
-                if !backend_path.exists() {
-                    return Err(format!("Backend binary not found at {:?}", backend_path));
-                }
-                Command::new(backend_path)
-                    .arg("tools-server")
-                    .arg("--host")
-                    .arg("127.0.0.1")
-                    .arg("--port")
-                    .arg(self.port.to_string())
-                    .arg("--data-dir")
-                    .arg(&data_dir_str)
-                    .arg("--gateway-url")
-                    .arg(&gateway_url)
-                    .arg("--runtime-orchestrator-url")
-                    .arg(&runtime_orchestrator_url)
-                    .arg("--tool-result-service-url")
-                    .arg(&tool_result_service_url)
-                    .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
-                    .env("NOVAIC_GATEWAY_URL", &gateway_url)
-                    .env("NO_PROXY", "localhost,127.0.0.1,::1")
-                    .env("no_proxy", "localhost,127.0.0.1,::1")
-                    .stdout(Stdio::from(log_file))
-                    .stderr(Stdio::from(log_file_err))
-                    .spawn()
-                    .map_err(|e| format!("Failed to start Tools Server binary: {}", e))?
+            // Packaged mode: use novaic-tools-server binary from backends/
+            let tools_server_bin = PathBuf::from(&resource_dir_str).join("backends/novaic-tools-server");
+            if !tools_server_bin.exists() {
+                return Err(format!("Tools Server binary not found at {:?}", tools_server_bin));
             }
+            println!("[Tools Server] Starting binary: {:?}", tools_server_bin);
+            Command::new(&tools_server_bin)
+                .arg("--host")
+                .arg("127.0.0.1")
+                .arg("--port")
+                .arg(self.port.to_string())
+                .arg("--data-dir")
+                .arg(&data_dir_str)
+                .arg("--gateway-url")
+                .arg(&gateway_url)
+                .arg("--runtime-orchestrator-url")
+                .arg(&runtime_orchestrator_url)
+                .arg("--tool-result-service-url")
+                .arg(&tool_result_service_url)
+                .env("NO_PROXY", "localhost,127.0.0.1,::1")
+                .env("no_proxy", "localhost,127.0.0.1,::1")
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
+                .spawn()
+                .map_err(|e| format!("Failed to start Tools Server binary: {}", e))?
         } else {
-            // Dev mode: resolve split tools repo in split mode and refuse monorepo leak.
-            let split_repo_env = std::env::var("NOVAIC_TOOLS_SERVER_SPLIT_REPO")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty());
-            let split_repo_auto = if split_runtime::external_services_mode() {
-                split_runtime::tools_server_repo_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-            } else {
-                None
-            };
-            let split_repo_dir = split_repo_env.or(split_repo_auto);
-
-            if let Some(ref split_repo_dir) = split_repo_dir {
-                // Split-first mode: spawn main_tools.py from the extracted split repo.
-                let split_path = std::path::Path::new(split_repo_dir);
-                let main_tools = split_path.join("main_tools.py");
-                if !main_tools.exists() {
-                    return Err(format!(
-                        "[Tools Server] NOVAIC_TOOLS_SERVER_SPLIT_REPO={:?} but main_tools.py not found; refusing to fall back to monorepo",
-                        split_repo_dir
-                    ));
-                }
-                let venv_python = split_path.join("venv/bin/python");
-                let python = if venv_python.exists() {
-                    venv_python.to_string_lossy().to_string()
-                } else if cfg!(target_os = "windows") {
-                    "python".to_string()
-                } else {
-                    "python3".to_string()
-                };
-                println!("[Tools Server] SPLIT MODE: spawning from {:?}", split_repo_dir);
-                Command::new(&python)
-                    .arg("main_tools.py")
-                    .current_dir(split_path)
-                    .env("NOVAIC_TOOLS_PORT", self.port.to_string())
-                    .env("NOVAIC_GATEWAY_URL", &gateway_url)
-                    .env("NOVAIC_RUNTIME_ORCHESTRATOR_URL", &runtime_orchestrator_url)
-                    .env("NOVAIC_TOOL_RESULT_SERVICE_URL", &tool_result_service_url)
-                    .env("NOVAIC_DATA_DIR", &data_dir_str)
-                    .env("NOVAIC_TOOLS_SERVER_SPLIT_REPO", split_repo_dir)
-                    .env("NO_PROXY", "localhost,127.0.0.1,::1")
-                    .env("no_proxy", "localhost,127.0.0.1,::1")
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .spawn()
-                    .map_err(|e| format!("Failed to start split Tools Server: {}", e))?
-            } else if split_runtime::external_services_mode() {
-                return Err(
-                    "[Tools Server] split mode enabled but split repo path is missing; set NOVAIC_TOOLS_SERVER_SPLIT_REPO or provide sibling novaic-tools-server"
-                        .to_string(),
-                );
-            } else {
-                // Monorepo mode (no split env var set).
-                let gateway_dir = backend_path;
-                let venv_python = gateway_dir.join("venv/bin/python");
-                let python = if venv_python.exists() {
-                    venv_python.to_string_lossy().to_string()
-                } else if cfg!(target_os = "windows") {
-                    "python".to_string()
-                } else {
-                    "python3".to_string()
-                };
-                Command::new(&python)
-                    .arg("-m")
-                    .arg("novaic_main")
-                    .arg("tools-server")
-                    .arg("--host")
-                    .arg("127.0.0.1")
-                    .arg("--port")
-                    .arg(self.port.to_string())
-                    .arg("--data-dir")
-                    .arg(&data_dir_str)
-                    .arg("--gateway-url")
-                    .arg(&gateway_url)
-                    .arg("--runtime-orchestrator-url")
-                    .arg(&runtime_orchestrator_url)
-                    .arg("--tool-result-service-url")
-                    .arg(&tool_result_service_url)
-                    .current_dir(&gateway_dir)
-                    .env("NOVAIC_TOOLS_PORT", self.port.to_string())
-                    .env("NOVAIC_GATEWAY_URL", &gateway_url)
-                    .env("NOVAIC_DATA_DIR", &data_dir_str)
-                    .env("NO_PROXY", "localhost,127.0.0.1,::1")
-                    .env("no_proxy", "localhost,127.0.0.1,::1")
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .spawn()
-                    .map_err(|e| format!("Failed to start Tools Server: {}", e))?
+            // Dev mode: run from split repo source (backend_path is split_root)
+            let split_path = backend_path.join("novaic-tools-server");
+            let main_tools = split_path.join("main_tools.py");
+            if !main_tools.exists() {
+                return Err(format!("[Tools Server] main_tools.py not found at {:?}", split_path));
             }
+            let venv_python = split_path.join("venv/bin/python");
+            let python = if venv_python.exists() {
+                venv_python.to_string_lossy().to_string()
+            } else {
+                "python3".to_string()
+            };
+            println!("[Tools Server] Dev mode: spawning from {:?}", split_path);
+            Command::new(&python)
+                .arg("main_tools.py")
+                .arg("--host")
+                .arg("127.0.0.1")
+                .arg("--port")
+                .arg(self.port.to_string())
+                .arg("--data-dir")
+                .arg(&data_dir_str)
+                .arg("--gateway-url")
+                .arg(&gateway_url)
+                .arg("--runtime-orchestrator-url")
+                .arg(&runtime_orchestrator_url)
+                .arg("--tool-result-service-url")
+                .arg(&tool_result_service_url)
+                .current_dir(&split_path)
+                .env("NO_PROXY", "localhost,127.0.0.1,::1")
+                .env("no_proxy", "localhost,127.0.0.1,::1")
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .map_err(|e| format!("Failed to start Tools Server: {}", e))?
         };
 
         self.process = Some(child);
@@ -907,11 +784,22 @@ impl QueueServiceProcess {
         println!("[Queue Service] Using resource_dir: {}", resource_dir_str);
         let gateway_url = local_url(PORT_GATEWAY);
 
+        // Prepare log files
+        let log_dir = std::path::Path::new(&data_dir_str).join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::File::create(log_dir.join("queue-service.log"))
+            .map_err(|e| format!("Failed to create queue-service log file: {}", e))?;
+        let log_file_err = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file: {}", e))?;
+
         let child = if is_binary {
-            if !backend_path.exists() {
-                return Err(format!("Backend binary not found at {:?}", backend_path));
+            // Packaged mode: queue-service is part of novaic-agent-runtime
+            let agent_runtime_bin = PathBuf::from(&resource_dir_str).join("backends/novaic-agent-runtime");
+            if !agent_runtime_bin.exists() {
+                return Err(format!("Agent Runtime binary not found at {:?}", agent_runtime_bin));
             }
-            Command::new(backend_path)
+            println!("[Queue Service] Starting binary: {:?}", agent_runtime_bin);
+            Command::new(&agent_runtime_bin)
                 .arg("queue-service")
                 .arg("--host")
                 .arg("127.0.0.1")
@@ -919,29 +807,24 @@ impl QueueServiceProcess {
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
-                .env("NOVAIC_GATEWAY_URL", &gateway_url)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
                 .spawn()
                 .map_err(|e| format!("Failed to start Queue Service binary: {}", e))?
         } else {
-            // Dev mode: backend_path is the novaic-backend directory (has main.py, novaic_main.py)
-            let gateway_dir = backend_path;
-            let venv_python = gateway_dir.join("venv/bin/python");
+            // Dev mode: run from split repo source (backend_path is split_root)
+            let split_path = backend_path.join("novaic-agent-runtime");
+            let venv_python = split_path.join("venv/bin/python");
             let python = if venv_python.exists() {
                 venv_python.to_string_lossy().to_string()
-            } else if cfg!(target_os = "windows") {
-                "python".to_string()
             } else {
                 "python3".to_string()
             };
-            // Run from gateway dir so python -m novaic_main works (novaic_main.py in novaic-backend)
+            println!("[Queue Service] Dev mode: spawning from {:?}", split_path);
             Command::new(&python)
-                .arg("-m")
-                .arg("novaic_main")
+                .arg("main_novaic.py")
                 .arg("queue-service")
                 .arg("--host")
                 .arg("127.0.0.1")
@@ -949,10 +832,7 @@ impl QueueServiceProcess {
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .current_dir(&gateway_dir)
-                .env("NOVAIC_QUEUE_PORT", self.port.to_string())
-                .env("NOVAIC_GATEWAY_URL", &gateway_url)
-                .env("NOVAIC_DATA_DIR", &data_dir_str)
+                .current_dir(&split_path)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
                 .stdout(Stdio::inherit())
@@ -1012,48 +892,54 @@ impl FileServiceProcess {
             provided_resource_dir
         };
 
+        // Prepare log files
+        let log_dir = std::path::Path::new(&data_dir_str).join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::File::create(log_dir.join("file-service.log"))
+            .map_err(|e| format!("Failed to create file-service log file: {}", e))?;
+        let log_file_err = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file: {}", e))?;
+
         let child = if is_binary {
-            if !backend_path.exists() {
-                return Err(format!("Backend binary not found at {:?}", backend_path));
+            // Packaged mode: use novaic-storage-a binary
+            let file_service_bin = PathBuf::from(&resource_dir_str).join("backends/novaic-storage-a");
+            if !file_service_bin.exists() {
+                return Err(format!("File Service binary not found at {:?}", file_service_bin));
             }
-            Command::new(backend_path)
-                .arg("file-service")
+            println!("[File Service] Starting binary: {:?}", file_service_bin);
+            Command::new(&file_service_bin)
                 .arg("--host")
                 .arg("127.0.0.1")
                 .arg("--port")
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
-                .env("NOVAIC_DB_FILE", "runtime_orchestrator.db")
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
                 .spawn()
                 .map_err(|e| format!("Failed to start File Service binary: {}", e))?
         } else {
-            let gateway_dir = backend_path;
-            let venv_python = gateway_dir.join("venv/bin/python");
+            // Dev mode: run from split repo source (backend_path is split_root)
+            let split_path = backend_path.join("novaic-storage-a");
+            let venv_python = split_path.join("venv/bin/python");
             let python = if venv_python.exists() {
                 venv_python.to_string_lossy().to_string()
-            } else if cfg!(target_os = "windows") {
-                "python".to_string()
             } else {
                 "python3".to_string()
             };
+            println!("[File Service] Dev mode: spawning from {:?}", split_path);
             Command::new(&python)
                 .arg("-m")
-                .arg("novaic_main")
-                .arg("file-service")
+                .arg("file_service.main")
                 .arg("--host")
                 .arg("127.0.0.1")
                 .arg("--port")
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .current_dir(&gateway_dir)
-                .env("NOVAIC_DATA_DIR", &data_dir_str)
+                .current_dir(&split_path)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
                 .stdout(Stdio::inherit())
@@ -1107,47 +993,61 @@ impl ToolResultServiceProcess {
         } else {
             provided_resource_dir
         };
+        // Prepare log files
+        let log_dir = std::path::Path::new(&data_dir_str).join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::File::create(log_dir.join("tool-result-service.log"))
+            .map_err(|e| format!("Failed to create tool-result-service log file: {}", e))?;
+        let log_file_err = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file: {}", e))?;
+
+        let gateway_url = local_url(PORT_GATEWAY);
+        let file_service_url = local_url(PORT_FILE_SERVICE);
+
         let child = if is_binary {
-            if !backend_path.exists() {
-                return Err(format!("Backend binary not found at {:?}", backend_path));
+            // Packaged mode: use novaic-storage-b binary
+            let trs_bin = PathBuf::from(&resource_dir_str).join("backends/novaic-storage-b");
+            if !trs_bin.exists() {
+                return Err(format!("Tool Result Service binary not found at {:?}", trs_bin));
             }
-            Command::new(backend_path)
-                .arg("tool-result-service")
-                .arg("--host")
-                .arg("127.0.0.1")
+            println!("[Tool Result Service] Starting binary: {:?}", trs_bin);
+            Command::new(&trs_bin)
                 .arg("--port")
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
+                .arg("--file-service-url")
+                .arg(&file_service_url)
+                .arg("--gateway-url")
+                .arg(&gateway_url)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
                 .spawn()
                 .map_err(|e| format!("Failed to start Tool Result Service binary: {}", e))?
         } else {
-            let gateway_dir = backend_path;
-            let venv_python = gateway_dir.join("venv/bin/python");
+            // Dev mode: run from split repo source (backend_path is split_root)
+            let split_path = backend_path.join("novaic-storage-b");
+            let venv_python = split_path.join("venv/bin/python");
             let python = if venv_python.exists() {
                 venv_python.to_string_lossy().to_string()
-            } else if cfg!(target_os = "windows") {
-                "python".to_string()
             } else {
                 "python3".to_string()
             };
+            println!("[Tool Result Service] Dev mode: spawning from {:?}", split_path);
             Command::new(&python)
                 .arg("-m")
-                .arg("novaic_main")
-                .arg("tool-result-service")
-                .arg("--host")
-                .arg("127.0.0.1")
+                .arg("tool_result_service.main")
                 .arg("--port")
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .current_dir(&gateway_dir)
-                .env("NOVAIC_DATA_DIR", &data_dir_str)
+                .arg("--file-service-url")
+                .arg(&file_service_url)
+                .arg("--gateway-url")
+                .arg(&gateway_url)
+                .current_dir(&split_path)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
                 .stdout(Stdio::inherit())
@@ -1220,49 +1120,53 @@ impl RuntimeOrchestratorProcess {
         };
         println!("[Runtime Orchestrator] Using resource_dir: {}", resource_dir_str);
 
+        // Prepare log files
+        let log_dir = std::path::Path::new(&data_dir_str).join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::File::create(log_dir.join("runtime-orchestrator.log"))
+            .map_err(|e| format!("Failed to create runtime-orchestrator log file: {}", e))?;
+        let log_file_err = log_file.try_clone()
+            .map_err(|e| format!("Failed to clone log file: {}", e))?;
+
         let child = if is_binary {
-            if !backend_path.exists() {
-                return Err(format!("Backend binary not found at {:?}", backend_path));
+            // Packaged mode: use novaic-runtime-orchestrator binary
+            let ro_bin = PathBuf::from(&resource_dir_str).join("backends/novaic-runtime-orchestrator");
+            if !ro_bin.exists() {
+                return Err(format!("Runtime Orchestrator binary not found at {:?}", ro_bin));
             }
-            Command::new(backend_path)
-                .arg("runtime-orchestrator")
+            println!("[Runtime Orchestrator] Starting binary: {:?}", ro_bin);
+            Command::new(&ro_bin)
                 .arg("--host")
                 .arg("127.0.0.1")
                 .arg("--port")
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .current_dir(&data_dir_str)
-                .env("NOVAIC_RESOURCE_DIR", &resource_dir_str)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_err))
                 .spawn()
                 .map_err(|e| format!("Failed to start Runtime Orchestrator binary: {}", e))?
         } else {
-            let gateway_dir = backend_path;
-            let venv_python = gateway_dir.join("venv/bin/python");
+            // Dev mode: run from split repo source (backend_path is split_root)
+            let split_path = backend_path.join("novaic-runtime-orchestrator");
+            let venv_python = split_path.join("venv/bin/python");
             let python = if venv_python.exists() {
                 venv_python.to_string_lossy().to_string()
-            } else if cfg!(target_os = "windows") {
-                "python".to_string()
             } else {
                 "python3".to_string()
             };
+            println!("[Runtime Orchestrator] Dev mode: spawning from {:?}", split_path);
             Command::new(&python)
-                .arg("-m")
-                .arg("novaic_main")
-                .arg("runtime-orchestrator")
+                .arg("main_runtime_orchestrator.py")
                 .arg("--host")
                 .arg("127.0.0.1")
                 .arg("--port")
                 .arg(self.port.to_string())
                 .arg("--data-dir")
                 .arg(&data_dir_str)
-                .current_dir(gateway_dir)
-                .env("NOVAIC_DATA_DIR", &data_dir_str)
-                .env("NOVAIC_DB_FILE", "runtime_orchestrator.db")
+                .current_dir(&split_path)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
                 .env("no_proxy", "localhost,127.0.0.1,::1")
                 .stdout(Stdio::inherit())
@@ -1421,62 +1325,50 @@ fn kill_zombie_processes() {
     }
 }
 
-/// Get unified backend path and whether it's a binary
-/// Returns (path, is_binary, gateway_dir_for_dev)
+/// Get backend info for split architecture
+/// Returns (split_root_path, is_binary, None)
 /// 
-/// v2.11: Uses unified novaic-backend binary for all modes (gateway, master, worker)
-/// v2.12: Supports both onefile mode (novaic-backend) and onedir mode (novaic-backend/novaic-backend)
+/// Split architecture: each service has its own binary in backends/
 fn get_backend_info(app: &AppHandle) -> (PathBuf, bool, Option<PathBuf>) {
-    if split_runtime::external_services_mode() {
-        // Split-only mode: backend binary discovery is intentionally disabled.
-        return (PathBuf::from("/split-only/no-local-backend"), true, None);
-    }
-
-    // Try to use bundled binary first (production mode)
+    // Try to use bundled binaries first (production mode)
+    // Check if backends/novaic-gateway exists
     if let Ok(resource_dir) = app.path().resource_dir() {
-        // Check onefile mode first: binary is directly at novaic-backend (relative to resource_dir)
-        let onefile_path = resource_dir.join("novaic-backend");
-        println!("[Backend] Checking onefile binary at: {:?}", onefile_path);
-        if onefile_path.exists() && onefile_path.is_file() {
-            println!("[Backend] Found onefile binary, using production mode");
-            return (onefile_path, true, None);
+        let backends_dir = resource_dir.join("backends");
+        let gateway_bin = backends_dir.join("novaic-gateway");
+        println!("[Backend] Checking split backends at: {:?}", backends_dir);
+        if gateway_bin.exists() && gateway_bin.is_file() {
+            println!("[Backend] Found split binaries, using production mode");
+            return (resource_dir.clone(), true, None);
         }
-        
-        // Check onedir mode: binary is at novaic-backend/novaic-backend (relative to resource_dir)
-        let onedir_path = resource_dir.join("novaic-backend/novaic-backend");
-        println!("[Backend] Checking onedir binary at: {:?}", onedir_path);
-        if onedir_path.exists() {
-            println!("[Backend] Found onedir binary, using production mode");
-            return (onedir_path, true, None);
-        }
-        
-        println!("[Backend] Bundled binary not found");
+        println!("[Backend] Split binaries not found in {:?}", backends_dir);
     } else {
         println!("[Backend] Could not get resource_dir");
     }
     
-    // Fallback to development mode - check relative to executable
+    // Fallback to development mode - check for split repos
     // In dev mode, executable is at: novaic-app/src-tauri/target/release/novaic
-    // Backend source is at: novaic-backend (4 levels up from executable)
+    // Split repos are at: new-build-novaic/novaic-xxx (4 levels up from target/release)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            // exe_dir = .../novaic-app/src-tauri/target/release/
-            // Go up 4 levels to project root, then into novaic-backend
-            let dev_path = exe_dir
-                .join("../../../..")  // Go to project root (novaic/)
-                .join("novaic-backend");
+            // exe_dir = .../new-build-novaic/novaic-app/src-tauri/target/release/
+            // Go up 4 levels to new-build-novaic/
+            let split_root = exe_dir.join("../../../..");
             
-            if dev_path.exists() && dev_path.join("main.py").exists() {
-                let canonical = dev_path.canonicalize().unwrap_or(dev_path);
-                println!("[Backend] Using development source: {:?}", canonical);
-                return (canonical.clone(), false, Some(canonical));
+            // Check if novaic-gateway exists
+            let gateway_dir = split_root.join("novaic-gateway");
+            println!("[Backend] Checking dev split repos at: {:?}", split_root);
+            if gateway_dir.exists() && gateway_dir.join("main_gateway.py").exists() {
+                let canonical = split_root.canonicalize().unwrap_or(split_root.clone());
+                let gateway_canonical = gateway_dir.canonicalize().unwrap_or(gateway_dir);
+                println!("[Backend] Using split development repos at: {:?}", canonical);
+                return (canonical, false, Some(gateway_canonical));
             }
-            println!("[Backend] Dev path not found: {:?}", dev_path);
+            println!("[Backend] Dev split repos not found at: {:?}", split_root);
         }
     }
     
-    println!("[Backend] ERROR: No backend found! Please ensure novaic-backend is bundled with the app.");
-    (PathBuf::from("/tmp/novaic-backend-not-found"), false, None)
+    println!("[Backend] ERROR: No backend found! Please ensure backends are bundled or split repos exist.");
+    (PathBuf::from("/tmp/novaic-split-not-found"), false, None)
 }
 
 // Legacy compatibility wrappers (kept for minimal code changes)
@@ -1492,12 +1384,6 @@ async fn start_gateway(
     gateway: tauri::State<'_, GatewayState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    if split_runtime::external_services_mode() {
-        return Ok(format!(
-            "External services mode enabled; using gateway {}",
-            split_runtime::gateway_base_url()
-        ));
-    }
     let (gateway_path, is_binary) = get_gateway_info(&app);
     let data_dir = app.path().app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
@@ -1785,23 +1671,11 @@ fn main() {
             println!("[App] Data directory: {:?}", data_dir);
             append_startup_diagnostic(&data_dir, "app-bootstrap", "start", "tauri setup started");
 
-            // Validate split-only config early. Missing required env must abort startup.
-            if let Err(ref cfg_err) = split_runtime::validate_split_config() {
-                append_startup_diagnostic(&data_dir, "split-config-validation", "error", cfg_err.clone());
-                eprintln!("[split-config-validation] {}", cfg_err);
-                return Err(cfg_err.clone().into());
-            } else if split_runtime::external_services_mode() {
-                append_startup_diagnostic(&data_dir, "split-config-validation", "ok",
-                    format!("explicit gateway URL: {}", split_runtime::gateway_base_url()));
-            }
-
-            // Backend 五组件（Gateway、MCP Gateway、Watchdog、Task Worker、Saga Worker、Health）均由 Tauri 统一拉起
+            // All backends are started by Tauri - no external config needed
             // v4.0: Saga/Task Architecture
 
-            // Backend 组件: Gateway（API + DB）
-            let mut gateway_state = GatewayProcess::new();
-            gateway_state.set_base_url_override(split_runtime::gateway_base_url());
-            let gateway = Arc::new(Mutex::new(gateway_state));
+            // Backend: Gateway (API + DB)
+            let gateway = Arc::new(Mutex::new(GatewayProcess::new()));
             app.manage(gateway.clone());
 
             // Backend 组件: Runtime Orchestrator（内部运行时编排服务，Gateway 代理请求到此）
@@ -1896,54 +1770,6 @@ fn main() {
             let app_handle_for_vmcontrol = app.handle().clone();
             
             tauri::async_runtime::spawn(async move {
-                if split_runtime::external_services_mode() {
-                    // Split-only enforcement: NOVAIC_GATEWAY_URL must be explicitly set.
-                    let external_gateway = match split_runtime::gateway_url_explicit() {
-                        Some(url) => url,
-                        None => {
-                            append_startup_diagnostic(
-                                &data_dir_for_gateway,
-                                "external-services",
-                                "error",
-                                "SPLIT_CONFIG_STRICT_ABORT: NOVAIC_GATEWAY_URL is not set in split-only mode. \
-                                 Set NOVAIC_GATEWAY_URL=http://<host>:<port>.",
-                            );
-                            eprintln!(
-                                "[external-services] SPLIT_CONFIG_STRICT_ABORT: \
-                                 NOVAIC_GATEWAY_URL not set in split mode"
-                            );
-                            return;
-                        }
-                    };
-                    let health_url = format!("{}/api/health", external_gateway.trim_end_matches('/'));
-                    let client = reqwest::Client::new();
-                    match client.get(&health_url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            append_startup_diagnostic(
-                                &data_dir_for_gateway,
-                                "external-services",
-                                "ok",
-                                format!("gateway health reachable at {}", health_url),
-                            );
-                        }
-                        Ok(resp) => {
-                            let detail = format!(
-                                "gateway health returned {} at {}",
-                                resp.status(),
-                                health_url
-                            );
-                            append_startup_diagnostic(&data_dir_for_gateway, "external-services", "error", detail);
-                            return;
-                        }
-                        Err(err) => {
-                            let detail = format!("gateway health probe failed at {}: {}", health_url, err);
-                            append_startup_diagnostic(&data_dir_for_gateway, "external-services", "error", detail);
-                            return;
-                        }
-                    }
-                    return;
-                }
-
                 // Kill any zombie backend processes before starting
                 kill_zombie_processes();
                 append_startup_diagnostic(&data_dir_for_gateway, "cleanup", "ok", "zombie cleanup completed");
@@ -2338,7 +2164,9 @@ fn main() {
                 } else {
                     // 开发模式：直接启动 Python 脚本 (多个 workers)
                     let gateway_dir = gateway_dir_clone.expect("Gateway dir required for dev mode");
-                    let venv_python = gateway_dir.join(".venv/bin/python");
+                    // Workers 在 novaic-agent-runtime 目录，不是 novaic-gateway
+                    let agent_runtime_dir = gateway_dir.parent().unwrap().join("novaic-agent-runtime");
+                    let venv_python = agent_runtime_dir.join(".venv/bin/python");
                     let python = if venv_python.exists() {
                         venv_python.to_string_lossy().to_string()
                     } else {
@@ -2363,7 +2191,7 @@ fn main() {
                         .arg(&runtime_orchestrator_url)
                         .arg("--data-dir")
                         .arg(data_dir_for_gateway.to_string_lossy().to_string())
-                        .current_dir(&gateway_dir)
+                        .current_dir(&agent_runtime_dir)
                         .stdout(Stdio::inherit())
                         .stderr(Stdio::inherit())
                         .spawn()
@@ -2391,7 +2219,7 @@ fn main() {
                             .arg("5")
                             .arg("--data-dir")
                             .arg(data_dir_for_gateway.to_string_lossy().to_string())
-                            .current_dir(&gateway_dir)
+                            .current_dir(&agent_runtime_dir)
                             .stdout(Stdio::inherit())
                             .stderr(Stdio::inherit())
                             .spawn()
@@ -2416,7 +2244,7 @@ fn main() {
                             .arg("10")
                             .arg("--data-dir")
                             .arg(data_dir_for_gateway.to_string_lossy().to_string())
-                            .current_dir(&gateway_dir)
+                            .current_dir(&agent_runtime_dir)
                             .stdout(Stdio::inherit())
                             .stderr(Stdio::inherit())
                             .spawn()
@@ -2444,7 +2272,7 @@ fn main() {
                         .arg("1800")
                         .arg("--data-dir")
                         .arg(data_dir_for_gateway.to_string_lossy().to_string())
-                        .current_dir(&gateway_dir)
+                        .current_dir(&agent_runtime_dir)
                         .stdout(Stdio::inherit())
                         .stderr(Stdio::inherit())
                         .spawn()
@@ -2465,7 +2293,7 @@ fn main() {
                         .arg("10")
                         .arg("--data-dir")
                         .arg(data_dir_for_gateway.to_string_lossy().to_string())
-                        .current_dir(&gateway_dir)
+                        .current_dir(&agent_runtime_dir)
                         .stdout(Stdio::inherit())
                         .stderr(Stdio::inherit())
                         .spawn()

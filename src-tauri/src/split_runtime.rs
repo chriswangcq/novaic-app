@@ -1,70 +1,51 @@
 use std::path::PathBuf;
 
-/// Split runtime configuration helpers (split-only mode).
+/// Split runtime configuration (NO environment variables).
 ///
-/// Desktop runtime is hard-enforced to external split-service mode.
-/// Missing required split configuration must fail fast at startup.
+/// All configuration is either:
+/// 1. Hardcoded constants (fixed ports)
+/// 2. Derived from resource paths at runtime
+///
+/// This ensures the app can be double-clicked to start without any setup.
 
-#[allow(dead_code)]
-const DEFAULT_AGENT_BASE_URL: &str = "http://127.0.0.1:20000";
-const DEFAULT_TOOLS_SERVER_BASE_URL: &str = "http://127.0.0.1:19998";
+// Fixed service ports (Split architecture)
+pub const PORT_GATEWAY: u16 = 19999;
+pub const PORT_TOOLS_SERVER: u16 = 19998;
+pub const PORT_QUEUE_SERVICE: u16 = 19997;
+pub const PORT_VMCONTROL: u16 = 19996;
+pub const PORT_FILE_SERVICE: u16 = 19995;
+pub const PORT_TOOL_RESULT_SERVICE: u16 = 19994;
+pub const PORT_RUNTIME_ORCHESTRATOR: u16 = 19993;
+pub const PORT_AGENT_RUNTIME: u16 = 19991;
 
+pub const LOOPBACK_HOST: &str = "127.0.0.1";
+
+/// Returns the gateway base URL (fixed).
 pub fn gateway_base_url() -> String {
-    gateway_url_explicit().unwrap_or_default()
+    format!("http://{}:{}", LOOPBACK_HOST, PORT_GATEWAY)
 }
 
-/// Returns the gateway URL only when NOVAIC_GATEWAY_URL is set explicitly.
-pub fn gateway_url_explicit() -> Option<String> {
-    std::env::var("NOVAIC_GATEWAY_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-/// Validates required split-only configuration at startup.
-pub fn validate_split_config() -> Result<(), String> {
-    if gateway_url_explicit().is_none() {
-        return Err(
-            "SPLIT_CONFIG_ERROR: split-only mode requires NOVAIC_GATEWAY_URL; \
-             Set NOVAIC_GATEWAY_URL=http://<host>:<port> explicitly."
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-pub fn external_services_mode() -> bool {
-    true
-}
-
-#[allow(dead_code)]
-pub fn agent_base_url() -> String {
-    std::env::var("NOVAIC_AGENT_BASE_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_AGENT_BASE_URL.to_string())
-}
-
-/// Returns the tools-server base URL, respecting NOVAIC_TOOLS_SERVER_URL override.
-#[allow(dead_code)]
+/// Returns the tools server base URL (fixed).
 pub fn tools_server_base_url() -> String {
-    std::env::var("NOVAIC_TOOLS_SERVER_URL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_TOOLS_SERVER_BASE_URL.to_string())
+    format!("http://{}:{}", LOOPBACK_HOST, PORT_TOOLS_SERVER)
 }
 
-/// Returns the split repo path for tools-server, or None if split mode is not active.
-#[allow(dead_code)]
-pub fn tools_server_split_repo() -> Option<String> {
-    std::env::var("NOVAIC_TOOLS_SERVER_SPLIT_REPO")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+/// Returns the runtime orchestrator base URL (fixed).
+pub fn runtime_orchestrator_base_url() -> String {
+    format!("http://{}:{}", LOOPBACK_HOST, PORT_RUNTIME_ORCHESTRATOR)
 }
 
+/// Returns the tool result service base URL (fixed).
+pub fn tool_result_service_base_url() -> String {
+    format!("http://{}:{}", LOOPBACK_HOST, PORT_TOOL_RESULT_SERVICE)
+}
+
+/// Returns the file service base URL (fixed).
+pub fn file_service_base_url() -> String {
+    format!("http://{}:{}", LOOPBACK_HOST, PORT_FILE_SERVICE)
+}
+
+/// Parse port from a URL string.
 pub fn parse_gateway_port(base_url: &str) -> Option<u16> {
     let without_scheme = base_url.split("://").nth(1).unwrap_or(base_url);
     let host_port = without_scheme.split('/').next()?;
@@ -72,20 +53,22 @@ pub fn parse_gateway_port(base_url: &str) -> Option<u16> {
     port.parse::<u16>().ok()
 }
 
-pub fn tools_server_repo_dir() -> Option<PathBuf> {
-    if let Ok(from_env) = std::env::var("NOVAIC_TOOLS_SERVER_DIR") {
-        let trimmed = from_env.trim();
-        if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
-        }
-    }
+/// Build local URL for a given port.
+pub fn local_url(port: u16) -> String {
+    format!("http://{}:{}", LOOPBACK_HOST, port)
+}
 
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let candidate = exe_dir.join("../../../..").join("novaic-tools-server");
-            return Some(candidate);
-        }
-    }
+/// Get the backends directory from resource_dir.
+pub fn backends_dir(resource_dir: &PathBuf) -> PathBuf {
+    resource_dir.join("backends")
+}
 
-    None
+/// Get a specific backend binary path.
+pub fn backend_binary(resource_dir: &PathBuf, name: &str) -> PathBuf {
+    backends_dir(resource_dir).join(name)
+}
+
+/// Get vmcontrol binary path.
+pub fn vmcontrol_binary(resource_dir: &PathBuf) -> PathBuf {
+    resource_dir.join("vmcontrol").join("vmcontrol")
 }
