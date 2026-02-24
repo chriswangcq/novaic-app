@@ -183,7 +183,7 @@ function App() {
       if (agent) {
         setSetupConfig({
           agent,
-          sourceImage: 'ubuntu-24.04',
+          sourceImage: '',
           useCnMirrors: false,
         });
         setCurrentPage('setup');

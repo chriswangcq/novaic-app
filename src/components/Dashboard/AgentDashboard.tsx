@@ -421,7 +421,7 @@ export function AgentDashboard({ onEnterWorkspace, onEnterSetup }: AgentDashboar
       // Create default setup config
       const config: SetupConfig = {
         agent: newAgent,
-        sourceImage: 'ubuntu-24.04',
+        sourceImage: '',
         useCnMirrors: navigator.language?.startsWith('zh') || false,
       };
       

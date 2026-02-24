@@ -51,6 +51,74 @@ export interface VmSetupConfig {
   useCnMirrors: boolean;
 }
 
+function isPathLikeImage(value: string): boolean {
+  return value.includes('/') || value.includes('\\') || value.endsWith('.img') || value.startsWith('file:');
+}
+
+function tryParseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object') {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  return null;
+}
+
+export function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const msg = error.message?.trim();
+    if (msg) {
+      const parsed = tryParseJsonObject(msg);
+      if (parsed?.detail && typeof parsed.detail === 'string') return parsed.detail;
+      if (parsed?.error && typeof parsed.error === 'string') return parsed.error;
+      return msg;
+    }
+  }
+
+  if (typeof error === 'string') {
+    const parsed = tryParseJsonObject(error);
+    if (parsed?.detail && typeof parsed.detail === 'string') return parsed.detail;
+    if (parsed?.error && typeof parsed.error === 'string') return parsed.error;
+    return error;
+  }
+
+  if (error && typeof error === 'object') {
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.detail === 'string') return obj.detail;
+    if (typeof obj.error === 'string') return obj.error;
+    if (typeof obj.message === 'string') return obj.message;
+  }
+
+  return String(error);
+}
+
+export async function resolveSourceImagePath(
+  osType: string,
+  osVersion: string,
+  preferredSourceImage: string,
+  useCnMirrors: boolean,
+  onDownloadProgress?: (progress: DownloadProgress) => void
+): Promise<string> {
+  const preferred = preferredSourceImage.trim();
+
+  if (preferred && isPathLikeImage(preferred)) {
+    return preferred;
+  }
+
+  const existing = await checkCloudImage(osType, osVersion);
+  if (existing.exists && existing.path) {
+    return existing.path;
+  }
+
+  return downloadCloudImage(
+    osType,
+    osVersion,
+    useCnMirrors,
+    onDownloadProgress || (() => {})
+  );
+}
+
 /**
  * Check if cloud image exists locally
  */
@@ -120,7 +188,8 @@ export async function setupVm(
       uefi_vars_path: result.uefi_vars || null,
     };
   } catch (error) {
-    onProgress({ stage: 'setup', progress: 0, message: `Setup failed: ${error}` });
+    const message = extractErrorMessage(error);
+    onProgress({ stage: 'setup', progress: 0, message: `Setup failed: ${message}` });
     throw error;
   }
 }

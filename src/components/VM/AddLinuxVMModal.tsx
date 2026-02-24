@@ -152,45 +152,26 @@ export function AddLinuxVMModal({ isOpen, onClose, onCreated }: AddLinuxVMModalP
       
       console.log('[AddLinuxVMModal] Created device:', device.id);
       
-      // Phase 2: Check/Download image
-      let imagePath = baseImage;
-      
-      if (!baseImage) {
-        // Check if image already exists
-        setSetupProgress({
-          phase: 'downloading',
-          progress: 10,
-          message: 'Checking cloud image...',
-        });
-        
-        const imageCheck = await setup.checkCloudImage(osType, osVersion);
-        
-        if (imageCheck.exists && imageCheck.path) {
-          // Image already downloaded
-          console.log('[AddLinuxVMModal] Image already exists:', imageCheck.path);
-          imagePath = imageCheck.path;
-        } else {
-          // Download cloud image
+      // Phase 2: Resolve image path (cache/download as needed)
+      setSetupProgress({
+        phase: 'downloading',
+        progress: 10,
+        message: 'Checking cloud image...',
+      });
+
+      const imagePath = await setup.resolveSourceImagePath(
+        osType,
+        osVersion,
+        baseImage,
+        useCnMirrors,
+        (progress) => {
           setSetupProgress({
             phase: 'downloading',
-            progress: 15,
-            message: 'Downloading cloud image...',
+            progress: 15 + Math.floor(progress.percent * 0.4), // 15-55%
+            message: `Downloading: ${progress.percent}%`,
           });
-          
-          imagePath = await setup.downloadCloudImage(
-            osType,
-            osVersion,
-            useCnMirrors,
-            (progress) => {
-              setSetupProgress({
-                phase: 'downloading',
-                progress: 15 + Math.floor(progress.percent * 0.4), // 15-55%
-                message: `Downloading: ${progress.percent}%`,
-              });
-            }
-          );
         }
-      }
+      );
       
       // Phase 3: Setup device (create disk, cloud-init) using unified device API
       setSetupProgress({
@@ -235,11 +216,12 @@ export function AddLinuxVMModal({ isOpen, onClose, onCreated }: AddLinuxVMModalP
       
     } catch (error) {
       console.error('[AddLinuxVMModal] Setup failed:', error);
+      const errorMsg = setup.extractErrorMessage(error);
       setSetupProgress({
         phase: 'error',
         progress: 0,
         message: 'Setup failed',
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        error: errorMsg,
       });
     }
   };

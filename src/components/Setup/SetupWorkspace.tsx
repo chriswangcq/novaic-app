@@ -91,40 +91,31 @@ export function SetupWorkspace({
     setError(null);
 
     try {
-      // First check if image already exists (handles Retry case)
-      const imageCheck = await setup.checkCloudImage(
-        agent.vm.os_type || 'ubuntu',
-        agent.vm.os_version || '24.04'
-      );
-      
-      let imagePath = sourceImage;
-      
-      if (imageCheck.exists && imageCheck.path) {
-        // Image already downloaded, skip download
-        console.log('[Setup] Image already exists:', imageCheck.path);
-        imagePath = imageCheck.path;
-      } else if (!sourceImage) {
-        // Download cloud image first
-        updateSetupProgress(agent.id, {
-          stage: 'Downloading',
-          progress: 0,
-          message: 'Starting download...',
-        });
+      const osType = agent.vm.os_type || 'ubuntu';
+      const osVersion = agent.vm.os_version || '24.04';
 
-        imagePath = await setup.downloadCloudImage(
-          agent.vm.os_type || 'ubuntu',
-          agent.vm.os_version || '24.04',
-          useCnMirrors,
-          (progress) => {
-            setDownloadProgress(progress);
-            updateSetupProgress(agent.id, {
-              stage: 'Downloading',
-              progress: progress.percent,
-              message: `${formatSize(progress.downloaded)} / ${formatSize(progress.total)}`,
-            });
-          }
-        );
-      }
+      updateSetupProgress(agent.id, {
+        stage: 'Downloading',
+        progress: 0,
+        message: 'Checking cloud image...',
+      });
+
+      // Resolve to a real image file path. If sourceImage is a label
+      // (e.g. "ubuntu-24.04"), fallback to local cache/download.
+      const imagePath = await setup.resolveSourceImagePath(
+        osType,
+        osVersion,
+        sourceImage,
+        useCnMirrors,
+        (progress) => {
+          setDownloadProgress(progress);
+          updateSetupProgress(agent.id, {
+            stage: 'Downloading',
+            progress: progress.percent,
+            message: `${formatSize(progress.downloaded)} / ${formatSize(progress.total)}`,
+          });
+        }
+      );
 
       // Continue with setup using image
       await setupAgent(agent.id, {
@@ -139,7 +130,7 @@ export function SetupWorkspace({
       
     } catch (err) {
       console.error('Setup failed:', err);
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = setup.extractErrorMessage(err);
       setError(errorMsg);
       updateSetupProgress(agent.id, {
         stage: 'Error',
