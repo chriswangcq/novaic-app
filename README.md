@@ -16,6 +16,31 @@ NovAIC App is a cross-platform desktop application that provides:
 - **Execution Logs** — Live tool execution visibility
 - **User Takeover** — Direct VM control when needed
 
+## Architecture
+
+NovAIC App is the unified entry point for the entire NovAIC platform. It bundles and orchestrates multiple backend services:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        NovAIC App (Tauri)                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  Frontend (React)                                                   │
+│  ├── Chat Interface                                                 │
+│  ├── VNC Viewer (noVNC)                                             │
+│  └── Settings Panel                                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  Backend Services (auto-started)                                    │
+│  ├── Gateway            :19999  — API gateway & WebSocket           │
+│  ├── Runtime Orchestrator:19993 — Agent & subagent lifecycle        │
+│  ├── Tools Server       :19998  — Tool execution                    │
+│  ├── Queue Service      :19997  — Task queue                        │
+│  ├── File Service       :19995  — File upload/download              │
+│  ├── Tool Result Service:19994  — Tool results storage              │
+│  ├── VMControl          :19996  — VM management                     │
+│  └── Workers (watchdog, task, saga, scheduler, health)              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ## Screenshots
 
 ```
@@ -60,23 +85,57 @@ NovAIC App is a cross-platform desktop application that provides:
 
 - Node.js 20+
 - Rust 1.70+
+- Python 3.11+
 - Platform-specific dependencies (see [Tauri prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites))
+
+### Clone All Repositories
+
+NovAIC uses a split architecture. Clone all required repositories:
+
+```bash
+mkdir ~/novaic-split && cd ~/novaic-split
+
+# Core app
+git clone https://github.com/chriswangcq/novaic-app
+
+# Backend services
+git clone https://github.com/chriswangcq/novaic-gateway
+git clone https://github.com/chriswangcq/novaic-runtime-orchestrator
+git clone https://github.com/chriswangcq/novaic-tools-server
+git clone https://github.com/chriswangcq/novaic-agent-runtime
+git clone https://github.com/chriswangcq/novaic-storage-a
+git clone https://github.com/chriswangcq/novaic-storage-b
+
+# MCP tools
+git clone https://github.com/chriswangcq/novaic-mcp-vmuse
+```
 
 ### Setup
 
 ```bash
 cd novaic-app
 
-# Install dependencies
+# Install frontend dependencies
 npm install
 
-# Development mode
+# Development mode (auto-detects sibling repos)
 npm run tauri:dev
 
-# Build for production
-export NOVAIC_MCP_VMUSE_REPO=../novaic-mcp-vmuse
+# Build for production (creates .app/.dmg)
 npm run tauri:build
+
+# Or use the DMG build script
+bash scripts/build-dmg.sh
 ```
+
+### Development vs Production
+
+| Mode | Backend Location | Config |
+|------|-----------------|--------|
+| **Development** | Sibling repos (`../novaic-*`) | Auto-detected |
+| **Production** | Bundled in app resources | Built-in |
+
+In development mode, the app automatically discovers sibling repositories and starts services from source. In production, all backends are pre-built binaries bundled inside the `.app`.
 
 ## Project Structure
 
@@ -236,14 +295,62 @@ See `src-tauri/tauri.conf.json` for:
 
 See `tailwind.config.js` for styling configuration.
 
-## API Integration
+## Service Ports
 
-The app communicates with:
+All backend services use standardized ports (configured via CLI arguments, no environment variables):
 
-| Service | Default URL | Purpose |
-|---------|-------------|---------|
-| NovAIC Agent | `http://localhost:8080` | Chat API |
-| VNC Server | `ws://localhost:5900` | VM display |
+| Service | Port | Description |
+|---------|------|-------------|
+| Gateway | 19999 | API gateway, WebSocket |
+| Runtime Orchestrator | 19993 | Agent lifecycle |
+| Tools Server | 19998 | Tool execution |
+| Queue Service | 19997 | Task queue |
+| VMControl | 19996 | VM management |
+| File Service | 19995 | File operations |
+| Tool Result Service | 19994 | Tool results |
+
+### CLI Arguments
+
+All services are configured via command-line arguments (no environment variables):
+
+```bash
+# Example: Starting Gateway manually
+python main_gateway.py \
+  --host 127.0.0.1 \
+  --port 19999 \
+  --data-dir ~/Library/Application\ Support/com.novaic.app \
+  --runtime-orchestrator-url http://127.0.0.1:19993 \
+  --tools-server-url http://127.0.0.1:19998 \
+  --queue-service-url http://127.0.0.1:19997 \
+  --file-service-url http://127.0.0.1:19995 \
+  --tool-result-service-url http://127.0.0.1:19994
+```
+
+## Data Directory
+
+Application data is stored in:
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Application Support/com.novaic.app` |
+| Windows | `%APPDATA%\com.novaic.app` |
+| Linux | `~/.local/share/com.novaic.app` |
+
+Contents:
+- `gateway.db` — Gateway database
+- `runtime_orchestrator.db` — Agent & subagent data
+- `queue.db` — Task queue
+- `files/` — Uploaded files
+- `tool_results/` — Tool execution results
+- `vms/` — VM disk images
+
+## Bundled Resources
+
+Production builds include:
+
+- **QEMU** — VM hypervisor (macOS ARM64)
+- **MCP VMuse** — VM automation tools
+- **Backend binaries** — Pre-built Python services (via PyInstaller)
 
 ## License
 
