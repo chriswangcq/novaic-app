@@ -346,46 +346,6 @@ class VmService {
       };
     }
   }
-
-  /**
-   * 获取 VM 初始化状态
-   * @param agentId - Agent ID
-   * 
-   * 返回 cloud-init 初始化进度，包括：
-   * - phase: creating/booting/cloud-init/vmuse-deploy/complete/error
-   * - progress: 0-100%
-   * - message: 当前状态描述
-   * - steps: 各步骤完成状态
-   */
-  async getSetupStatus(agentId: string): Promise<{
-    agent_id: string;
-    phase: string;
-    progress: number;
-    message: string;
-    steps: {
-      vm_created?: boolean;
-      vm_booted?: boolean;
-      ssh_ready?: boolean;
-      cloud_init?: boolean;
-      vmuse_deployed?: boolean;
-      cloud_init_detail?: string;
-    };
-    error: string | null;
-  } | null> {
-    try {
-      const response = await fetch(`${API_CONFIG.GATEWAY_URL}/api/vm/${agentId}/setup-status`, {
-        signal: AbortSignal.timeout(API_CONFIG.ABORT_TIMEOUT),
-      });
-      if (!response.ok) {
-        console.error('[VM Service] Get setup status failed:', response.status);
-        return null;
-      }
-      return await response.json();
-    } catch (error) {
-      console.error('[VM Service] Get setup status failed:', error);
-      return null;
-    }
-  }
 }
 
 // 导出单例

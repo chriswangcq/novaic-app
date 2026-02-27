@@ -4,7 +4,6 @@
  * 职责：
  * 1. 管理 VNC 连接状态
  * 2. 处理轮询逻辑
- * 3. 处理初始化状态检查
  * 
  * 设计理念：
  * - 所有副作用封装在 hook 内部
@@ -16,28 +15,12 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { vmService } from '../../services/vm';
 import { WS_CONFIG } from '../../config';
 
-export type VncStatus = 'unknown' | 'stopped' | 'starting' | 'running' | 'error' | 'initializing';
-
-interface SetupStatus {
-  phase: string;
-  progress: number;
-  message: string;
-  steps: {
-    vm_created?: boolean;
-    vm_booted?: boolean;
-    ssh_ready?: boolean;
-    cloud_init?: boolean;
-    vmuse_deployed?: boolean;
-    cloud_init_detail?: string;
-  };
-  error: string | null;
-}
+export type VncStatus = 'unknown' | 'stopped' | 'starting' | 'running' | 'error';
 
 interface VNCConnectionState {
   status: VncStatus;
   wsReady: boolean;
   errorMsg: string;
-  setupStatus: SetupStatus | null;
 }
 
 interface VNCConnectionActions {
@@ -56,49 +39,11 @@ export function useVNCConnection(
   const [status, setStatus] = useState<VncStatus>('unknown');
   const [wsReady, setWsReady] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   
   // Refs - 避免闭包陷阱
   const wsUrlRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const setupPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isConnectingRef = useRef(false);
-  
-  // 检查初始化状态
-  const checkSetupStatus = useCallback(async (): Promise<'initializing' | 'complete' | 'error' | null> => {
-    if (!agentId) return null;
-    
-    try {
-      const data = await vmService.getSetupStatus(agentId);
-      if (!data) return null;
-      
-      if (data.phase === 'complete') {
-        setSetupStatus(null);
-        return 'complete';
-      } else if (data.phase === 'error') {
-        setSetupStatus(data);
-        setStatus('error');
-        setErrorMsg(data.error || 'Initialization failed');
-        return 'error';
-      } else {
-        // 只在真正变化时更新
-        setSetupStatus(prev => {
-          if (prev && 
-              prev.phase === data.phase && 
-              prev.progress === data.progress &&
-              prev.message === data.message) {
-            return prev;
-          }
-          return data;
-        });
-        setStatus('initializing');
-        return 'initializing';
-      }
-    } catch (e) {
-      console.error('[VNC Connection] Check setup status failed:', e);
-      return null;
-    }
-  }, [agentId]);
   
   // 检查 WebSocket 连接（只测试可用性，不改变状态）
   const checkWebSocket = useCallback(async (): Promise<boolean> => {
@@ -128,18 +73,15 @@ export function useVNCConnection(
       });
       
       console.log('[VNC Connection] WebSocket available, preparing for RFB');
-      // 只设置 wsReady，让 RFB 连接成功后再设置 running
       setWsReady(true);
-      setStatus('running');  // 设置为 running，让 VNCView 开始 RFB 连接
+      setStatus('running');
       return true;
     } catch (e) {
       console.log('[VNC Connection] WebSocket not available, will retry...');
       setWsReady(false);
-      // 保持当前状态，不要设置为 error 或 unknown
-      // VM 可能正在运行但 VNC 服务还没准备好
       setStatus(prev => {
-        if (prev === 'starting' || prev === 'initializing') return prev;
-        return 'starting';  // 显示 "正在启动" 而不是错误
+        if (prev === 'starting') return prev;
+        return 'starting';
       });
       return false;
     } finally {
@@ -156,7 +98,6 @@ export function useVNCConnection(
     
     try {
       await vmService.start(agentId);
-      // 启动后等待连接就绪
       await new Promise(r => setTimeout(r, 2000));
       await checkWebSocket();
     } catch (e: any) {
@@ -165,7 +106,6 @@ export function useVNCConnection(
         setStatus('error');
         setErrorMsg(e.message || 'Failed to start VM');
       } else {
-        // 已经在运行，检查连接
         await checkWebSocket();
       }
     }
@@ -177,7 +117,6 @@ export function useVNCConnection(
     
     try {
       await vmService.stop(agentId);
-      // 断开 RFB 连接并重置状态
       setStatus('stopped');
       setWsReady(false);
       wsUrlRef.current = null;
@@ -214,7 +153,6 @@ export function useVNCConnection(
     setWsReady(false);
     setStatus('unknown');
     setErrorMsg('');
-    setSetupStatus(null);
     wsUrlRef.current = null;
     onConnected(false);
   }, [onConnected]);
@@ -231,36 +169,7 @@ export function useVNCConnection(
     const init = async () => {
       console.log('[VNC Connection] Initializing for agent:', agentId);
       
-      // 1. 检查是否正在初始化
-      const initStatus = await checkSetupStatus();
-      if (!mounted) return;
-      
-      if (initStatus === 'initializing') {
-        // 即使在初始化阶段，也尝试连接 VNC，让用户看到真实的系统画面
-        // 同时启动初始化状态轮询（在后台更新状态）
-        setupPollIntervalRef.current = setInterval(async () => {
-          const status = await checkSetupStatus();
-          if (status === 'complete') {
-            if (setupPollIntervalRef.current) {
-              clearInterval(setupPollIntervalRef.current);
-              setupPollIntervalRef.current = null;
-            }
-          } else if (status === 'error') {
-            if (setupPollIntervalRef.current) {
-              clearInterval(setupPollIntervalRef.current);
-              setupPollIntervalRef.current = null;
-            }
-          }
-        }, 3000);
-        
-        // 尝试连接 VNC（不要 return，继续执行后面的逻辑）
-        // 这样用户可以看到 cloud-init 在系统中运行的实时画面
-      } else if (initStatus === 'error') {
-        return;
-      }
-      
-      // 2. 先通过后端 API 确认 VM 是否真的在运行
-      //    （不能直接测 WebSocket，因为残留的 socket 文件会导致误判）
+      // 通过后端 API 确认 VM 是否真的在运行
       let vmRunning = false;
       try {
         const running = await vmService.isRunning(agentId);
@@ -302,17 +211,13 @@ export function useVNCConnection(
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
       }
-      if (setupPollIntervalRef.current) {
-        clearInterval(setupPollIntervalRef.current);
-        setupPollIntervalRef.current = null;
-      }
     };
-  }, [agentId, checkSetupStatus, checkWebSocket, refreshStatus, reset, wsReady]);
+  }, [agentId, checkWebSocket, refreshStatus, reset, wsReady]);
   
   // 使用 useMemo 缓存对象，避免每次返回新引用
   const state = useMemo(
-    () => ({ status, wsReady, errorMsg, setupStatus }),
-    [status, wsReady, errorMsg, setupStatus]
+    () => ({ status, wsReady, errorMsg }),
+    [status, wsReady, errorMsg]
   );
   
   const actions = useMemo(

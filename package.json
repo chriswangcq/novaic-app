@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "test -n \"$NOVAIC_MCP_VMUSE_REPO\" && test -d \"$NOVAIC_MCP_VMUSE_REPO\" && rm -rf src-tauri/resources/novaic-mcp-vmuse && rsync -av --exclude='.git' \"$NOVAIC_MCP_VMUSE_REPO/\" src-tauri/resources/novaic-mcp-vmuse/ && cd src-tauri && ./setup-dmg-support.sh && cd .. && env -u CI tauri build",
+    "tauri:build": "if [ -n \"$NOVAIC_MCP_VMUSE_REPO\" ] && [ -d \"$NOVAIC_MCP_VMUSE_REPO\" ]; then rm -rf src-tauri/resources/novaic-mcp-vmuse && rsync -av --exclude='.git' \"$NOVAIC_MCP_VMUSE_REPO/\" src-tauri/resources/novaic-mcp-vmuse/; else echo 'Skipping novaic-mcp-vmuse sync (NOVAIC_MCP_VMUSE_REPO not set or not found)'; fi && cd src-tauri && ./setup-dmg-support.sh && cd .. && env -u CI tauri build",
     "tauri:setup-dmg": "cd src-tauri && ./setup-dmg-support.sh",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write src/"

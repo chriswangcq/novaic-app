@@ -36,7 +36,6 @@ export function Header(props: HeaderProps) {
     switch (status) {
       case 'running': return { color: 'bg-emerald-500/20 text-emerald-400', text: 'Running' };
       case 'starting': return { color: 'bg-yellow-500/20 text-yellow-400', text: 'Starting' };
-      case 'initializing': return { color: 'bg-blue-500/20 text-blue-400', text: 'Initializing' };
       case 'stopped': return { color: 'bg-gray-500/20 text-gray-400', text: 'Stopped' };
       case 'error': return { color: 'bg-red-500/20 text-red-400', text: 'Error' };
       default: return { color: 'bg-gray-500/20 text-gray-400', text: 'Stopped' };
@@ -97,7 +96,7 @@ export function Header(props: HeaderProps) {
               >
                 <Square size={14} />
               </button>
-            ) : status !== 'starting' && status !== 'initializing' && (
+            ) : status !== 'starting' && (
               <button
                 onClick={startVm}
                 className="p-1.5 rounded hover:bg-green-500/20 text-nb-text-muted hover:text-green-400 transition-colors"
