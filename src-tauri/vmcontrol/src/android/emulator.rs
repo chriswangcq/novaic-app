@@ -101,6 +101,11 @@ impl AndroidManager {
 
     /// 检测 Android SDK 路径
     fn detect_sdk_path() -> PathBuf {
+        // 0. 检查 bundled 路径（打包进 .app 时）
+        if let Some(bundled) = Self::get_bundled_android_sdk_path() {
+            return bundled;
+        }
+
         // 1. 检查环境变量 ANDROID_HOME
         if let Ok(path) = std::env::var("ANDROID_HOME") {
             let p = PathBuf::from(&path);
@@ -135,6 +140,19 @@ impl AndroidManager {
 
         // 默认路径
         PathBuf::from(format!("{}/android-sdk", home))
+    }
+
+    /// 获取 bundled Android SDK 路径（当 vmcontrol 从 .app/Contents/Resources/vmcontrol 运行时）
+    fn get_bundled_android_sdk_path() -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let vmcontrol_dir = exe.parent()?; // .../Resources/vmcontrol
+        let resources_dir = vmcontrol_dir.parent()?; // .../Resources
+        let sdk = resources_dir.join("android-sdk");
+        if sdk.exists() && sdk.join("platform-tools").join("adb").exists() {
+            Some(sdk)
+        } else {
+            None
+        }
     }
 
     /// 获取 emulator 可执行文件路径

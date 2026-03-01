@@ -4,7 +4,7 @@
 # This script:
 # 1. Builds all Python backend binaries (PyInstaller)
 # 2. Builds vmcontrol (Rust)
-# 3. Copies all resources
+# 3. Copies all resources (android-sdk, scrcpy-server 已打包进 git，同 qemu)
 # 4. Builds Tauri DMG
 #
 # Usage: ./build-dmg.sh [--skip-python] [--skip-rust]
@@ -138,6 +138,9 @@ if [ -f "$SPLIT_ROOT/novaic-gateway/config/services.json" ]; then
     echo -e "  ✓ services.json"
 fi
 
+# android-sdk、scrcpy-server 已打包进 git（同 qemu），无需安装
+echo -e "  ✓ android-sdk, scrcpy-server (from repo)"
+
 echo -e "${GREEN}  Resources copied.${NC}"
 
 # ==================== Step 4: Build Tauri DMG ====================
@@ -154,9 +157,9 @@ fi
 
 # Update tauri.conf.json to include backends
 echo "  Updating tauri.conf.json..."
-cat > "$APP_DIR/src-tauri/tauri.conf.json" << 'EOF'
+cat > "$APP_DIR/src-tauri/tauri.conf.json" << EOF
 {
-    "$schema": "https://schema.tauri.app/config/2",
+    "\$schema": "https://schema.tauri.app/config/2",
     "productName": "NovAIC",
     "version": "0.3.0",
     "identifier": "com.novaic.app",
@@ -201,7 +204,9 @@ cat > "$APP_DIR/src-tauri/tauri.conf.json" << 'EOF'
             "resources/vmcontrol": "vmcontrol",
             "resources/backends": "backends",
             "resources/novaic-mcp-vmuse": "novaic-mcp-vmuse",
-            "resources/qemu": "qemu"
+            "resources/qemu": "qemu",
+            "resources/android-sdk": "android-sdk",
+            "resources/scrcpy-server": "scrcpy-server"
         },
         "macOS": {
             "minimumSystemVersion": "10.15"

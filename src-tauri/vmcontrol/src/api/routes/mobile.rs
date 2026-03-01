@@ -20,9 +20,29 @@ use crate::api::types::ApiError;
 
 // ============ ADB Path Helper ============
 
+/// 获取 bundled Resources 目录（当 vmcontrol 从 .app/Contents/Resources/vmcontrol 运行时）
+fn get_bundled_resources_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let vmcontrol_dir = exe.parent()?;
+    let resources_dir = vmcontrol_dir.parent()?;
+    if resources_dir.join("vmcontrol").exists() {
+        Some(resources_dir.to_path_buf())
+    } else {
+        None
+    }
+}
+
 /// 获取 ADB 路径
 fn get_adb_path() -> String {
     std::env::var("ADB").unwrap_or_else(|_| {
+        // 0. 检查 bundled android-sdk
+        if let Some(res_dir) = get_bundled_resources_dir() {
+            let bundled = res_dir.join("android-sdk").join("platform-tools").join("adb");
+            if bundled.exists() {
+                return bundled.to_string_lossy().to_string();
+            }
+        }
+        // 1. 本机路径
         let home = std::env::var("HOME").unwrap_or_default();
         let custom_path = format!("{}/android-sdk/platform-tools/adb", home);
         if std::path::Path::new(&custom_path).exists() {
