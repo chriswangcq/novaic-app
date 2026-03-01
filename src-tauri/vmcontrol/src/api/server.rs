@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
@@ -18,8 +19,10 @@ impl ApiServer {
     }
     
     /// Start the API server
-    pub async fn run(self, state: AppState) -> anyhow::Result<()> {
-        let app = create_router(state)
+    /// 
+    /// * `data_dir` - When provided, Android AVD data is stored under data_dir/android/avd
+    pub async fn run(self, state: AppState, data_dir: Option<PathBuf>) -> anyhow::Result<()> {
+        let app = create_router(state, data_dir)
             .layer(CorsLayer::permissive());
         
         info!("vmcontrol API server starting on {}", self.addr);

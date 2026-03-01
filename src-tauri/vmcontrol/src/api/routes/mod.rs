@@ -11,6 +11,7 @@ pub mod android;
 pub mod mobile;
 
 use axum::{Router, routing::{get, post, delete}, extract::DefaultBodyLimit};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
@@ -34,9 +35,15 @@ pub struct CombinedState {
 }
 
 /// Create the main API router with all routes
-pub fn create_router(state: AppState) -> Router {
-    // 创建 Android Manager
-    let android_manager = Arc::new(RwLock::new(AndroidManager::new()));
+/// 
+/// * `data_dir` - When provided, Android AVD data is stored under data_dir/android/avd
+pub fn create_router(state: AppState, data_dir: Option<PathBuf>) -> Router {
+    // 创建 Android Manager（有 data_dir 时使用 data_dir/android/avd）
+    let android_manager = Arc::new(RwLock::new(
+        data_dir
+            .map(AndroidManager::with_data_dir)
+            .unwrap_or_else(AndroidManager::new)
+    ));
     
     // 创建 Android 子路由
     let android_router = Router::new()

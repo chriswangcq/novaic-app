@@ -227,12 +227,16 @@ impl VmControlProcess {
         
         println!("[VmControl] Starting from {:?}", vmcontrol_path);
         println!("[VmControl] Port: {}", self.port);
+        println!("[VmControl] Data dir (--data-dir): {:?}", data_dir);
         
+        let data_dir_str = data_dir.to_string_lossy().to_string();
         let child = Command::new(&vmcontrol_path)
             .arg("--port")
             .arg(self.port.to_string())
             .arg("--host")
             .arg(LOOPBACK_HOST)
+            .arg("--data-dir")
+            .arg(&data_dir_str)
             .env("RUST_LOG", "vmcontrol=info,tower_http=debug")
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_file_err))
@@ -1233,6 +1237,7 @@ fn kill_zombie_processes() {
         let patterns = [
             // Binary mode
             "novaic-backend",
+            "vmcontrol",  // VM control service (Rust) - must kill before restart to avoid data_dir=None from orphan
             // Dev mode - all worker scripts
             "main_gateway.py",
             "main_tools.py",
@@ -1264,7 +1269,7 @@ fn kill_zombie_processes() {
         }
         
         // Step 2: Kill processes occupying our ports (in case of orphaned processes)
-        let ports = [19999, 19998, 19997, 19995, 19994, 19993];  // Gateway, Tools Server, Queue Service, File Service, Tool Result Service, Runtime Orchestrator
+        let ports = [19999, 19998, 19997, 19996, 19995, 19994, 19993];  // Gateway, Tools Server, Queue Service, VMControl, File Service, Tool Result Service, Runtime Orchestrator
         for port in ports {
             // Find process using the port via lsof
             let lsof_result = Command::new("lsof")

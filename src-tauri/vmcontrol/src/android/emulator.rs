@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::VmError;
 use crate::scrcpy::ensure_scrcpy_server;
 use super::avd::{AvdManager, DeviceDefinition, CreateAvdParams};
+use super::sdk_init::{ensure_runtime_sdk, sdk_has_required_components};
 
 /// Android 设备状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,16 +66,22 @@ pub struct AvdInfo {
 
 /// Android 模拟器管理器
 pub struct AndroidManager {
-    /// Android SDK 路径
+    /// Android SDK 路径（可能是 bundled 或用户 SDK）
     sdk_path: PathBuf,
     /// 已管理的设备
     devices: Arc<RwLock<HashMap<String, AndroidDevice>>>,
     /// AVD 管理器
     avd_manager: AvdManager,
+    /// AVD 目录（用于 ANDROID_AVD_HOME，None 时使用默认 ~/.android/avd）
+    avd_home: Option<PathBuf>,
+    /// data_dir（with_data_dir 时设置，用于 ensure_runtime_sdk）
+    data_dir: Option<PathBuf>,
+    /// 解析后的 SDK 根路径缓存（data_dir 模式下，首次调用 ensure_runtime_sdk 后缓存）
+    resolved_sdk: Arc<RwLock<Option<PathBuf>>>,
 }
 
 impl AndroidManager {
-    /// 创建新的 AndroidManager
+    /// 创建新的 AndroidManager（使用默认 ~/.android/avd）
     pub fn new() -> Self {
         let sdk_path = Self::detect_sdk_path();
         tracing::info!("Android SDK path: {:?}", sdk_path);
@@ -85,6 +92,32 @@ impl AndroidManager {
             sdk_path,
             devices: Arc::new(RwLock::new(HashMap::new())),
             avd_manager,
+            avd_home: None,
+            data_dir: None,
+            resolved_sdk: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// 使用 data_dir 创建 AndroidManager，AVD 存储在 data_dir/android/avd
+    pub fn with_data_dir(data_dir: PathBuf) -> Self {
+        let sdk_path = Self::detect_sdk_path();
+        let avd_path = data_dir.join("android").join("avd");
+        tracing::info!("Android SDK path: {:?}, AVD path: {:?}", sdk_path, avd_path);
+        
+        // 确保 AVD 目录存在（list_avds 可能在 create 之前被调用）
+        if let Err(e) = std::fs::create_dir_all(&avd_path) {
+            tracing::warn!("Failed to create AVD dir {:?}: {}", avd_path, e);
+        }
+        
+        let avd_manager = AvdManager::with_avd_path(sdk_path.clone(), avd_path.clone());
+        
+        Self {
+            sdk_path,
+            devices: Arc::new(RwLock::new(HashMap::new())),
+            avd_manager,
+            avd_home: Some(avd_path),
+            data_dir: Some(data_dir),
+            resolved_sdk: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -96,7 +129,61 @@ impl AndroidManager {
             sdk_path,
             devices: Arc::new(RwLock::new(HashMap::new())),
             avd_manager,
+            avd_home: None,
+            data_dir: None,
+            resolved_sdk: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// 获取有效的 SDK 根路径（用于 ANDROID_SDK_ROOT）
+    /// data_dir 模式下：若当前 sdk 不完整，调用 ensure_runtime_sdk 并缓存
+    async fn get_effective_sdk_root(&self) -> Result<PathBuf, VmError> {
+        // 确定性根因：当 data_dir 为 None 且 bundled 路径缺少 platforms 时，
+        // 直接使用 self.sdk_path 会导致 emulator 报 "PANIC: Broken AVD system path" 并立即退出。
+        // 因此：若 bundled 不完整，必须推断 data_dir 并使用 data_dir/android/sdk。
+        let effective_data_dir = if let Some(ref d) = self.data_dir {
+            Some(d.clone())
+        } else if Self::get_bundled_android_sdk_path().is_some()
+            && !sdk_has_required_components(&self.sdk_path)
+        {
+            // 从 .app 运行时未传 --data-dir，推断默认 data_dir（ensure_runtime_sdk 会创建目录）
+            if let Some(home) = dirs::home_dir() {
+                let inferred = home
+                    .join("Library")
+                    .join("Application Support")
+                    .join("com.novaic.app");
+                tracing::info!(
+                    "Inferred data_dir (no --data-dir): {:?}",
+                    inferred
+                );
+                Some(inferred)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if effective_data_dir.is_none() {
+            return Ok(self.sdk_path.clone());
+        }
+        let data_dir = effective_data_dir.as_ref().expect("effective_data_dir");
+        {
+            let cached = self.resolved_sdk.read().await;
+            if let Some(ref p) = *cached {
+                return Ok(p.clone());
+            }
+        }
+        let sdk_root = if sdk_has_required_components(&self.sdk_path) {
+            self.sdk_path.clone()
+        } else {
+            ensure_runtime_sdk(data_dir, &self.sdk_path).await?
+        };
+        {
+            let mut cached = self.resolved_sdk.write().await;
+            *cached = Some(sdk_root.clone());
+        }
+        Ok(sdk_root)
     }
 
     /// 检测 Android SDK 路径
@@ -155,19 +242,10 @@ impl AndroidManager {
         }
     }
 
-    /// 获取 emulator 可执行文件路径
-    fn emulator_path(&self) -> PathBuf {
-        self.sdk_path.join("emulator").join("emulator")
-    }
-
-    /// 获取 adb 可执行文件路径
-    fn adb_path(&self) -> PathBuf {
-        self.sdk_path.join("platform-tools").join("adb")
-    }
-
     /// 列出可用的 AVD
     pub async fn list_avds(&self) -> Result<Vec<AvdInfo>, VmError> {
-        let emulator = self.emulator_path();
+        let sdk_root = self.get_effective_sdk_root().await?;
+        let emulator = sdk_root.join("emulator").join("emulator");
         
         if !emulator.exists() {
             return Err(VmError::AndroidError(format!(
@@ -176,8 +254,14 @@ impl AndroidManager {
             )));
         }
 
-        let output = Command::new(&emulator)
-            .arg("-list-avds")
+        // 注意：emulator 二进制仅支持通过环境变量 ANDROID_AVD_HOME、ANDROID_SDK_ROOT 指定路径
+        let mut list_cmd = Command::new(&emulator);
+        list_cmd.arg("-list-avds");
+        list_cmd.env("ANDROID_SDK_ROOT", &sdk_root);
+        if let Some(ref avd_home) = self.avd_home {
+            list_cmd.env("ANDROID_AVD_HOME", avd_home);
+        }
+        let output = list_cmd
             .output()
             .await
             .map_err(|e| VmError::AndroidError(format!("Failed to run emulator -list-avds: {}", e)))?;
@@ -209,8 +293,17 @@ impl AndroidManager {
     /// * `avd_name` - AVD 名称
     /// * `headless` - 是否无头模式（默认 true）
     pub async fn start_emulator(&self, avd_name: &str, headless: bool) -> Result<AndroidDevice, VmError> {
-        let emulator = self.emulator_path();
-        
+        let sdk_root = self.get_effective_sdk_root().await?;
+        let emulator = sdk_root.join("emulator").join("emulator");
+
+        // 确定性调试：记录 ANDROID_SDK_ROOT 和 data_dir，便于排查
+        tracing::info!(
+            "start_emulator: ANDROID_SDK_ROOT={:?}, data_dir={:?}, emulator_bin={:?}",
+            sdk_root,
+            self.data_dir,
+            emulator
+        );
+
         if !emulator.exists() {
             return Err(VmError::AndroidError(format!(
                 "emulator not found at {:?}",
@@ -228,8 +321,12 @@ impl AndroidManager {
             )));
         }
 
-        // 构建启动命令
+        // 构建启动命令。emulator 需要 ANDROID_SDK_ROOT、ANDROID_AVD_HOME 环境变量
         let mut cmd = Command::new(&emulator);
+        cmd.env("ANDROID_SDK_ROOT", &sdk_root);
+        if let Some(ref avd_home) = self.avd_home {
+            cmd.env("ANDROID_AVD_HOME", avd_home);
+        }
         cmd.arg("-avd").arg(avd_name);
         
         if headless {
@@ -245,10 +342,10 @@ impl AndroidManager {
 
         tracing::info!("Starting emulator: {:?}", cmd);
 
-        // 启动模拟器进程
+        // 启动模拟器进程；stderr 继承到 vmcontrol 日志，便于捕获 PANIC 等错误
         let child = cmd
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .map_err(|e| VmError::AndroidError(format!("Failed to start emulator: {}", e)))?;
 
@@ -337,7 +434,8 @@ impl AndroidManager {
 
     /// 获取 ADB 设备列表
     async fn get_adb_devices(&self) -> Result<Vec<(String, String)>, VmError> {
-        let adb = self.adb_path();
+        let sdk_root = self.get_effective_sdk_root().await?;
+        let adb = sdk_root.join("platform-tools").join("adb");
         
         let output = Command::new(&adb)
             .args(["devices"])
@@ -364,7 +462,8 @@ impl AndroidManager {
 
     /// 获取设备对应的 AVD 名称
     async fn get_device_avd_name(&self, serial: &str) -> Result<String, VmError> {
-        let adb = self.adb_path();
+        let sdk_root = self.get_effective_sdk_root().await?;
+        let adb = sdk_root.join("platform-tools").join("adb");
         
         let output = Command::new(&adb)
             .args(["-s", serial, "emu", "avd", "name"])
@@ -384,7 +483,8 @@ impl AndroidManager {
 
     /// 停止模拟器
     pub async fn stop_emulator(&self, serial: &str) -> Result<(), VmError> {
-        let adb = self.adb_path();
+        let sdk_root = self.get_effective_sdk_root().await?;
+        let adb = sdk_root.join("platform-tools").join("adb");
 
         tracing::info!("Stopping emulator: {}", serial);
         
@@ -476,8 +576,13 @@ impl AndroidManager {
 
     /// 检查设备是否完全启动
     async fn is_device_booted(&self, serial: &str) -> bool {
+        let sdk_root = match self.get_effective_sdk_root().await {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let adb = sdk_root.join("platform-tools").join("adb");
         // 检查 sys.boot_completed 属性
-        let output = Command::new(self.adb_path())
+        let output = Command::new(&adb)
             .args(["-s", serial, "shell", "getprop", "sys.boot_completed"])
             .output()
             .await;
@@ -536,7 +641,12 @@ impl AndroidManager {
     /// # Arguments
     /// * `params` - AVD 创建参数
     pub async fn create_avd(&self, params: &CreateAvdParams) -> Result<(), VmError> {
-        self.avd_manager.create_avd(params).await
+        let sdk_root = self.get_effective_sdk_root().await?;
+        let avd_path = self.avd_home.clone().unwrap_or_else(|| {
+            dirs::home_dir().expect("HOME").join(".android").join("avd")
+        });
+        let avd_manager = AvdManager::with_avd_path(sdk_root, avd_path);
+        avd_manager.create_avd(params).await
     }
 
     /// 删除 AVD
@@ -621,7 +731,8 @@ mod tests {
     #[test]
     fn test_android_manager_creation() {
         let manager = AndroidManager::new();
-        assert!(manager.sdk_path.to_string_lossy().contains("android"));
+        let path = manager.sdk_path.to_string_lossy().to_lowercase();
+        assert!(path.contains("android"), "sdk_path should contain 'android': {:?}", manager.sdk_path);
     }
 
     #[tokio::test]
@@ -630,5 +741,15 @@ mod tests {
         let result = manager.list_avds().await;
         println!("AVDs: {:?}", result);
         // 不断言成功，因为可能没有安装 Android SDK
+    }
+
+    #[test]
+    fn test_android_manager_with_data_dir() {
+        let temp = std::env::temp_dir().join("vmcontrol-test-avd-dir");
+        let _ = std::fs::remove_dir_all(&temp);
+        let _manager = AndroidManager::with_data_dir(temp.clone());
+        let avd_path = temp.join("android").join("avd");
+        assert!(avd_path.exists(), "AVD dir should be created by with_data_dir: {:?}", avd_path);
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

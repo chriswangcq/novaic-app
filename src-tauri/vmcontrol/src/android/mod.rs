@@ -10,6 +10,7 @@
 
 mod avd;
 mod emulator;
+mod sdk_init;
 
 pub use avd::{
     AvdManager,

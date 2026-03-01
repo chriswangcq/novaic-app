@@ -3,10 +3,13 @@ dist/
 .run/
 src-tauri/target/
 src-tauri/vmcontrol/target/
-# Backend binaries (built from sibling repos, copied during build)
+test
+
+# Build outputs (built by build-dmg.sh)
 src-tauri/resources/backends/novaic-agent-runtime
 src-tauri/resources/backends/novaic-gateway
 src-tauri/resources/backends/novaic-runtime-orchestrator
 src-tauri/resources/backends/novaic-storage-a
 src-tauri/resources/backends/novaic-storage-b
 src-tauri/resources/backends/novaic-tools-server
+src-tauri/resources/vmcontrol/vmcontrol

@@ -135,11 +135,16 @@ pub struct AvdManager {
 }
 
 impl AvdManager {
-    /// 创建新的 AvdManager
+    /// 创建新的 AvdManager（使用默认 ~/.android/avd）
     pub fn new(sdk_path: PathBuf) -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+        let home = dirs::home_dir().expect("HOME directory not found");
         let avd_path = home.join(".android").join("avd");
 
+        Self { sdk_path, avd_path }
+    }
+
+    /// 使用指定的 AVD 路径创建 AvdManager（用于 data_dir 模式）
+    pub fn with_avd_path(sdk_path: PathBuf, avd_path: PathBuf) -> Self {
         Self { sdk_path, avd_path }
     }
 

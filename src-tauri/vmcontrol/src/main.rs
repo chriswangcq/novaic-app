@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::path::Path;
 use tokio::sync::RwLock;
@@ -22,6 +23,10 @@ struct Args {
     /// Host to bind to
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
+
+    /// Data directory (when set, Android AVD stored under data_dir/android/avd)
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -52,8 +57,11 @@ async fn main() -> anyhow::Result<()> {
     
     tracing::info!("Starting vmcontrol server on http://{}:{}", args.host, args.port);
     tracing::info!("VNC WebSocket endpoint: ws://{}:{}/api/vms/{{{{id}}}}/vnc", args.host, args.port);
+    if let Some(ref d) = args.data_dir {
+        tracing::info!("Android AVD data dir: {}/android/avd", d.display());
+    }
     
-    server.run(state).await?;
+    server.run(state, args.data_dir).await?;
 
     Ok(())
 }
