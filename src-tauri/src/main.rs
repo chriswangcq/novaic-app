@@ -2042,8 +2042,9 @@ fn main() {
                 
                 // 12. 直接启动 Worker 服务（和 Gateway 一样简单）
                 // v4.1: Saga/Task Architecture - multiple workers for parallelism
-                // 配置：可通过 AppConfig 调整 Worker 数量
-                let num_task_workers = AppConfig::NUM_TASK_WORKERS;
+                // v4.2: Worker 池隔离 - Control (saga.parallel 等会阻塞) / Execution (tool.execute 等)
+                let num_control = AppConfig::NUM_TASK_CONTROL_WORKERS;
+                let num_execution = AppConfig::NUM_TASK_EXECUTION_WORKERS;
                 let num_saga_workers = AppConfig::NUM_SAGA_WORKERS;
                 
                 if is_binary {
@@ -2076,10 +2077,12 @@ fn main() {
                         Err(e) => println!("[Watchdog] Failed: {}", e),
                     }
                     
-                    // Task Workers: 通用任务执行器
-                    for i in 1..=num_task_workers {
+                    // Task Workers - Control 池: saga.parallel/decision/trigger (会阻塞 poll)
+                    for i in 1..=num_control {
                         match Command::new(&worker_binary)
                             .arg("task-worker")
+                            .arg("--pool")
+                            .arg("control")
                             .arg("--gateway-url")
                             .arg(&gateway_url)
                             .arg("--queue-service-url")
@@ -2091,15 +2094,44 @@ fn main() {
                             .arg("--tool-result-service-url")
                             .arg(&tool_result_service_url)
                             .arg("--num-workers")
-                            .arg("5")
+                            .arg("1")
                             .arg("--data-dir")
                             .arg(data_dir_for_gateway.to_string_lossy().to_string())
                             .stdout(Stdio::null())
                             .stderr(Stdio::null())
                             .spawn()
                         {
-                            Ok(_) => println!("[Task Worker #{}] Started", i),
-                            Err(e) => println!("[Task Worker #{}] Failed: {}", i, e),
+                            Ok(_) => println!("[Task Worker Control #{}] Started", i),
+                            Err(e) => println!("[Task Worker Control #{}] Failed: {}", i, e),
+                        }
+                    }
+                    
+                    // Task Workers - Execution 池: tool.execute, context.append 等
+                    for i in 1..=num_execution {
+                        match Command::new(&worker_binary)
+                            .arg("task-worker")
+                            .arg("--pool")
+                            .arg("execution")
+                            .arg("--gateway-url")
+                            .arg(&gateway_url)
+                            .arg("--queue-service-url")
+                            .arg(&queue_service_url)
+                            .arg("--tools-server-url")
+                            .arg(&tools_server_url)
+                            .arg("--runtime-orchestrator-url")
+                            .arg(&runtime_orchestrator_url)
+                            .arg("--tool-result-service-url")
+                            .arg(&tool_result_service_url)
+                            .arg("--num-workers")
+                            .arg("1")
+                            .arg("--data-dir")
+                            .arg(data_dir_for_gateway.to_string_lossy().to_string())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .spawn()
+                        {
+                            Ok(_) => println!("[Task Worker Execution #{}] Started", i),
+                            Err(e) => println!("[Task Worker Execution #{}] Failed: {}", i, e),
                         }
                     }
                     
@@ -2208,11 +2240,13 @@ fn main() {
                         Err(e) => println!("[Watchdog] Failed: {}", e),
                     }
                     
-                    // Task Workers
-                    for i in 1..=num_task_workers {
+                    // Task Workers - Control 池
+                    for i in 1..=num_control {
                         match Command::new(&python)
                             .arg("main_novaic.py")
                             .arg("task-worker")
+                            .arg("--pool")
+                            .arg("control")
                             .arg("--gateway-url")
                             .arg(&gateway_url)
                             .arg("--queue-service-url")
@@ -2224,7 +2258,7 @@ fn main() {
                             .arg("--tool-result-service-url")
                             .arg(&tool_result_service_url)
                             .arg("--num-workers")
-                            .arg("5")
+                            .arg("1")
                             .arg("--data-dir")
                             .arg(data_dir_for_gateway.to_string_lossy().to_string())
                             .current_dir(&agent_runtime_dir)
@@ -2232,8 +2266,39 @@ fn main() {
                             .stderr(Stdio::inherit())
                             .spawn()
                         {
-                            Ok(_) => println!("[Task Worker #{}] Started (dev mode)", i),
-                            Err(e) => println!("[Task Worker #{}] Failed: {}", i, e),
+                            Ok(_) => println!("[Task Worker Control #{}] Started (dev mode)", i),
+                            Err(e) => println!("[Task Worker Control #{}] Failed: {}", i, e),
+                        }
+                    }
+                    
+                    // Task Workers - Execution 池
+                    for i in 1..=num_execution {
+                        match Command::new(&python)
+                            .arg("main_novaic.py")
+                            .arg("task-worker")
+                            .arg("--pool")
+                            .arg("execution")
+                            .arg("--gateway-url")
+                            .arg(&gateway_url)
+                            .arg("--queue-service-url")
+                            .arg(&queue_service_url)
+                            .arg("--tools-server-url")
+                            .arg(&tools_server_url)
+                            .arg("--runtime-orchestrator-url")
+                            .arg(&runtime_orchestrator_url)
+                            .arg("--tool-result-service-url")
+                            .arg(&tool_result_service_url)
+                            .arg("--num-workers")
+                            .arg("1")
+                            .arg("--data-dir")
+                            .arg(data_dir_for_gateway.to_string_lossy().to_string())
+                            .current_dir(&agent_runtime_dir)
+                            .stdout(Stdio::inherit())
+                            .stderr(Stdio::inherit())
+                            .spawn()
+                        {
+                            Ok(_) => println!("[Task Worker Execution #{}] Started (dev mode)", i),
+                            Err(e) => println!("[Task Worker Execution #{}] Failed: {}", i, e),
                         }
                     }
                     

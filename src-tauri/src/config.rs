@@ -46,8 +46,14 @@ impl AppConfig {
     
     // ===== Worker Configuration =====
     
-    /// Number of task workers to spawn
+    /// Number of task workers to spawn (deprecated: use CONTROL/EXECUTION)
     pub const NUM_TASK_WORKERS: u32 = 3;
+    
+    /// Control pool: saga.parallel/decision/trigger (会阻塞，需 >= 最大并发 subagent 数)
+    pub const NUM_TASK_CONTROL_WORKERS: u32 = 5;
+    
+    /// Execution pool: tool.execute, context.append 等（不阻塞）
+    pub const NUM_TASK_EXECUTION_WORKERS: u32 = 5;
     
     /// Number of saga workers to spawn
     pub const NUM_SAGA_WORKERS: u32 = 3;
