@@ -2,22 +2,40 @@
 File Tools - File system operations
 """
 
+import base64
 import os
 import stat
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+
+# 二进制文件扩展名（用于自动检测）
+_BINARY_EXTENSIONS = frozenset({
+    "apk", "bin", "zip", "jar", "so", "dex", "dat", "db",
+    "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "tiff",
+    "mp3", "mp4", "wav", "ogg", "webm", "pdf",
+})
+
+
+def _is_likely_binary(path: str, binary: Optional[bool] = None) -> bool:
+    """判断是否应按二进制读取。binary 显式指定时优先。"""
+    if binary is not None:
+        return binary
+    ext = (path.rsplit(".", 1)[-1].lower() if "." in path else "")
+    return ext in _BINARY_EXTENSIONS
 
 
 class FileTools:
     """File system operations"""
     
     @staticmethod
-    async def read_file(path: str) -> Dict[str, Any]:
+    async def read_file(path: str, binary: Optional[bool] = None) -> Dict[str, Any]:
         """
-        Read file contents
+        Read file contents.
         
         Args:
             path: Path to file
+            binary: If True, read as binary and return base64. If False, read as text.
+                    If None, auto-detect by extension (apk/bin/zip/png/jpg etc. -> binary).
         """
         try:
             path = os.path.expanduser(path)
@@ -28,14 +46,25 @@ class FileTools:
             if not os.path.isfile(path):
                 return {"success": False, "error": f"Not a file: {path}"}
             
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
-            
-            return {
-                "success": True,
-                "content": content,
-                "size": len(content)
-            }
+            if _is_likely_binary(path, binary):
+                with open(path, "rb") as f:
+                    raw = f.read()
+                content = base64.b64encode(raw).decode("ascii")
+                return {
+                    "success": True,
+                    "content": content,
+                    "is_base64": True,
+                    "size": len(raw),
+                }
+            else:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                return {
+                    "success": True,
+                    "content": content,
+                    "is_base64": False,
+                    "size": len(content),
+                }
             
         except Exception as e:
             return {"success": False, "error": str(e)}

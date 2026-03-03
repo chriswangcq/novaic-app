@@ -51,7 +51,7 @@
     "max_concurrent_per_runtime": 4
   },
   "timeouts": {
-    "task_timeout": 60,
+    "task_timeout": 300,
     "saga_step_timeout": 1500,
     "saga_timeout": 1800,
     "http_timeout": 30.0,

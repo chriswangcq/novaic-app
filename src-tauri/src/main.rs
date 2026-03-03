@@ -655,7 +655,6 @@ impl ToolsServerProcess {
         };
         println!("[Tools Server] Using resource_dir: {}", resource_dir_str);
         let gateway_url = local_url(PORT_GATEWAY);
-        let runtime_orchestrator_url = local_url(PORT_RUNTIME_ORCHESTRATOR);
         let tool_result_service_url = local_url(PORT_TOOL_RESULT_SERVICE);
 
         // Prepare log files
@@ -682,8 +681,6 @@ impl ToolsServerProcess {
                 .arg(&data_dir_str)
                 .arg("--gateway-url")
                 .arg(&gateway_url)
-                .arg("--runtime-orchestrator-url")
-                .arg(&runtime_orchestrator_url)
                 .arg("--tool-result-service-url")
                 .arg(&tool_result_service_url)
                 .env("NO_PROXY", "localhost,127.0.0.1,::1")
@@ -716,8 +713,6 @@ impl ToolsServerProcess {
                 .arg(&data_dir_str)
                 .arg("--gateway-url")
                 .arg(&gateway_url)
-                .arg("--runtime-orchestrator-url")
-                .arg(&runtime_orchestrator_url)
                 .arg("--tool-result-service-url")
                 .arg(&tool_result_service_url)
                 .current_dir(&split_path)
@@ -1991,7 +1986,8 @@ fn main() {
                 }
                 
                 // 10. 严格等待 Tools Server 就绪（health check）（超时则中止，不启动 Workers）
-                const TS_HEALTH_TIMEOUT_SECS: u64 = 15;
+                // Tools Server 启动时需 restore_from_gateway，可能超过 15s，延长至 45s
+                const TS_HEALTH_TIMEOUT_SECS: u64 = 45;
                 println!("[Services] Waiting for Tools Server to be ready (strict)...");
                 let ts_health_url = format!("{}/api/health", local_url(PORT_TOOLS_SERVER));
                 let mut ts_ready = false;

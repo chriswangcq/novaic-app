@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use crate::android::AndroidManager;
 
-/// 大文件上传的 body 大小限制 (500MB)
-const LARGE_BODY_LIMIT: usize = 500 * 1024 * 1024;
+/// 大文件上传的 body 大小限制 (700MB，覆盖 462MB 原文件 base64 后约 616MB)
+const LARGE_BODY_LIMIT: usize = 700 * 1024 * 1024;
 
 /// Application state shared across all routes
 pub type AppState = Arc<RwLock<HashMap<String, vm::VmManager>>>;

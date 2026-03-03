@@ -1321,7 +1321,7 @@ function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProps) {
               <div className={`bg-nb-bg rounded-md p-2.5 border ${
                 isFailed ? 'border-nb-error/20' : 'border-nb-border/30'
               }`}>
-                {!isFailed && (result as Record<string, unknown>)?.result_id ? (
+                {(result as Record<string, unknown>)?.result_id ? (
                   <InlineTrsResult resultId={(result as Record<string, unknown>).result_id as string} />
                 ) : (
                   <SmartValue value={result} isError={isFailed} copyable />

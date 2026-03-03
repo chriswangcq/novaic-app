@@ -340,14 +340,15 @@ class VMUSEServer:
     # ==================== File Tools ====================
     
     async def file_read(self, request):
-        """读取文件"""
+        """读取文件。支持 binary 参数：True=二进制(base64)，False=文本，None=按扩展名自动检测"""
         try:
             data = await request.json()
             path = data.get('path')
             if not path:
                 return web.json_response({"success": False, "error": "Missing path"}, status=400)
             
-            result = await FileTools.read_file(path)
+            binary = data.get('binary')  # True/False/None
+            result = await FileTools.read_file(path, binary=binary)
             return web.json_response(result)
         except Exception as e:
             logger.error(f"Read file error: {e}")

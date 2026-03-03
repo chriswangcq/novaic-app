@@ -658,8 +658,31 @@ impl AndroidManager {
     }
 
     /// 检查系统镜像是否存在
+    /// 
+    /// 当 data_dir 模式时，优先检查 data_dir/android/sdk（实际下载的镜像位置），
+    /// 而非 bundled SDK 路径（bundled 不含 system-images）。
     pub fn check_system_image(&self) -> Result<(), VmError> {
-        self.avd_manager.check_system_image()
+        let sdk_to_check = if let Some(ref d) = self.data_dir {
+            let data_dir_sdk = d.join("android").join("sdk");
+            if sdk_has_required_components(&data_dir_sdk) {
+                data_dir_sdk
+            } else if let Some(home) = dirs::home_dir() {
+                let user_sdk = home.join("Library").join("Android").join("sdk");
+                if user_sdk.exists() && sdk_has_required_components(&user_sdk) {
+                    user_sdk
+                } else {
+                    self.sdk_path.clone()
+                }
+            } else {
+                self.sdk_path.clone()
+            }
+        } else {
+            self.sdk_path.clone()
+        };
+        let temp_avd = AvdManager::with_avd_path(sdk_to_check, self.avd_home.clone().unwrap_or_else(|| {
+            dirs::home_dir().unwrap_or_default().join(".android").join("avd")
+        }));
+        temp_avd.check_system_image()
     }
 
     // ============ 设备管理方法 ============
