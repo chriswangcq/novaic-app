@@ -1,11 +1,8 @@
 import { useEffect, useCallback, useState, Component, ReactNode, ErrorInfo } from 'react';
-import { ChatPanel } from './components/Chat/ChatPanel';
 import { Header } from './components/Layout/Header';
 import { AgentDrawer } from './components/Layout/AgentDrawer';
-import { DeviceSidebar } from './components/Layout/DeviceSidebar';
-import { Resizer } from './components/Layout/Resizer';
+import { LayoutContainer } from './components/Layout/LayoutContainer';
 import { useAppStore } from './store';
-import { useIsLgOrAbove } from './hooks/useMediaQuery';
 import { LAYOUT_CONFIG } from './config';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
@@ -79,13 +76,14 @@ function App() {
     agents,
     currentAgentId,
     setCreateAgentModalOpen,
+    drawerWidth,
+    setDrawerWidth,
     drawerOpen,
     setDrawerOpen,
     sidebarWidth,
     setSidebarWidth,
     sidebarMode,
   } = useAppStore();
-  const isLgOrAbove = useIsLgOrAbove();
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
@@ -302,36 +300,20 @@ function App() {
         onAgentCreated={handleAgentCreated}
       />
       
-      {/* Main Container with Agent Drawer */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Agent Drawer - 挤占式侧边栏 */}
-        <AgentDrawer
-          isOpen={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          onSelectAgent={handleSelectAgent}
-          onCreateNew={() => setCreateAgentModalOpen(true)}
-        />
-
-        {/* Main Content - 新布局：聊天区 + Resizer + 右侧设备栏 */}
-        <main className="flex-1 flex overflow-hidden">
-          {/* 中间：聊天区域（包含顶部的 ExecutionLog） */}
-          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-            <ChatPanel />
-          </div>
-          
-          {/* 水平 Resizer：ChatPanel 与 DeviceSidebar 之间（lg 以上且非 hidden 时显示） */}
-          {isLgOrAbove && sidebarMode !== 'hidden' && (
-            <Resizer
-              axis="horizontal"
-              onResize={(delta) => setSidebarWidth(useAppStore.getState().sidebarWidth + delta)}
-              onDoubleClick={() => setSidebarWidth(LAYOUT_CONFIG.SIDEBAR_WIDTH)}
-            />
-          )}
-          
-          {/* 右侧：设备边栏 */}
-          <DeviceSidebar sidebarWidth={sidebarWidth} />
-        </main>
-      </div>
+      {/* Main Container - LayoutContainer 提供 AgentDrawer + Resizer + main */}
+      <LayoutContainer
+        drawerWidth={drawerWidth}
+        sidebarWidth={sidebarWidth}
+        drawerOpen={drawerOpen}
+        sidebarMode={sidebarMode}
+        onDrawerResize={(delta) => setDrawerWidth(useAppStore.getState().drawerWidth + delta)}
+        onSidebarResize={(delta) => setSidebarWidth(useAppStore.getState().sidebarWidth - delta)}
+        onDrawerClose={() => setDrawerOpen(false)}
+        onDrawerDoubleClick={() => setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
+        onSidebarDoubleClick={() => setSidebarWidth(LAYOUT_CONFIG.SIDEBAR_WIDTH)}
+        onSelectAgent={handleSelectAgent}
+        onCreateNew={() => setCreateAgentModalOpen(true)}
+      />
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       

@@ -19,9 +19,11 @@ interface AgentDrawerProps {
   onClose: () => void;
   onSelectAgent: (agentId: string, needsSetup: boolean) => void;
   onCreateNew: () => void;
+  /** Resizer 由谁提供：internal=组件内部，external=由父组件（如 LayoutContainer）提供。默认 internal */
+  resizerPlacement?: 'internal' | 'external';
 }
 
-export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: AgentDrawerProps) {
+export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal' }: AgentDrawerProps) {
   const { agents, currentAgentId, loadAgents, drawerWidth, setDrawerWidth } = useAppStore();
   const isOverlay = !useIsLgOrAbove();
   const [vmStatuses, setVmStatuses] = useState<Record<string, VmStatus>>({});
@@ -53,10 +55,11 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: Age
     }
   }, [isOpen, refreshVmStatuses]);
 
-  // Load last messages for all agents
+  // Load last messages for all agents（依赖 agentIds 而非 agents，避免 store 其他更新触发重复请求）
+  const agentIds = agents.map((a) => a.id).join(',');
   useEffect(() => {
     if (!isOpen || agents.length === 0) return;
-    
+
     const loadLastMessages = async () => {
       const msgs: Record<string, string> = {};
       await Promise.allSettled(
@@ -79,7 +82,8 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: Age
     };
     
     loadLastMessages();
-  }, [isOpen, agents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 有意使用 agentIds 替代 agents，避免 agents 引用变化触发重复请求
+  }, [isOpen, agentIds]);
 
   // Handle keyboard escape
   useEffect(() => {
@@ -186,7 +190,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: Age
     </>
   );
 
-  // md 以下：overlay 浮层 + 遮罩
+  // lg 以下：overlay 浮层 + 遮罩
   if (isOverlay) {
     return (
       <>
@@ -210,7 +214,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: Age
     );
   }
 
-  // md 及以上：挤占式侧边栏 + Resizer
+  // lg 及以上：挤占式侧边栏 + Resizer
   return (
     <>
       <div
@@ -220,8 +224,9 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: Age
       >
         {drawerInner}
       </div>
-      {isOpen && (
+      {resizerPlacement !== 'external' && isOpen && (
         <Resizer
+          axis="horizontal"
           onResize={(delta) => setDrawerWidth(useAppStore.getState().drawerWidth + delta)}
           onDoubleClick={() => setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
         />

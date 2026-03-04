@@ -41,7 +41,8 @@ export function ChatPanel() {
       if (h <= 0) return;
       const ratioDelta = delta / h;
       const current = useAppStore.getState().logHeightRatio;
-      setLogHeightRatio(current + ratioDelta);
+      // 拖向下：delta>0，边界下移，MessageList 变大、ExecutionLog 变小，故 logHeightRatio 应减少
+      setLogHeightRatio(current - ratioDelta);
     },
     [setLogHeightRatio]
   );

@@ -2,13 +2,16 @@
  * LayoutContainer - 主布局容器
  *
  * 结构：AgentDrawer | Resizer | main(ChatPanel | Resizer | DeviceSidebar)
- * 使用 CSS 变量 --drawer-width、--sidebar-width 控制可调整宽度
+ * - 使用 useIsLgOrAbove() 控制 Resizer 显示：lg 以下 Drawer/Sidebar 为 overlay，不渲染 Resizer
+ * - AgentDrawer 传入 resizerPlacement="external"，由本组件提供 Drawer Resizer
+ * - CSS 变量 --drawer-width、--sidebar-width 供子组件或未来样式覆盖使用
  */
 
 import { AgentDrawer } from './AgentDrawer';
 import { Resizer } from './Resizer';
 import { ChatPanel } from '../Chat/ChatPanel';
 import { DeviceSidebar } from './DeviceSidebar';
+import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
 import type { SidebarMode } from '../../types';
 
 interface LayoutContainerProps {
@@ -38,26 +41,30 @@ export function LayoutContainer({
   onSelectAgent,
   onCreateNew,
 }: LayoutContainerProps) {
+  const isLgOrAbove = useIsLgOrAbove();
+
   return (
     <div
       className="flex-1 flex overflow-hidden"
       style={
         {
+          // 供子组件或未来样式覆盖使用，当前 AgentDrawer/DeviceSidebar 从 props 取宽
           '--drawer-width': `${drawerWidth}px`,
           '--sidebar-width': `${sidebarWidth}px`,
         } as React.CSSProperties
       }
     >
-      {/* Agent Drawer - 使用 store 的 drawerWidth，此处仅传布局状态用于 CSS 变量 */}
+      {/* Agent Drawer - resizerPlacement=external 由 LayoutContainer 提供 Resizer */}
       <AgentDrawer
+        resizerPlacement="external"
         isOpen={drawerOpen}
         onClose={onDrawerClose}
         onSelectAgent={onSelectAgent}
         onCreateNew={onCreateNew}
       />
 
-      {/* Drawer <-> Main 水平 Resizer（仅 drawer 打开时显示） */}
-      {drawerOpen && (
+      {/* Drawer <-> Main 水平 Resizer（lg 以上且 drawer 打开时显示） */}
+      {drawerOpen && isLgOrAbove && (
         <Resizer
           axis="horizontal"
           onResize={onDrawerResize}
@@ -71,11 +78,11 @@ export function LayoutContainer({
           <ChatPanel />
         </div>
 
-        {sidebarMode !== 'hidden' && (
+        {isLgOrAbove && sidebarMode !== 'hidden' && (
           <Resizer
             axis="horizontal"
             onResize={onSidebarResize}
-            onDoubleClick={onSidebarDoubleClick}
+            onDoubleClick={onSidebarDoubleClick ?? (() => {})}
           />
         )}
 

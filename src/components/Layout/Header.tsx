@@ -135,7 +135,7 @@ export function Header(props: HeaderProps) {
                 <ChevronRight size={14} />
               </button>
               {agentDropdownOpen && recentAgents.length > 0 && (
-                <div className="absolute top-full left-0 mt-1 min-w-[160px] py-1 rounded-lg bg-nb-surface border border-nb-border shadow-xl z-50">
+                <div className="absolute top-full left-0 mt-1 min-w-[160px] py-1 rounded-lg bg-nb-surface border border-nb-border shadow-xl z-[100]">
                   {recentAgents.map((agent) => (
                     <button
                       key={agent.id}
