@@ -454,7 +454,7 @@ export function AgentDashboard({ onEnterWorkspace, onEnterSetup }: AgentDashboar
   return (
     <div className="h-screen flex flex-col bg-nb-bg">
       {/* Header */}
-      <header className="h-14 border-b border-nb-border flex items-center justify-between px-6">
+      <header className="h-10 border-b border-nb-border flex items-center justify-between px-6">
         <div className="flex items-center gap-3">
           <img src="/logo.png" alt="NovAIC" className="w-8 h-8" />
           <h1 className="text-lg font-semibold text-nb-text">NovAIC</h1>
@@ -517,7 +517,7 @@ export function AgentDashboard({ onEnterWorkspace, onEnterSetup }: AgentDashboar
       </main>
 
       {/* Footer */}
-      <footer className="h-8 border-t border-nb-border flex items-center justify-center text-xs text-nb-text-muted">
+      <footer className="h-6 border-t border-nb-border flex items-center justify-center text-xs text-nb-text-muted">
         NovAIC v0.3.0 • {agents.length} Agent{agents.length !== 1 ? 's' : ''}
       </footer>
 

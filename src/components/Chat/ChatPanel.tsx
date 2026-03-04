@@ -4,77 +4,120 @@ import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { CollapsibleExecutionLog } from '../Visual/CollapsibleExecutionLog';
 import { ExecutionLog } from '../Visual/ExecutionLog';
+import { Resizer } from '../Layout/Resizer';
 import { useAppStore } from '../../store';
+import { LAYOUT_CONFIG } from '../../config';
+import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
 
 export function ChatPanel() {
-  const { messages, sendMessage, logs } = useAppStore();
+  const {
+    messages,
+    sendMessage,
+    logs,
+    logExpanded,
+    setLogExpanded,
+    logHeightRatio,
+    setLogHeightRatio,
+  } = useAppStore();
   const [unreadCount, setUnreadCount] = useState(0);
-  const [isLogExpanded, setIsLogExpanded] = useState(false);
   const scrollToBottomRef = useRef<(() => void) | null>(null);
   const clearUnreadRef = useRef<(() => void) | null>(null);
+  const mainAreaRef = useRef<HTMLDivElement>(null);
+  const isLgOrAbove = useIsLgOrAbove();
 
-  // 稳定的回调引用
   const stableSetUnreadCount = useCallback((count: number) => {
     setUnreadCount(count);
   }, []);
 
   const handleScrollToBottom = useCallback(() => {
-    // 先清除 MessageList 内部的未读计数
     clearUnreadRef.current?.();
-    // 然后滚动
     scrollToBottomRef.current?.();
   }, []);
+
+  const handleLogResize = useCallback(
+    (delta: number) => {
+      const el = mainAreaRef.current;
+      const h = el?.clientHeight ?? 400;
+      if (h <= 0) return;
+      const ratioDelta = delta / h;
+      const current = useAppStore.getState().logHeightRatio;
+      setLogHeightRatio(current + ratioDelta);
+    },
+    [setLogHeightRatio]
+  );
+
+  const handleLogResizerDoubleClick = useCallback(() => {
+    setLogHeightRatio(LAYOUT_CONFIG.LOG_HEIGHT_RATIO);
+  }, [setLogHeightRatio]);
 
   return (
     <div className="relative flex flex-col h-full bg-nb-bg/50">
       {/* 浮动的 Execution Log（未展开时显示） */}
-      <CollapsibleExecutionLog 
-        isExpanded={isLogExpanded}
-        onExpand={() => setIsLogExpanded(true)}
+      <CollapsibleExecutionLog
+        isExpanded={logExpanded}
+        onExpand={() => setLogExpanded(true)}
       />
-      
-      {/* 半屏 Execution Log（展开时显示） */}
-      {isLogExpanded && (
-        <div className="h-1/2 border-b border-nb-border flex flex-col bg-nb-bg shrink-0">
-          {/* 半屏 Header */}
-          <div className="h-10 px-4 flex items-center justify-between bg-nb-surface border-b border-nb-border shrink-0">
-            <div className="flex items-center gap-2">
-              <Terminal size={14} className="text-nb-text-secondary" />
-              <span className="text-xs font-medium text-nb-text-muted">Execution Log</span>
-              <span className="px-2 py-0.5 bg-nb-surface-2 text-nb-text-secondary text-[10px] rounded">
-                {logs.length} 条记录
-              </span>
-            </div>
-            <button
-              onClick={() => setIsLogExpanded(false)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-nb-text-secondary hover:text-nb-text hover:bg-nb-hover transition-colors"
-              title="收起"
-            >
-              <ChevronUp size={12} />
-              收起
-            </button>
-          </div>
-          
-          {/* 半屏 Content */}
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <ExecutionLog logs={logs} showHeader={false} />
-          </div>
+
+      {/* 主内容区：MessageList + [Resizer + ExecutionLog] */}
+      <div ref={mainAreaRef} className="flex-1 flex flex-col min-h-0">
+        {/* MessageList - 上方 */}
+        <div
+          className="min-h-0 flex flex-col"
+          style={
+            logExpanded
+              ? { flex: 1 - logHeightRatio, minHeight: 0 }
+              : { flex: 1, minHeight: 0 }
+          }
+        >
+          <MessageList
+            messages={messages}
+            onUnreadCountChange={stableSetUnreadCount}
+            scrollToBottomRef={scrollToBottomRef}
+            clearUnreadRef={clearUnreadRef}
+          />
         </div>
-      )}
-      
-      {/* Messages - 让 MessageList 完全控制滚动，不要嵌套滚动容器 */}
-      <div className={`flex-1 min-h-0 ${isLogExpanded ? 'h-1/2' : ''}`}>
-        <MessageList 
-          messages={messages} 
-          onUnreadCountChange={stableSetUnreadCount}
-          scrollToBottomRef={scrollToBottomRef}
-          clearUnreadRef={clearUnreadRef}
-        />
+
+        {/* 垂直 Resizer + Execution Log 半屏（展开时，lg 以上才显示 Resizer） */}
+        {logExpanded && (
+          <>
+            {isLgOrAbove && (
+            <Resizer
+              axis="vertical"
+              onResize={handleLogResize}
+              onDoubleClick={handleLogResizerDoubleClick}
+            />
+            )}
+            <div
+              className="border-t border-nb-border flex flex-col bg-nb-bg shrink-0 min-h-0"
+              style={{ flex: logHeightRatio }}
+            >
+              <div className="h-10 px-4 flex items-center justify-between bg-nb-surface border-b border-nb-border shrink-0">
+                <div className="flex items-center gap-2">
+                  <Terminal size={14} className="text-nb-text-secondary" />
+                  <span className="text-xs font-medium text-nb-text-muted">Execution Log</span>
+                  <span className="px-2 py-0.5 bg-nb-surface-2 text-nb-text-secondary text-[10px] rounded">
+                    {logs.length} 条记录
+                  </span>
+                </div>
+                <button
+                  onClick={() => setLogExpanded(false)}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-nb-text-secondary hover:text-nb-text hover:bg-nb-hover transition-colors"
+                  title="收起"
+                >
+                  <ChevronUp size={12} />
+                  收起
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <ExecutionLog logs={logs} showHeader={false} />
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Input */}
-      <ChatInput 
-        onSend={sendMessage} 
+      <ChatInput
+        onSend={sendMessage}
         unreadCount={unreadCount}
         onScrollToBottom={handleScrollToBottom}
       />

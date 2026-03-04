@@ -7,10 +7,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Plus, Monitor } from 'lucide-react';
 import { useAppStore } from '../../store';
+import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
+import { Resizer } from './Resizer';
 import type { AICAgent } from '../../services/api';
 import { api } from '../../services/api';
 import { vmService, VmStatus } from '../../services/vm';
-import { POLL_CONFIG } from '../../config';
+import { POLL_CONFIG, LAYOUT_CONFIG } from '../../config';
 
 interface AgentDrawerProps {
   isOpen: boolean;
@@ -20,7 +22,8 @@ interface AgentDrawerProps {
 }
 
 export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: AgentDrawerProps) {
-  const { agents, currentAgentId, loadAgents } = useAppStore();
+  const { agents, currentAgentId, loadAgents, drawerWidth, setDrawerWidth } = useAppStore();
+  const isOverlay = !useIsLgOrAbove();
   const [vmStatuses, setVmStatuses] = useState<Record<string, VmStatus>>({});
   const [lastMessages, setLastMessages] = useState<Record<string, string>>({});
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -110,13 +113,8 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: Age
     return 'bg-slate-400';
   };
 
-  return (
-    <div
-      ref={drawerRef}
-      className={`h-full bg-nb-surface border-r border-nb-border flex flex-col shrink-0 transition-all duration-300 ease-out overflow-hidden ${
-        isOpen ? 'w-72' : 'w-0'
-      }`}
-    >
+  const drawerInner = (
+    <>
       {/* Agent List */}
       <div className="flex-1 overflow-y-auto">
         {agents.length === 0 ? (
@@ -185,6 +183,49 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew }: Age
           <span>Create New Agent</span>
         </button>
       </div>
-    </div>
+    </>
+  );
+
+  // md 以下：overlay 浮层 + 遮罩
+  if (isOverlay) {
+    return (
+      <>
+        {isOpen && (
+          <div
+            className="fixed inset-0 top-10 z-30 bg-black/50"
+            onClick={onClose}
+            aria-hidden="true"
+          />
+        )}
+        <div
+          ref={drawerRef}
+          className={`fixed top-10 left-0 bottom-0 z-40 bg-nb-surface border-r border-nb-border flex flex-col transition-transform duration-300 ease-out overflow-hidden shadow-xl ${
+            isOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+          style={{ width: drawerWidth }}
+        >
+          {drawerInner}
+        </div>
+      </>
+    );
+  }
+
+  // md 及以上：挤占式侧边栏 + Resizer
+  return (
+    <>
+      <div
+        ref={drawerRef}
+        className="h-full bg-nb-surface border-r border-nb-border flex flex-col shrink-0 transition-all duration-300 ease-out overflow-hidden"
+        style={{ width: isOpen ? drawerWidth : 0 }}
+      >
+        {drawerInner}
+      </div>
+      {isOpen && (
+        <Resizer
+          onResize={(delta) => setDrawerWidth(useAppStore.getState().drawerWidth + delta)}
+          onDoubleClick={() => setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
+        />
+      )}
+    </>
   );
 }

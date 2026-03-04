@@ -212,6 +212,9 @@ export const STORAGE_KEYS = {
   
   /** 布局设置 */
   LAYOUT: 'novaic-layout',
+
+  /** 布局设置 v2（drawer/sidebar/log 等） */
+  LAYOUT_V2: 'novaic-layout-v2',
   
   /** 侧边栏状态 */
   DRAWER_STATE: 'novaic_drawer_state',
@@ -269,12 +272,34 @@ export const DEFAULT_PORTS = {
 export const LAYOUT_CONFIG = {
   /** 默认左侧面板宽度（像素） */
   DEFAULT_LEFT_WIDTH: 400,
-  
+
+  /** Drawer 默认宽度（像素） */
+  DRAWER_WIDTH: 288,
+
+  /** Drawer 最小/最大宽度（像素） */
+  DRAWER_MIN: 200,
+  DRAWER_MAX: 400,
+
+  /** Sidebar 默认宽度（像素） */
+  SIDEBAR_WIDTH: 208,
+
+  /** Sidebar 折叠态宽度（像素） */
+  SIDEBAR_COLLAPSED_WIDTH: 48,
+
+  /** Sidebar 最小/最大宽度（像素） */
+  SIDEBAR_MIN: 180,
+  SIDEBAR_MAX: 400,
+
   /** 最小左侧面板宽度（像素） */
   MIN_LEFT_WIDTH: 300,
-  
+
   /** 最大左侧面板宽度（像素） */
   MAX_LEFT_WIDTH: 600,
+
+  /** 日志区域高度比例（0.3 ~ 0.7） */
+  LOG_HEIGHT_RATIO: 0.5,
+  LOG_HEIGHT_RATIO_MIN: 0.3,
+  LOG_HEIGHT_RATIO_MAX: 0.7,
 } as const;
 
 // 导出类型定义

@@ -3,7 +3,10 @@ import { ChatPanel } from './components/Chat/ChatPanel';
 import { Header } from './components/Layout/Header';
 import { AgentDrawer } from './components/Layout/AgentDrawer';
 import { DeviceSidebar } from './components/Layout/DeviceSidebar';
+import { Resizer } from './components/Layout/Resizer';
 import { useAppStore } from './store';
+import { useIsLgOrAbove } from './hooks/useMediaQuery';
+import { LAYOUT_CONFIG } from './config';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
@@ -75,11 +78,15 @@ function App() {
     selectAgent,
     agents,
     currentAgentId,
-    setCreateAgentModalOpen
+    setCreateAgentModalOpen,
+    drawerOpen,
+    setDrawerOpen,
+    sidebarWidth,
+    setSidebarWidth,
+    sidebarMode,
   } = useAppStore();
-
+  const isLgOrAbove = useIsLgOrAbove();
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
   // Page state: 'setup' | 'workspace'
@@ -305,15 +312,24 @@ function App() {
           onCreateNew={() => setCreateAgentModalOpen(true)}
         />
 
-        {/* Main Content - 新布局：聊天区 + 右侧设备栏 */}
+        {/* Main Content - 新布局：聊天区 + Resizer + 右侧设备栏 */}
         <main className="flex-1 flex overflow-hidden">
           {/* 中间：聊天区域（包含顶部的 ExecutionLog） */}
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
             <ChatPanel />
           </div>
           
+          {/* 水平 Resizer：ChatPanel 与 DeviceSidebar 之间（lg 以上且非 hidden 时显示） */}
+          {isLgOrAbove && sidebarMode !== 'hidden' && (
+            <Resizer
+              axis="horizontal"
+              onResize={(delta) => setSidebarWidth(useAppStore.getState().sidebarWidth + delta)}
+              onDoubleClick={() => setSidebarWidth(LAYOUT_CONFIG.SIDEBAR_WIDTH)}
+            />
+          )}
+          
           {/* 右侧：设备边栏 */}
-          <DeviceSidebar />
+          <DeviceSidebar sidebarWidth={sidebarWidth} />
         </main>
       </div>
 

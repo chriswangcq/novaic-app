@@ -277,10 +277,41 @@ export interface ApiKeyInfo {
   provider: ProviderType;
 }
 
-// Layout Settings (persisted)
+// Layout Settings (persisted) - legacy
 export interface LayoutSettings {
   mode: LayoutMode;
   leftWidth: number;
+}
+
+/** DeviceSidebar 预设档位 */
+export type SidebarMode = 'expanded' | 'collapsed' | 'hidden';
+
+/** Layout persistence schema v2 - stored in novaic-layout-v2 */
+export interface LayoutPersistence {
+  version: number;
+  drawerWidth: number;
+  sidebarWidth: number;
+  drawerOpen: boolean;
+  sidebarCollapsed: boolean;
+  /** DeviceSidebar 档位：expanded | collapsed(48px) | hidden */
+  sidebarMode?: SidebarMode;
+  logExpanded: boolean;
+  logHeightRatio: number;
+  expandedCapsules?: string[];
+  mode?: LayoutMode;
+  leftWidth?: number;  // legacy alias for drawerWidth
+}
+
+/** Runtime layout state (derived from LayoutPersistence + config) */
+export interface LayoutState {
+  drawerWidth: number;
+  sidebarWidth: number;
+  drawerOpen: boolean;
+  sidebarCollapsed: boolean;
+  sidebarMode: SidebarMode;
+  logExpanded: boolean;
+  logHeightRatio: number;
+  expandedCapsules: Set<string>;
 }
 
 // AIC Agent Types - Port Configuration

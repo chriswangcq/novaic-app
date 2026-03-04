@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { ChevronDown, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Wrench, Eye, Edit3 } from 'lucide-react';
 import { api, type ApiKeyInfo, type CandidateModel, type AICAgent } from '../../services/api';
 import { useAppStore } from '../../store';
@@ -1908,6 +1909,8 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     return config?.candidate_models?.filter(m => m.api_key_id === apiKeyId) || [];
   }, [config]);
 
+  const modalRef = useFocusTrap(open, onClose);
+
   if (!open) return null;
 
   // Handlers
@@ -2074,13 +2077,16 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
   const totalEnabledModels = config?.candidate_models?.filter(m => m.enabled).length || 0;
 
   return (
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
 
-      <div className="absolute left-1/2 top-1/2 w-[720px] max-w-[95vw] max-h-[90vh] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-nb-border bg-nb-surface shadow-xl flex flex-col">
+      <div
+        ref={modalRef}
+        className="absolute left-1/2 top-1/2 w-[720px] max-w-[95vw] max-h-[90vh] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-nb-border bg-nb-surface shadow-xl flex flex-col"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-nb-border px-4 py-3 flex-shrink-0">
-          <div className="text-sm font-semibold text-nb-text">Settings</div>
+          <div id="settings-modal-title" className="text-sm font-semibold text-nb-text">Settings</div>
           <button
             onClick={onClose}
             className="text-nb-text-muted hover:text-nb-text"

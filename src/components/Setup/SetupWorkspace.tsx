@@ -199,7 +199,7 @@ export function SetupWorkspace({
   return (
     <div className="h-screen flex flex-col bg-nb-bg">
       {/* Header */}
-      <header className="h-14 border-b border-nb-border flex items-center px-6">
+      <header className="h-10 border-b border-nb-border flex items-center px-6">
         <button
           onClick={onBack}
           className="flex items-center gap-2 text-nb-text-secondary hover:text-nb-text transition-colors"

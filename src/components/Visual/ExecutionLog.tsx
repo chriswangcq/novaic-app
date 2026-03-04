@@ -4,9 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { LogEntry } from '../../types';
 import { CheckCircle, Terminal, Loader2, Brain, XCircle, ChevronDown, ChevronRight, Sparkles, Maximize2, X, Copy, Check, Wrench, Image as ImageIcon } from 'lucide-react';
 import { useAppStore } from '../../store';
-import { useVirtualList } from '../../hooks/useVirtualList';
-import { useScrollPagination } from '../../hooks/useScrollPagination';
-import { LOG_ESTIMATE_SIZE, LOG_OVERSCAN } from '../../constants/scroll';
+import { LogCapsule } from './LogCapsule';
 import { SmartValue } from './SmartValue';
 import { formatTime } from '../../utils/time';
 import { getTrsFull, toFileUrl, normalizedToContent, type TrsContentItem } from '../../services/trs';
@@ -999,6 +997,33 @@ interface ExecutionLogProps {
   showHeader?: boolean;
 }
 
+/** 按 subagent_id 分组，key 为 'main' | subagent_id；空字符串与 undefined 同等对待，归入 main */
+function groupLogsBySubagent(logs: LogEntry[]): Map<string, LogEntry[]> {
+  const groups = new Map<string, LogEntry[]>();
+  for (const log of logs) {
+    const raw = log.subagent_id;
+    const key = (typeof raw === 'string' && raw.trim()) ? raw : 'main';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(log);
+  }
+  return groups;
+}
+
+/** 获取排序后的胶囊 ID 列表：主 Agent 第一，subagent 按首条 log timestamp 升序 */
+function getSortedCapsuleIds(groups: Map<string, LogEntry[]>): string[] {
+  const ids = Array.from(groups.keys());
+  if (ids.length <= 1) return ids;
+  return ids.sort((a, b) => {
+    if (a === 'main') return -1;
+    if (b === 'main') return 1;
+    const logsA = groups.get(a)!;
+    const logsB = groups.get(b)!;
+    const tsA = logsA[0]?.timestamp ?? '';
+    const tsB = logsB[0]?.timestamp ?? '';
+    return tsA.localeCompare(tsB);
+  });
+}
+
 // 截断字符串
 const truncateString = (str: string, maxLength: number): string => {
   if (str.length <= maxLength) return str;
@@ -1007,14 +1032,14 @@ const truncateString = (str: string, maxLength: number): string => {
 
 // ==================== 日志卡片组件 ====================
 
-interface LogCardProps {
+export interface LogCardProps {
   log: LogEntry;
   isExpanded: boolean;
   onToggle: () => void;
   showSubagent: boolean;
 }
 
-function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProps) {
+export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProps) {
   const [showLLMModal, setShowLLMModal] = useState(false);
   const [isLoadingInput, setIsLoadingInput] = useState(false);
   const store = useAppStore();
@@ -1346,65 +1371,48 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
     hasMoreLogs,
     isLoadingMoreLogs,
     loadMoreLogs,
+    expandedCapsules,
+    setExpandedCapsules,
   } = useAppStore();
   
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
   const [isReady, setIsReady] = useState(false);
-  
-  const toggleLogExpand = useCallback((logKey: string) => {
-    setExpandedLogs(prev => {
-      const next = new Set(prev);
-      if (next.has(logKey)) {
-        next.delete(logKey);
-      } else {
-        next.add(logKey);
-      }
-      return next;
-    });
-  }, []);
-
-  const { parentRef, virtualizer } = useVirtualList({
-    count: logs.length,
-    estimateSize: LOG_ESTIMATE_SIZE,
-    overscan: LOG_OVERSCAN,
-  });
-
+  const parentRef = useRef<HTMLDivElement>(null);
   const hasInitialScrolled = useRef(false);
   const prevLogsLengthRef = useRef(0);
   const autoScrollEnabled = useRef(true);
   const isAutoScrolling = useRef(false);
 
+  const toggleLogExpand = useCallback((logKey: string) => {
+    setExpandedLogs(prev => {
+      const next = new Set(prev);
+      if (next.has(logKey)) next.delete(logKey);
+      else next.add(logKey);
+      return next;
+    });
+  }, []);
+
   const isAtBottom = useCallback(() => {
-    const scrollElement = parentRef.current;
-    if (!scrollElement) return false;
-    const { scrollTop, scrollHeight, clientHeight } = scrollElement;
-    return scrollHeight - scrollTop - clientHeight < 200;
-  }, [parentRef]);
-
-  const handleUserScroll = useCallback(() => {
-    if (isAutoScrolling.current) return;
-    autoScrollEnabled.current = isAtBottom();
-  }, [isAtBottom]);
-
-  const { handleScroll: handlePaginationScroll, firstVisibleIndexRef } = useScrollPagination({
-    itemsLength: logs.length,
-    virtualizer,
-    hasMore: hasMoreLogs,
-    isLoading: isLoadingMoreLogs,
-    onLoadMore: loadMoreLogs,
-    scrollThreshold: 100
-  });
+    const el = parentRef.current;
+    if (!el) return false;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+  }, []);
 
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    handlePaginationScroll(e);
-    handleUserScroll();
-  }, [handlePaginationScroll, handleUserScroll]);
+    const el = e.currentTarget;
+    if (el.scrollTop < 100 && hasMoreLogs && !isLoadingMoreLogs) loadMoreLogs();
+    if (!isAutoScrolling.current) autoScrollEnabled.current = isAtBottom();
+  }, [hasMoreLogs, isLoadingMoreLogs, loadMoreLogs, isAtBottom]);
+
+  const scrollToBottom = useCallback(() => {
+    const el = parentRef.current;
+    if (el) el.scrollTop = el.scrollHeight - el.clientHeight;
+  }, []);
 
   useLayoutEffect(() => {
     hasInitialScrolled.current = false;
     prevLogsLengthRef.current = 0;
     autoScrollEnabled.current = true;
-    firstVisibleIndexRef.current = null;
     setIsReady(false);
   }, [currentAgentId, logSubagentId]);
   
@@ -1412,7 +1420,7 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
     if (!hasInitialScrolled.current && logs.length > 0) {
       const timer = setTimeout(() => {
         requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(logs.length - 1, { align: 'end', behavior: 'auto' });
+          scrollToBottom();
           hasInitialScrolled.current = true;
           prevLogsLengthRef.current = logs.length;
           setIsReady(true);
@@ -1422,28 +1430,56 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
     } else if (logs.length === 0) {
       setIsReady(true);
     }
-  }, [logs.length, virtualizer]);
+  }, [logs.length, scrollToBottom]);
 
   useEffect(() => {
     if (hasInitialScrolled.current && logs.length > prevLogsLengthRef.current && !isLoadingMoreLogs) {
       if (autoScrollEnabled.current) {
         isAutoScrolling.current = true;
-        const targetLength = logs.length;
+        prevLogsLengthRef.current = logs.length;
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              virtualizer.scrollToIndex(targetLength - 1, { align: 'end', behavior: 'auto' });
-              prevLogsLengthRef.current = targetLength;
-              isAutoScrolling.current = false;
-              autoScrollEnabled.current = isAtBottom();
-            });
-          });
+          scrollToBottom();
+          isAutoScrolling.current = false;
+          autoScrollEnabled.current = isAtBottom();
         });
       } else {
         prevLogsLengthRef.current = logs.length;
       }
     }
-  }, [logs.length, virtualizer, isLoadingMoreLogs, isAtBottom]);
+  }, [logs.length, isLoadingMoreLogs, isAtBottom, scrollToBottom]);
+
+  const groups = useMemo(() => groupLogsBySubagent(logs), [logs]);
+  const sortedCapsuleIds = useMemo(() => getSortedCapsuleIds(groups), [groups]);
+  const showSubagentBadge = logSubagentId === null && sortedCapsuleIds.length > 1;
+
+  const toggleCapsuleExpand = useCallback((capsuleId: string) => {
+    // 使用 getState() 获取最新值，避免 useCallback 闭包持有陈旧的 expandedCapsules
+    const prev = useAppStore.getState().expandedCapsules;
+    const next = new Set(prev);
+    const isCurrentlyExpanded = !prev.has('__none__') && (prev.size === 0 || prev.has(capsuleId));
+    if (isCurrentlyExpanded) {
+      if (next.size === 0) {
+        const remaining = sortedCapsuleIds.filter(id => id !== capsuleId);
+        if (remaining.length === 0) {
+          setExpandedCapsules(new Set(['__none__']));
+        } else {
+          setExpandedCapsules(new Set(remaining));
+        }
+      } else {
+        next.delete(capsuleId);
+        setExpandedCapsules(next.size ? next : new Set(['__none__']));
+      }
+    } else {
+      next.delete('__none__');
+      next.add(capsuleId);
+      setExpandedCapsules(next);
+    }
+  }, [setExpandedCapsules, sortedCapsuleIds]);
+
+  const isCapsuleExpanded = useCallback((capsuleId: string) => {
+    if (expandedCapsules.has('__none__')) return false;
+    return expandedCapsules.size === 0 || expandedCapsules.has(capsuleId);
+  }, [expandedCapsules]);
 
   return (
     <div className="h-full flex flex-col bg-nb-bg">
@@ -1530,40 +1566,24 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
               </div>
             )}
 
-            {/* 虚拟列表 */}
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                position: 'relative',
-                width: '100%',
-              }}
-            >
-              {virtualizer.getVirtualItems().map((virtualRow) => {
-                const log = logs[virtualRow.index];
-                const logKey = log.id?.toString() || `${virtualRow.index}-${log.timestamp}`;
-                const isExpanded = expandedLogs.has(logKey);
-                
+            {/* 按 subagent 分组的胶囊列表 */}
+            <div className="space-y-3">
+              {sortedCapsuleIds.map(capsuleId => {
+                const capsuleLogs = groups.get(capsuleId)!;
+                const displayName = capsuleId === 'main' ? '主 Agent' : capsuleId;
                 return (
-                  <div
-                    key={virtualRow.key}
-                    data-index={virtualRow.index}
-                    ref={virtualizer.measureElement}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                    className="pb-2"
-                  >
-                    <LogCard
-                      log={log}
-                      isExpanded={isExpanded}
-                      onToggle={() => toggleLogExpand(logKey)}
-                      showSubagent={logSubagentId === null}
-                    />
-                  </div>
+                  <LogCapsule
+                    key={capsuleId}
+                    capsuleId={capsuleId}
+                    displayName={displayName}
+                    isMain={capsuleId === 'main'}
+                    logs={capsuleLogs}
+                    isExpanded={isCapsuleExpanded(capsuleId)}
+                    onToggleExpand={() => toggleCapsuleExpand(capsuleId)}
+                    showSubagentBadge={showSubagentBadge}
+                    expandedLogs={expandedLogs}
+                    onToggleLogExpand={toggleLogExpand}
+                  />
                 );
               })}
             </div>

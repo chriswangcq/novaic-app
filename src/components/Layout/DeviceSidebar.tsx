@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Monitor, Smartphone, Plus, Play, Square, Trash2, X, ExternalLink, MoreHorizontal } from 'lucide-react';
+import { Monitor, Smartphone, Plus, Play, Square, Trash2, X, ExternalLink, MoreHorizontal, PanelRightOpen, PanelRightClose, EyeOff } from 'lucide-react';
 import { useAppStore } from '../../store';
 import { api } from '../../services/api';
 import { VNCViewShared } from '../Visual/VNCViewShared';
 import { ScrcpyView } from '../Visual/ScrcpyView';
 import { AddLinuxVMModal } from '../VM/AddLinuxVMModal';
 import { AddAndroidModal } from '../VM/AddAndroidModal';
-import { Device, isLinuxDevice, isAndroidDevice, AndroidDevice as AndroidDeviceType } from '../../types';
+import { Device, isLinuxDevice, isAndroidDevice, AndroidDevice as AndroidDeviceType, SidebarMode } from '../../types';
+import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
+import { LAYOUT_CONFIG } from '../../config';
 
 interface DeviceSidebarProps {
   className?: string;
+  /** 侧边栏宽度（像素），来自 store 或 props */
+  sidebarWidth?: number;
 }
 
 // 设备状态类型
@@ -306,8 +310,11 @@ function DeviceDisplayModal({ device, onClose }: DeviceDisplayModalProps) {
   );
 }
 
-export function DeviceSidebar({ className = '' }: DeviceSidebarProps) {
-  const { currentAgentId, agents, loadAgents } = useAppStore();
+export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth }: DeviceSidebarProps) {
+  const { currentAgentId, agents, loadAgents, sidebarWidth: storeSidebarWidth, sidebarMode, setSidebarMode } = useAppStore();
+  const sidebarWidth = propsSidebarWidth ?? storeSidebarWidth ?? 208;
+  const isLgOrAbove = useIsLgOrAbove();
+  const isOverlay = !isLgOrAbove;
   const [displayDevice, setDisplayDevice] = useState<DeviceInfo | null>(null);
   
   // 设备状态（使用统一设备 API）
@@ -331,6 +338,9 @@ export function DeviceSidebar({ className = '' }: DeviceSidebarProps) {
   // 判断是否有设备
   const hasLinuxDevice = linuxDevices.length > 0;
   const hasAndroidDevice = androidDevices.length > 0;
+  const hasDevices = hasLinuxDevice || hasAndroidDevice;
+  // 无设备时默认 collapsed
+  const effectiveMode: SidebarMode = hasDevices ? sidebarMode : 'collapsed';
   
   // 获取所有设备状态（使用统一设备 API）
   const fetchDeviceStatuses = useCallback(async () => {
@@ -459,13 +469,170 @@ export function DeviceSidebar({ className = '' }: DeviceSidebarProps) {
   const findDevice = (deviceInfo: DeviceInfo): Device | undefined => {
     return currentAgent?.devices?.find(d => d.id === deviceInfo.id);
   };
-  
+
+  const displayWidth = effectiveMode === 'expanded' ? sidebarWidth : effectiveMode === 'collapsed' ? LAYOUT_CONFIG.SIDEBAR_COLLAPSED_WIDTH : 0;
+
+  // overlay 模式（sm/md）：固定浮层从右侧滑入
+  if (isOverlay) {
+    return (
+      <>
+        {effectiveMode === 'expanded' && (
+          <div
+            className="fixed inset-0 top-10 z-30 bg-black/50"
+            onClick={() => setSidebarMode('collapsed')}
+            aria-hidden="true"
+          />
+        )}
+        <div
+          className={`fixed top-10 right-0 bottom-0 z-40 bg-nb-surface border-l border-nb-border flex flex-col overflow-hidden transition-transform duration-300 shadow-xl ${className}`}
+          style={{
+            width: effectiveMode === 'expanded' ? sidebarWidth : 0,
+            transform: effectiveMode === 'expanded' ? 'translateX(0)' : 'translateX(100%)',
+          }}
+        >
+          {effectiveMode !== 'hidden' && (
+            <>
+              <div className="h-10 px-2 flex items-center justify-between border-b border-nb-border shrink-0">
+                <span className="text-[10px] font-medium text-nb-text-muted truncate flex-1">设备</span>
+                <button
+                  onClick={() => setSidebarMode('collapsed')}
+                  className="p-1 rounded hover:bg-nb-surface-hover text-nb-text-muted"
+                  title="收起"
+                >
+                  <PanelRightClose size={12} />
+                </button>
+              </div>
+              <div className="flex-1 p-2 space-y-2 overflow-y-auto">
+                {hasLinuxDevice ? (
+                  devices.filter(d => d.type === 'linux').map(device => {
+                    const realDevice = findDevice(device);
+                    return (
+                      <DeviceCard
+                        key={device.id}
+                        device={device}
+                        onStart={realDevice ? () => handleStartDevice(realDevice) : undefined}
+                        onStop={realDevice ? () => handleStopDevice(realDevice) : undefined}
+                        onOpenDisplay={() => handleOpenDisplay(device)}
+                        onDelete={() => handleDeleteDevice(device)}
+                      />
+                    );
+                  })
+                ) : (
+                  <AddDeviceButton type="linux" onClick={handleAddLinux} />
+                )}
+                <div className="border-t border-nb-border my-2" />
+                {hasAndroidDevice ? (
+                  devices.filter(d => d.type === 'android').map(device => {
+                    const realDevice = findDevice(device);
+                    return (
+                      <DeviceCard
+                        key={device.id}
+                        device={device}
+                        onStart={realDevice ? () => handleStartDevice(realDevice) : undefined}
+                        onStop={realDevice ? () => handleStopDevice(realDevice) : undefined}
+                        onOpenDisplay={() => handleOpenDisplay(device)}
+                        onDelete={() => handleDeleteDevice(device)}
+                      />
+                    );
+                  })
+                ) : (
+                  <AddDeviceButton type="android" onClick={handleAddAndroid} />
+                )}
+              </div>
+              <div className="p-2 border-t border-nb-border">
+                <button
+                  className="w-full p-2 rounded-lg border border-dashed border-nb-border text-nb-text-secondary hover:text-nb-text hover:border-nb-border-hover transition-colors"
+                  onClick={() => (!hasLinuxDevice ? handleAddLinux() : !hasAndroidDevice ? handleAddAndroid() : null)}
+                >
+                  <Plus size={14} className="mx-auto" />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        {/* 折叠/隐藏时显示右侧小标签，点击展开 */}
+        {(effectiveMode === 'collapsed' || effectiveMode === 'hidden') && (
+          <button
+            className="fixed top-1/2 right-0 -translate-y-1/2 z-20 w-6 h-12 bg-nb-surface border border-r-0 border-nb-border rounded-l-lg flex items-center justify-center hover:bg-nb-surface-2 transition-colors"
+            onClick={() => setSidebarMode('expanded')}
+            title="设备"
+          >
+            <PanelRightOpen size={12} className="text-nb-text-muted -rotate-90" />
+          </button>
+        )}
+      </>
+    );
+  }
+
+  // hidden 态：按设计 0px 宽度，使用浮动按钮展开（与 overlay 模式一致）
+  if (effectiveMode === 'hidden') {
+    return (
+      <>
+        <div className="shrink-0" style={{ width: 0 }} aria-hidden="true" />
+        <button
+          className="fixed top-1/2 right-0 -translate-y-1/2 z-20 w-6 h-12 bg-nb-surface border border-r-0 border-nb-border rounded-l-lg flex items-center justify-center hover:bg-nb-surface-2 transition-colors"
+          onClick={() => setSidebarMode('collapsed')}
+          title="显示设备栏"
+        >
+          <PanelRightOpen size={14} className="text-nb-text-muted -rotate-90" />
+        </button>
+      </>
+    );
+  }
+
   return (
     <>
-      <div className={`w-52 bg-nb-surface border-l border-nb-border flex flex-col ${className}`}>
-        {/* 标题 */}
-        <div className="h-10 px-2 flex items-center justify-center border-b border-nb-border">
-          <span className="text-[10px] font-medium text-nb-text-muted">设备</span>
+      <div 
+        className={`bg-nb-surface border-l border-nb-border flex flex-col shrink-0 overflow-hidden transition-[width] duration-200 ${className}`}
+        style={{ width: displayWidth }}
+      >
+        {/* 标题栏：含档位切换按钮 */}
+        <div className="h-10 px-2 flex items-center justify-between border-b border-nb-border shrink-0">
+          {effectiveMode === 'expanded' ? (
+            <>
+              <span className="text-[10px] font-medium text-nb-text-muted truncate flex-1 min-w-0">
+                {currentAgent?.name ?? '当前'} 的设备
+              </span>
+              <div className="flex items-center gap-0.5 shrink-0">
+                <button
+                  onClick={() => setSidebarMode('collapsed')}
+                  className="p-1 rounded hover:bg-nb-surface-hover text-nb-text-muted"
+                  title="收起"
+                >
+                  <PanelRightClose size={12} />
+                </button>
+                <button
+                  onClick={() => setSidebarMode('hidden')}
+                  className="p-1 rounded hover:bg-nb-surface-hover text-nb-text-muted"
+                  title="隐藏"
+                >
+                  <EyeOff size={12} />
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center gap-1 w-full">
+              <span className="text-[9px] font-medium text-nb-text-muted truncate w-full text-center">
+                {currentAgent?.name ?? '当前'}
+              </span>
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={() => setSidebarMode('expanded')}
+                  className="p-1 rounded hover:bg-nb-surface-hover text-nb-text-muted"
+                  title="展开"
+                >
+                  <PanelRightOpen size={12} />
+                </button>
+                <button
+                  onClick={() => setSidebarMode('hidden')}
+                  className="p-1 rounded hover:bg-nb-surface-hover text-nb-text-muted"
+                  title="隐藏"
+                >
+                  <EyeOff size={12} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         
         {/* 设备列表 */}

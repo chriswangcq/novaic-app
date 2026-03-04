@@ -40,14 +40,28 @@ function getLogStatus(log: LogEntry): 'running' | 'success' | 'failed' {
   return 'success';
 }
 
+// 获取胶囊标识：main→[主]，subagent_id 取首字符或短 id
+function getCapsuleLabel(log: LogEntry): string {
+  const id = log.subagent_id;
+  if (!id || id === 'main') return '[主]';
+  // 取首字符或短 id（如 subagent-abc 取 a 或前几位）
+  if (id.length <= 3) return `[${id}]`;
+  return `[${id.charAt(0).toUpperCase()}]`;
+}
+
 // 单条日志预览项
 function LogPreviewItem({ log }: { log: LogEntry }) {
   const isThink = log.kind === 'think' || log.type === 'thinking';
   const status = getLogStatus(log);
   const summary = getLogSummary(log);
+  const capsuleLabel = getCapsuleLabel(log);
   
   return (
     <div className="flex items-center gap-2 min-w-0">
+      {/* 胶囊标识 */}
+      <span className="text-[10px] text-nb-text-muted shrink-0 font-medium">
+        {capsuleLabel}
+      </span>
       {/* 状态图标 */}
       <div className={`
         w-4 h-4 rounded flex items-center justify-center shrink-0
@@ -131,7 +145,6 @@ function FullLogModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
 export function CollapsibleExecutionLog({ className = '', onExpand, isExpanded = false }: CollapsibleExecutionLogProps) {
   const { logs, currentAgentId } = useAppStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
   
   // 始终显示 4 条日志（不再根据悬停状态变化）
   const recentLogs = useMemo(() => {
@@ -164,8 +177,6 @@ export function CollapsibleExecutionLog({ className = '', onExpand, isExpanded =
           transition-all duration-200 ease-out
           ${className}
         `}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
       >
         {/* 头部 */}
         <div className="px-3 py-2">
@@ -189,16 +200,10 @@ export function CollapsibleExecutionLog({ className = '', onExpand, isExpanded =
             
             <div className="flex-1" />
             
-            {/* 展开到半屏按钮（悬停时显示） */}
+            {/* 展开到半屏按钮（始终可见） */}
             {onExpand && (
               <button
-                className={`
-                  flex items-center gap-1 px-2 py-1 rounded 
-                  text-[10px] text-nb-text-secondary 
-                  hover:text-nb-text hover:bg-nb-hover/50 
-                  transition-all duration-200
-                  ${isHovered ? 'opacity-100' : 'opacity-0'}
-                `}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-nb-text-secondary hover:text-nb-text hover:bg-nb-hover/50 transition-colors"
                 onClick={(e) => {
                   e.stopPropagation();
                   onExpand();
@@ -210,15 +215,9 @@ export function CollapsibleExecutionLog({ className = '', onExpand, isExpanded =
               </button>
             )}
             
-            {/* 全屏按钮（悬停时显示） */}
+            {/* 全屏按钮（始终可见） */}
             <button
-              className={`
-                flex items-center gap-1 px-2 py-1 rounded 
-                text-[10px] text-nb-text-secondary 
-                hover:text-nb-text hover:bg-nb-hover/50 
-                transition-all duration-200
-                ${isHovered ? 'opacity-100' : 'opacity-0'}
-              `}
+              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-nb-text-secondary hover:text-nb-text hover:bg-nb-hover/50 transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
                 setIsModalOpen(true);

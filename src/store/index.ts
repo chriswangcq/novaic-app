@@ -18,7 +18,8 @@ import {
   LogData,
   AppState, 
   LayoutMode,
-  LayoutSettings,
+  LayoutPersistence,
+  SidebarMode,
   ApiKeyInfo,
   ChatSSEMessage,
   MessageStatus,
@@ -34,6 +35,8 @@ import {
   STORAGE_KEYS, 
   LAYOUT_CONFIG 
 } from '../config';
+
+const LAYOUT_PERSISTENCE_VERSION = 2;
 
 function loadStoredAgentId(): string | null {
   try {
@@ -125,30 +128,153 @@ function saveAgentId(agentId: string | null): void {
   } catch {}
 }
 
-// Load layout settings from localStorage
-function loadLayoutSettings(): LayoutSettings {
+const VALID_SIDEBAR_MODES: SidebarMode[] = ['expanded', 'collapsed', 'hidden'];
+const VALID_LAYOUT_MODES: LayoutMode[] = ['full', 'normal', 'mini'];
+
+function safeNumber(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || isNaN(value)) return fallback;
+  return value;
+}
+
+// Load layout settings v2 from localStorage (novaic-layout-v2)
+function loadLayoutSettings(): LayoutPersistence {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.LAYOUT);
+    const saved = localStorage.getItem(STORAGE_KEYS.LAYOUT_V2);
     if (saved) {
-      const parsed = JSON.parse(saved) as Partial<LayoutSettings>;
+      const parsed = JSON.parse(saved) as Partial<LayoutPersistence>;
+      if (parsed.version !== LAYOUT_PERSISTENCE_VERSION) {
+        return getDefaultLayoutPersistence();
+      }
+      // md/sm 时若未持久化过 sidebarCollapsed，默认 true
+      const isMdOrBelow = typeof window !== 'undefined' && window.innerWidth < 768;
+      const defaultSidebarCollapsed = isMdOrBelow;
+      const drawerWidth = clamp(
+        safeNumber(parsed.drawerWidth, LAYOUT_CONFIG.DRAWER_WIDTH),
+        LAYOUT_CONFIG.DRAWER_MIN,
+        LAYOUT_CONFIG.DRAWER_MAX
+      );
+      const sidebarWidth = clamp(
+        safeNumber(parsed.sidebarWidth, LAYOUT_CONFIG.SIDEBAR_WIDTH),
+        LAYOUT_CONFIG.SIDEBAR_MIN,
+        LAYOUT_CONFIG.SIDEBAR_MAX
+      );
+      const logHeightRatio = clamp(
+        safeNumber(parsed.logHeightRatio, LAYOUT_CONFIG.LOG_HEIGHT_RATIO),
+        LAYOUT_CONFIG.LOG_HEIGHT_RATIO_MIN,
+        LAYOUT_CONFIG.LOG_HEIGHT_RATIO_MAX
+      );
+      const sidebarMode = VALID_SIDEBAR_MODES.includes(parsed.sidebarMode as SidebarMode)
+        ? (parsed.sidebarMode as SidebarMode)
+        : (parsed.sidebarCollapsed ?? defaultSidebarCollapsed ? 'collapsed' : 'expanded');
+      const mode = VALID_LAYOUT_MODES.includes(parsed.mode as LayoutMode)
+        ? (parsed.mode as LayoutMode)
+        : 'normal';
+      const leftWidth = clamp(
+        safeNumber(parsed.leftWidth, LAYOUT_CONFIG.DRAWER_WIDTH),
+        LAYOUT_CONFIG.MIN_LEFT_WIDTH,
+        LAYOUT_CONFIG.MAX_LEFT_WIDTH
+      );
+      const expandedCapsules = (() => {
+        if (!Array.isArray(parsed.expandedCapsules)) return undefined;
+        const arr = parsed.expandedCapsules.filter((x): x is string => typeof x === 'string');
+        if (arr.includes('__none__')) return ['__none__'];
+        const filtered = arr.filter(x => x !== '__none__');
+        return filtered.length ? filtered : undefined;
+      })();
       return {
-        mode: parsed.mode || 'normal',
-        leftWidth: parsed.leftWidth || LAYOUT_CONFIG.DEFAULT_LEFT_WIDTH,
+        version: LAYOUT_PERSISTENCE_VERSION,
+        drawerWidth,
+        sidebarWidth,
+        drawerOpen: parsed.drawerOpen ?? true,
+        sidebarCollapsed: parsed.sidebarCollapsed ?? defaultSidebarCollapsed,
+        sidebarMode,
+        logExpanded: parsed.logExpanded ?? false,
+        logHeightRatio,
+        expandedCapsules,
+        mode,
+        leftWidth,
       };
     }
   } catch (e) {
     console.warn('[Store] Failed to load layout settings:', e);
   }
-  return { mode: 'normal', leftWidth: LAYOUT_CONFIG.DEFAULT_LEFT_WIDTH };
+  return getDefaultLayoutPersistence();
 }
 
-// Save layout settings to localStorage
-function saveLayoutSettings(settings: LayoutSettings): void {
+function getDefaultLayoutPersistence(): LayoutPersistence {
+  // md/sm 时 sidebarCollapsed 默认 true
+  const isMdOrBelow = typeof window !== 'undefined' && window.innerWidth < 768;
+  return {
+    version: LAYOUT_PERSISTENCE_VERSION,
+    drawerWidth: LAYOUT_CONFIG.DRAWER_WIDTH,
+    sidebarWidth: LAYOUT_CONFIG.SIDEBAR_WIDTH,
+    drawerOpen: true,
+    sidebarCollapsed: isMdOrBelow,
+    sidebarMode: isMdOrBelow ? 'collapsed' : 'expanded',
+    logExpanded: false,
+    logHeightRatio: LAYOUT_CONFIG.LOG_HEIGHT_RATIO,
+    expandedCapsules: undefined,
+    mode: 'normal',
+    leftWidth: LAYOUT_CONFIG.DRAWER_WIDTH,
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+let saveLayoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function writeLayoutToStorage(settings: LayoutPersistence): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.LAYOUT, JSON.stringify(settings));
+    localStorage.setItem(STORAGE_KEYS.LAYOUT_V2, JSON.stringify(settings));
   } catch (e) {
     console.warn('[Store] Failed to save layout settings:', e);
   }
+}
+
+// Save layout settings to localStorage (debounced 300ms)
+function saveLayoutSettings(settings: LayoutPersistence): void {
+  if (saveLayoutDebounceTimer) {
+    clearTimeout(saveLayoutDebounceTimer);
+  }
+  saveLayoutDebounceTimer = setTimeout(() => {
+    saveLayoutDebounceTimer = null;
+    writeLayoutToStorage(settings);
+  }, 300);
+}
+
+
+function persistLayout(state: {
+  layoutMode: LayoutMode;
+  leftPanelWidth: number;
+  drawerWidth: number;
+  sidebarWidth: number;
+  drawerOpen: boolean;
+  sidebarCollapsed: boolean;
+  sidebarMode: SidebarMode;
+  logExpanded: boolean;
+  logHeightRatio: number;
+  expandedCapsules: Set<string>;
+}): void {
+  const settings: LayoutPersistence = {
+    version: LAYOUT_PERSISTENCE_VERSION,
+    drawerWidth: state.drawerWidth,
+    sidebarWidth: state.sidebarWidth,
+    drawerOpen: state.drawerOpen,
+    sidebarCollapsed: state.sidebarCollapsed,
+    sidebarMode: state.sidebarMode,
+    logExpanded: state.logExpanded,
+    logHeightRatio: state.logHeightRatio,
+    expandedCapsules: (() => {
+      if (state.expandedCapsules.has('__none__')) return ['__none__'];
+      const arr = Array.from(state.expandedCapsules).filter(id => id !== '__none__');
+      return arr.length ? arr : undefined;
+    })(),
+    mode: state.layoutMode,
+    leftWidth: state.leftPanelWidth,
+  };
+  saveLayoutSettings(settings);
 }
 
 interface AppStore extends AppState {
@@ -171,6 +297,22 @@ interface AppStore extends AppState {
   // Layout actions
   setLayoutMode: (mode: LayoutMode) => void;
   setLeftPanelWidth: (width: number) => void;
+  drawerOpen: boolean;
+  drawerWidth: number;
+  setDrawerOpen: (open: boolean) => void;
+  sidebarWidth: number;
+  setSidebarWidth: (width: number) => void;
+  sidebarCollapsed: boolean;
+  sidebarMode: SidebarMode;
+  setSidebarMode: (mode: SidebarMode) => void;
+  logExpanded: boolean;
+  logHeightRatio: number;
+  setLogExpanded: (expanded: boolean) => void;
+  setLogHeightRatio: (ratio: number) => void;
+  expandedCapsules: Set<string>;
+  setExpandedCapsules: (capsules: Set<string>) => void;
+  setDrawerWidth: (width: number) => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
   // Model actions
   setAvailableModels: (models: CandidateModel[]) => void;
   setSelectedModel: (model: string) => Promise<void>;
@@ -211,8 +353,8 @@ interface AppStore extends AppState {
 }
 
 
-// Load initial layout
-const initialLayout = loadLayoutSettings();
+// Load initial layout (v2)
+const initialLayoutV2 = loadLayoutSettings();
 
 function loadSelectedModel(): string {
   try {
@@ -237,9 +379,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
   androidConnected: false,
   settingsOpen: false,
   user: null,
-  // Layout state (loaded from localStorage)
-  layoutMode: initialLayout.mode,
-  leftPanelWidth: initialLayout.leftWidth,
+  // Layout state (loaded from localStorage v2)
+  layoutMode: initialLayoutV2.mode ?? 'normal',
+  leftPanelWidth: initialLayoutV2.leftWidth ?? initialLayoutV2.drawerWidth,
+  drawerWidth: initialLayoutV2.drawerWidth,
+  sidebarWidth: initialLayoutV2.sidebarWidth,
+  drawerOpen: initialLayoutV2.drawerOpen,
+  sidebarCollapsed: initialLayoutV2.sidebarCollapsed,
+  sidebarMode: initialLayoutV2.sidebarMode ?? 'expanded',
+  logExpanded: initialLayoutV2.logExpanded,
+  logHeightRatio: initialLayoutV2.logHeightRatio,
+  expandedCapsules: new Set(initialLayoutV2.expandedCapsules ?? []),
   // Model selection state
   availableModels: [],
   apiKeys: [],
@@ -572,14 +722,56 @@ export const useAppStore = create<AppStore>((set, get) => ({
   // Layout actions
   setLayoutMode: (mode: LayoutMode) => {
     set({ layoutMode: mode });
-    const { leftPanelWidth } = get();
-    saveLayoutSettings({ mode, leftWidth: leftPanelWidth });
+    persistLayout(get());
   },
 
   setLeftPanelWidth: (width: number) => {
-    set({ leftPanelWidth: width });
-    const { layoutMode } = get();
-    saveLayoutSettings({ mode: layoutMode, leftWidth: width });
+    const clamped = clamp(width, LAYOUT_CONFIG.MIN_LEFT_WIDTH, LAYOUT_CONFIG.MAX_LEFT_WIDTH);
+    set({ leftPanelWidth: clamped });
+    persistLayout(get());
+  },
+
+  setDrawerWidth: (width: number) => {
+    const clamped = clamp(width, LAYOUT_CONFIG.DRAWER_MIN, LAYOUT_CONFIG.DRAWER_MAX);
+    set({ drawerWidth: clamped });
+    persistLayout(get());
+  },
+
+  setSidebarWidth: (width: number) => {
+    const clamped = clamp(width, LAYOUT_CONFIG.SIDEBAR_MIN, LAYOUT_CONFIG.SIDEBAR_MAX);
+    set({ sidebarWidth: clamped });
+    persistLayout(get());
+  },
+
+  setDrawerOpen: (open: boolean) => {
+    set({ drawerOpen: open });
+    persistLayout(get());
+  },
+
+  setSidebarCollapsed: (collapsed: boolean) => {
+    set({ sidebarCollapsed: collapsed, sidebarMode: collapsed ? 'collapsed' : 'expanded' });
+    persistLayout(get());
+  },
+
+  setSidebarMode: (mode: SidebarMode) => {
+    set({ sidebarMode: mode, sidebarCollapsed: mode === 'collapsed' });
+    persistLayout(get());
+  },
+
+  setLogExpanded: (expanded: boolean) => {
+    set({ logExpanded: expanded });
+    persistLayout(get());
+  },
+
+  setLogHeightRatio: (ratio: number) => {
+    const clamped = clamp(ratio, LAYOUT_CONFIG.LOG_HEIGHT_RATIO_MIN, LAYOUT_CONFIG.LOG_HEIGHT_RATIO_MAX);
+    set({ logHeightRatio: clamped });
+    persistLayout(get());
+  },
+
+  setExpandedCapsules: (capsules: Set<string>) => {
+    set({ expandedCapsules: capsules });
+    persistLayout(get());
   },
 
   // Model & Mode actions
@@ -1379,3 +1571,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 }));
+
+/** Flush pending debounced layout save and persist immediately (e.g. on beforeunload) */
+export function flushLayoutSave(): void {
+  if (saveLayoutDebounceTimer) {
+    clearTimeout(saveLayoutDebounceTimer);
+    saveLayoutDebounceTimer = null;
+  }
+  const state = useAppStore.getState();
+  const settings: LayoutPersistence = {
+    version: LAYOUT_PERSISTENCE_VERSION,
+    drawerWidth: state.drawerWidth,
+    sidebarWidth: state.sidebarWidth,
+    drawerOpen: state.drawerOpen,
+    sidebarCollapsed: state.sidebarCollapsed,
+    sidebarMode: state.sidebarMode,
+    logExpanded: state.logExpanded,
+    logHeightRatio: state.logHeightRatio,
+    expandedCapsules: (() => {
+      if (state.expandedCapsules.has('__none__')) return ['__none__'];
+      const arr = Array.from(state.expandedCapsules).filter(id => id !== '__none__');
+      return arr.length ? arr : undefined;
+    })(),
+    mode: state.layoutMode,
+    leftWidth: state.leftPanelWidth,
+  };
+  writeLayoutToStorage(settings);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', flushLayoutSave);
+  window.addEventListener('pagehide', flushLayoutSave);
+}
