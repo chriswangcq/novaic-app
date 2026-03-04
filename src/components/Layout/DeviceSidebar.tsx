@@ -473,9 +473,11 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
   const displayWidth = effectiveMode === 'expanded' ? sidebarWidth : effectiveMode === 'collapsed' ? LAYOUT_CONFIG.SIDEBAR_COLLAPSED_WIDTH : 0;
 
   // overlay 模式（sm/md）：固定浮层从右侧滑入
+  // 始终渲染 0 宽度占位，保持 flex 布局结构一致，避免 overlay -> inline 切换时右侧栏消失
   if (isOverlay) {
     return (
       <>
+        <div className="shrink-0" style={{ width: 0 }} aria-hidden="true" />
         {effectiveMode === 'expanded' && (
           <div
             className="fixed inset-0 top-10 z-30 bg-black/50"

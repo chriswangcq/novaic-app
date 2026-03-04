@@ -1296,7 +1296,7 @@ export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProp
             </div>
           ) : null}
           
-          {/* LLM Input Modal - 使用 Portal 渲染到 body 最上层 */}
+          {/* LLM Input Modal - 使用 Portal 渲染到 body 最上层，展示完整 LLM 调用入参 */}
           {isThink && llmInput?.messages && (
             <LLMInputModal
               isOpen={showLLMModal}

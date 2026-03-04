@@ -249,6 +249,42 @@ pub async fn stop_emulator(
     }))
 }
 
+/// 停止所有已管理的模拟器（App 退出时调用，参考 /api/vms/shutdown-all）
+///
+/// POST /api/android/emulator/shutdown-all
+///
+/// # Response
+/// ```json
+/// {
+///   "results": {
+///     "emulator-5554": "ok",
+///     "emulator-5556": "error: ..."
+///   }
+/// }
+/// ```
+#[derive(Debug, Serialize)]
+pub struct ShutdownAllEmulatorsResponse {
+    pub results: std::collections::HashMap<String, String>,
+}
+
+pub async fn shutdown_all_emulators(
+    State(manager): State<AndroidManagerState>,
+) -> Json<ShutdownAllEmulatorsResponse> {
+    let manager = manager.read().await;
+    let results_vec = manager.stop_all_emulators().await;
+    let results: std::collections::HashMap<String, String> = results_vec
+        .into_iter()
+        .map(|(serial, r)| {
+            let status = match r {
+                Ok(()) => "ok".to_string(),
+                Err(e) => format!("error: {}", e),
+            };
+            (serial, status)
+        })
+        .collect();
+    Json(ShutdownAllEmulatorsResponse { results })
+}
+
 /// 获取设备状态
 /// 
 /// GET /api/android/emulator/status?serial=emulator-5554

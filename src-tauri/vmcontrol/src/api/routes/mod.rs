@@ -53,6 +53,7 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>) -> Router {
         // 模拟器控制
         .route("/emulator/start", post(android::start_emulator))
         .route("/emulator/stop", post(android::stop_emulator))
+        .route("/emulator/shutdown-all", post(android::shutdown_all_emulators))
         .route("/emulator/status", get(android::get_emulator_status))
         // AVD 管理（不依赖 Java）
         .route("/system-image/check", get(android::check_system_image))

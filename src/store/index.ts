@@ -1161,12 +1161,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
           case 'SYSTEM_MESSAGE':
           case 'SPAWN_SUBAGENT':
           case 'SUBAGENT_COMPLETED':
+          case 'SUBAGENT_SEND':
           case 'SYSTEM_WAKE':
             // Internal messages - do not display in chat UI
             // These are system/internal messages that should be hidden:
             // - SYSTEM_MESSAGE: 系统消息（如 setup bootstrap）
             // - SPAWN_SUBAGENT: 子代理创建任务
             // - SUBAGENT_COMPLETED: 子任务完成通知
+            // - SUBAGENT_SEND: 子代理发送（如 NO_TOOL_WARNING 等系统提示）
             // - SYSTEM_WAKE: 系统唤醒消息
             break;
             
@@ -1473,9 +1475,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
       
       if (history.success && history.messages.length > 0) {
-        // Filter out SYSTEM_WAKE messages (internal scheduled wake triggers)
+        // Filter out internal messages (same list as chat.py get_messages)
+        const HIDDEN_CHAT_TYPES = new Set(['SYSTEM_WAKE', 'SUBAGENT_SEND', 'SUBAGENT_COMPLETED', 'SPAWN_SUBAGENT', 'SYSTEM_MESSAGE']);
         const filteredMessages = history.messages.filter(
-          (msg) => msg.type !== 'SYSTEM_WAKE'
+          (msg) => !HIDDEN_CHAT_TYPES.has(msg.type)
         );
         // Convert API messages to local Message format
         const olderMessages: Message[] = filteredMessages.map((msg) => {
@@ -1500,7 +1503,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           isLoadingMore: false,
         }));
         
-        console.log(`[Store] Loaded ${olderMessages.length} older messages (filtered ${history.messages.length - filteredMessages.length} SYSTEM_WAKE), has_more: ${history.has_more}`);
+        console.log(`[Store] Loaded ${olderMessages.length} older messages (filtered ${history.messages.length - filteredMessages.length} internal), has_more: ${history.has_more}`);
       } else {
         set({ hasMoreMessages: false, isLoadingMore: false });
       }

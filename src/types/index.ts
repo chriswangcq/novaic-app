@@ -170,6 +170,7 @@ export type ChatMessageType =
   // Internal messages (should be hidden from chat UI)
   | 'SPAWN_SUBAGENT'      // 子代理创建任务
   | 'SUBAGENT_COMPLETED'  // 子任务完成通知
+  | 'SUBAGENT_SEND'       // 子代理发送（如 NO_TOOL_WARNING 等系统提示）
   | 'SYSTEM_WAKE';        // 系统唤醒消息
 
 export interface ChatSSEMessage {

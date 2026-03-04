@@ -2435,6 +2435,7 @@ fn main() {
                         });
                         
                         if let Some(base_url) = shutdown_result {
+                            // Step 1a: Linux VM shutdown (QMP system_powerdown)
                             println!("[App] Sending shutdown signal to all VMs...");
                             let shutdown_url = format!("{}/api/vms/shutdown-all", base_url);
                             if let Ok(client) = reqwest::blocking::Client::builder()
@@ -2451,6 +2452,26 @@ fn main() {
                                     }
                                     Err(e) => {
                                         println!("[App] VM shutdown-all failed: {}", e);
+                                    }
+                                }
+                            }
+                            // Step 1b: Android emulator shutdown (adb emu kill)
+                            println!("[App] Sending shutdown signal to all Android emulators...");
+                            let android_shutdown_url = format!("{}/api/android/emulator/shutdown-all", base_url);
+                            if let Ok(client) = reqwest::blocking::Client::builder()
+                                .timeout(std::time::Duration::from_secs(10))
+                                .build()
+                            {
+                                match client.post(&android_shutdown_url).send() {
+                                    Ok(resp) => {
+                                        if resp.status().is_success() {
+                                            println!("[App] Android emulator shutdown signals sent successfully");
+                                        } else {
+                                            println!("[App] Android emulator shutdown-all returned: {}", resp.status());
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("[App] Android emulator shutdown-all failed: {}", e);
                                     }
                                 }
                             }

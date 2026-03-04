@@ -516,6 +516,27 @@ impl AndroidManager {
         Ok(())
     }
 
+    /// 停止所有已管理的模拟器（App 退出时调用，参考 Linux VM shutdown-all）
+    pub async fn stop_all_emulators(&self) -> Vec<(String, Result<(), VmError>)> {
+        let managed = self.list_managed_devices().await;
+        if managed.is_empty() {
+            tracing::info!("No managed emulators to stop");
+            return vec![];
+        }
+        tracing::info!("Stopping {} managed emulator(s)...", managed.len());
+        let mut results = Vec::with_capacity(managed.len());
+        for device in managed {
+            let serial = device.serial.clone();
+            let result = self.stop_emulator(&serial).await;
+            if let Err(ref e) = result {
+                tracing::warn!("Failed to stop emulator {}: {}", serial, e);
+            }
+            results.push((serial, result));
+        }
+        tracing::info!("All emulator shutdown signals sent: {:?}", results.iter().map(|(s, r)| (s, r.is_ok())).collect::<Vec<_>>());
+        results
+    }
+
     /// 获取设备状态
     pub async fn get_status(&self, serial: &str) -> Result<AndroidDevice, VmError> {
         // 首先检查管理的设备
