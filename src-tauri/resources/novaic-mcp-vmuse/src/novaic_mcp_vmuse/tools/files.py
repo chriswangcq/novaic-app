@@ -99,54 +99,6 @@ class FileTools:
             return {"success": False, "error": str(e)}
     
     @staticmethod
-    async def list_files(path: str = ".") -> Dict[str, Any]:
-        """
-        List directory contents
-        
-        Args:
-            path: Directory path
-        """
-        try:
-            path = os.path.expanduser(path)
-            
-            if not os.path.exists(path):
-                return {"success": False, "error": f"Path not found: {path}"}
-            
-            if not os.path.isdir(path):
-                return {"success": False, "error": f"Not a directory: {path}"}
-            
-            entries = []
-            for name in os.listdir(path):
-                full_path = os.path.join(path, name)
-                try:
-                    stat_info = os.stat(full_path)
-                    entries.append({
-                        "name": name,
-                        "type": "directory" if stat.S_ISDIR(stat_info.st_mode) else "file",
-                        "size": stat_info.st_size,
-                        "modified": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
-                    })
-                except:
-                    entries.append({
-                        "name": name,
-                        "type": "unknown",
-                        "size": 0,
-                        "modified": None
-                    })
-            
-            # Sort: directories first, then by name
-            entries.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
-            
-            return {
-                "success": True,
-                "path": path,
-                "entries": entries
-            }
-            
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    @staticmethod
     async def file_info(path: str) -> Dict[str, Any]:
         """
         Get file/directory information

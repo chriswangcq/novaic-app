@@ -71,12 +71,11 @@ mcp = FastMCP(
 | shell_view | 查看命令输出 |
 | shell_write | 写入内容到终端 |
 
-### 文件操作 (4)
+### 文件操作 (3)
 | 工具 | 用途 |
 |------|------|
 | file_read | 读取文件 |
 | file_write | 写入文件 |
-| file_list | 列出目录内容 |
 | file_search | 搜索文件 |
 
 ### 环境感知 (2)
@@ -438,12 +437,6 @@ async def read_file(path: str) -> Dict[str, Any]:
 async def write_file(path: str, content: str) -> Dict[str, Any]:
     """Write file content"""
     return await FileTools.write_file(path, content)
-
-
-@mcp.tool(description="List directory contents (ls -la style)")
-async def list_files(path: str = ".") -> Dict[str, Any]:
-    """List directory"""
-    return await FileTools.list_files(path)
 
 
 @mcp.tool(description="Get file metadata: size, type, permissions, timestamps")

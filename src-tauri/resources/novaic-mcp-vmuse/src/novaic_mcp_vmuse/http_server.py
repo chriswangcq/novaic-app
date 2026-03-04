@@ -65,7 +65,6 @@ class VMUSEServer:
         # File tools
         self.app.router.add_post('/api/file/read', self.file_read)
         self.app.router.add_post('/api/file/write', self.file_write)
-        self.app.router.add_post('/api/file/list', self.file_list)
         self.app.router.add_post('/api/file/info', self.file_info)
         
         # Window tools
@@ -367,16 +366,6 @@ class VMUSEServer:
             return web.json_response(result)
         except Exception as e:
             logger.error(f"Write file error: {e}")
-            return web.json_response({"success": False, "error": str(e)}, status=500)
-    
-    async def file_list(self, request):
-        """列出目录"""
-        try:
-            data = await request.json() if request.body_exists else {}
-            result = await FileTools.list_files(data.get('path', '.'))
-            return web.json_response(result)
-        except Exception as e:
-            logger.error(f"List files error: {e}")
             return web.json_response({"success": False, "error": str(e)}, status=500)
     
     async def file_info(self, request):

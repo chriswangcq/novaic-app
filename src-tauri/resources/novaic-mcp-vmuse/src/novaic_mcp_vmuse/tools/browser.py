@@ -370,7 +370,12 @@ class BrowserTools:
                 if pages:
                     self._page = pages[-1]
                 else:
-                    self._page = await self._context.new_page()
+                    # 方案1 + context 重建：关闭最后一个标签后，new_page() 在 Win/Linux 会失败
+                    # (Chromium: 无窗口时 Target.createTarget 报错)。不调用 new_page，
+                    # 主动关闭 context，下次 _ensure_browser 会重建。
+                    self._page = None
+                    await self._context.close()
+                    self._context = None
             
             return {"success": True}
             

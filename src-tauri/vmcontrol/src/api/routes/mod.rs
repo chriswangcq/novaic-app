@@ -88,7 +88,6 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>) -> Router {
         .route("/:serial/file/pull", post(mobile::file_pull))
         .route("/:serial/file/pull-content", post(mobile::file_pull_content)
             .layer(DefaultBodyLimit::max(LARGE_BODY_LIMIT)))  // 500MB for file pull (response can be large)
-        .route("/:serial/file/list", get(mobile::file_list))
         .route("/:serial/file/delete", post(mobile::file_delete))
         .route("/:serial/file/mkdir", post(mobile::file_mkdir))
         .route("/:serial/file/read", post(mobile::file_read)

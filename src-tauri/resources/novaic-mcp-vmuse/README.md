@@ -107,7 +107,6 @@ mouse(action='aim', aim_id='aim_xxx', delta_x=-50, delta_y=20, zoom=4)
 |------|-------------|------------|
 | `read_file` | Read file contents | `path`, `encoding?` |
 | `write_file` | Write to file | `path`, `content` |
-| `list_files` | List directory | `path`, `recursive?` |
 | `file_info` | Get file metadata | `path` |
 | `delete_file` | Delete file | `path` |
 | `copy_file` | Copy file | `src`, `dest` |
