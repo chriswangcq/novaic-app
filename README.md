@@ -184,7 +184,6 @@ novaic-app/
 │   │   ├── http_client.rs    # HTTP utilities
 │   │   ├── commands/         # Tauri commands
 │   │   │   ├── mod.rs
-│   │   │   ├── agent_commands.rs
 │   │   │   ├── vm_commands.rs
 │   │   │   ├── file_commands.rs
 │   │   │   └── config_commands.rs

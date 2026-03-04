@@ -41,10 +41,10 @@ export const API_CONFIG = {
   MCP_URL: import.meta.env.VITE_MCP_URL || 'http://127.0.0.1:20000/mcp',
   
   /** HTTP 请求超时（毫秒） */
-  HTTP_TIMEOUT: 30000,
+  HTTP_TIMEOUT: 60000,
   
   /** HTTP AbortSignal 超时（毫秒） */
-  ABORT_TIMEOUT: 3000,
+  ABORT_TIMEOUT: 60000,
   
   /** 请求重试次数 */
   MAX_RETRIES: 3,

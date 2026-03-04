@@ -57,6 +57,27 @@ fn local_url(port: u16) -> String {
     format!("http://{LOOPBACK_HOST}:{port}")
 }
 
+async fn wait_service_ready(
+    client: &reqwest::Client,
+    url: &str,
+    name: &str,
+    timeout_secs: u64,
+    interval_ms: u64,
+) -> bool {
+    let max_attempts = (timeout_secs * 1000) / interval_ms.max(1);
+    for i in 0..max_attempts {
+        if let Ok(resp) = client.get(url).send().await {
+            if resp.status().is_success() {
+                return true;
+            }
+        }
+        if i < max_attempts - 1 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
+        }
+    }
+    false
+}
+
 fn append_startup_diagnostic(data_dir: &PathBuf, stage: &str, status: &str, detail: impl Into<String>) {
     let log_dir = data_dir.join("logs");
     if fs::create_dir_all(&log_dir).is_err() {
@@ -1773,10 +1794,12 @@ fn main() {
             let app_handle_for_vmcontrol = app.handle().clone();
             
             tauri::async_runtime::spawn(async move {
+                let startup_begin = std::time::Instant::now();
                 // Kill any zombie backend processes before starting
                 kill_zombie_processes();
                 append_startup_diagnostic(&data_dir_for_gateway, "cleanup", "ok", "zombie cleanup completed");
-                
+                append_startup_diagnostic(&data_dir_for_gateway, "cleanup-duration", "ok", format!("{:?}", startup_begin.elapsed()));
+
                 let required_ports = [
                     (PORT_RUNTIME_ORCHESTRATOR, "runtime-orchestrator"),
                     (PORT_TOOL_RESULT_SERVICE, "tool-result-service"),
@@ -1786,65 +1809,33 @@ fn main() {
                     (PORT_TOOLS_SERVER, "tools-server"),
                     (PORT_GATEWAY, "gateway"),
                 ];
-                if let Err(e) = ensure_ports_available(&data_dir_for_gateway, &required_ports) {
-                    println!("[Startup] Port preflight failed: {}", e);
+                if ensure_ports_available(&data_dir_for_gateway, &required_ports).is_err() {
                     return;
                 }
                 
-                // 1. Backend 组件: Runtime Orchestrator（必须先启动，Gateway 依赖它）
+                // Phase 1: 并行启动所有服务（无启动顺序依赖）
+                let phase1_start = std::time::Instant::now();
                 {
                     let mut ro = runtime_orchestrator_for_start.lock().await;
                     match ro.start(&backend_path, is_binary, &data_dir_for_gateway, resource_dir.as_ref()) {
                         Ok(_) => {
-                            println!("[Runtime Orchestrator] Auto-started successfully");
                             append_startup_diagnostic(&data_dir_for_gateway, "runtime-orchestrator", "started", "runtime orchestrator started");
                         }
                         Err(e) => {
-                            println!("[Runtime Orchestrator] Failed to auto-start: {}", e);
                             append_startup_diagnostic(&data_dir_for_gateway, "runtime-orchestrator", "error", e);
                             return;
                         }
                     }
                 }
                 
-                // 2. 严格等待 Runtime Orchestrator /api/health 就绪（超时则中止，不启动 Gateway/Workers）
-                const RO_HEALTH_TIMEOUT_SECS: u64 = 30;
-                println!("[Services] Waiting for Runtime Orchestrator to be ready (strict)...");
-                let ro_health_url = format!("{}/api/health", local_url(PORT_RUNTIME_ORCHESTRATOR));
-                let client = reqwest::Client::new();
-                let mut ro_ready = false;
-                for i in 0..RO_HEALTH_TIMEOUT_SECS {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    match client.get(&ro_health_url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            println!("[Services] Runtime Orchestrator is ready after {}s", i + 1);
-                            ro_ready = true;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                if !ro_ready {
-                    println!("[Services] Runtime Orchestrator not ready after {}s - aborting startup (Gateway/Workers not started)", RO_HEALTH_TIMEOUT_SECS);
-                    append_startup_diagnostic(
-                        &data_dir_for_gateway,
-                        "runtime-orchestrator-health",
-                        "timeout",
-                        format!("not ready after {}s", RO_HEALTH_TIMEOUT_SECS),
-                    );
-                    return;
-                }
-                
-                // 3. Backend 组件: Gateway
+                // 2. Gateway
                 {
                     let mut gw = gateway_for_start.lock().await;
                     match gw.start(&backend_path, is_binary, &data_dir_for_gateway, resource_dir.as_ref()) {
                         Ok(_) => {
-                            println!("[Gateway] Auto-started successfully");
                             append_startup_diagnostic(&data_dir_for_gateway, "gateway", "started", "gateway started");
                         }
                         Err(e) => {
-                            println!("[Gateway] Failed to auto-start: {}", e);
                             append_startup_diagnostic(&data_dir_for_gateway, "gateway", "error", e);
                             return;
                         }
@@ -1856,11 +1847,9 @@ fn main() {
                     let mut vc = vmcontrol_for_start.lock().await;
                     match vc.start(&app_handle_for_vmcontrol) {
                         Ok(_) => {
-                            println!("[VmControl] Auto-started successfully");
                             append_startup_diagnostic(&data_dir_for_gateway, "vmcontrol", "started", "vmcontrol started");
                         }
                         Err(e) => {
-                            println!("[VmControl] Failed to auto-start: {}", e);
                             append_startup_diagnostic(&data_dir_for_gateway, "vmcontrol", "error", e);
                             // VmControl 失败不影响其他服务继续启动
                         }
@@ -1872,11 +1861,9 @@ fn main() {
                     let mut qs = queue_service_for_start.lock().await;
                     match qs.start(&backend_path, is_binary, &data_dir_for_gateway, resource_dir.as_ref()) {
                         Ok(_) => {
-                            println!("[Queue Service] Auto-started successfully");
                             append_startup_diagnostic(&data_dir_for_gateway, "queue-service", "started", "queue service started");
                         }
                         Err(e) => {
-                            println!("[Queue Service] Failed to auto-start: {}", e);
                             append_startup_diagnostic(&data_dir_for_gateway, "queue-service", "error", e);
                         }
                     }
@@ -1887,11 +1874,9 @@ fn main() {
                     let mut fs = file_service_for_start.lock().await;
                     match fs.start(&backend_path, is_binary, &data_dir_for_gateway, resource_dir.as_ref()) {
                         Ok(_) => {
-                            println!("[File Service] Auto-started successfully");
                             append_startup_diagnostic(&data_dir_for_gateway, "file-service", "started", "file service started");
                         }
                         Err(e) => {
-                            println!("[File Service] Failed to auto-start: {}", e);
                             append_startup_diagnostic(&data_dir_for_gateway, "file-service", "error", e);
                         }
                     }
@@ -1902,145 +1887,75 @@ fn main() {
                     let mut trs = tool_result_service_for_start.lock().await;
                     match trs.start(&backend_path, is_binary, &data_dir_for_gateway, resource_dir.as_ref()) {
                         Ok(_) => {
-                            println!("[Tool Result Service] Auto-started successfully");
                             append_startup_diagnostic(&data_dir_for_gateway, "tool-result-service", "started", "tool result service started");
                         }
                         Err(e) => {
-                            println!("[Tool Result Service] Failed to auto-start: {}", e);
                             append_startup_diagnostic(&data_dir_for_gateway, "tool-result-service", "error", e);
                         }
                     }
                 }
 
-                // 7.5 严格等待 TRS 就绪（Tools Server 启动前强依赖）
-                const TRS_HEALTH_TIMEOUT_SECS: u64 = 30;
-                println!("[Services] Waiting for Tool Result Service to be ready (strict)...");
-                let trs_health_url = format!("{}/api/health", local_url(PORT_TOOL_RESULT_SERVICE));
-                let trs_client = reqwest::Client::new();
-                let mut trs_ready = false;
-                for i in 0..TRS_HEALTH_TIMEOUT_SECS {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    match trs_client.get(&trs_health_url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            println!("[Services] Tool Result Service is ready after {}s", i + 1);
-                            trs_ready = true;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                if !trs_ready {
-                    println!("[Services] Tool Result Service not ready after {}s - aborting startup (Tools/Workers not started)", TRS_HEALTH_TIMEOUT_SECS);
-                    append_startup_diagnostic(
-                        &data_dir_for_gateway,
-                        "tool-result-service-health",
-                        "timeout",
-                        format!("not ready after {}s", TRS_HEALTH_TIMEOUT_SECS),
-                    );
-                    return;
-                }
-
-                // 8. Backend 组件: Tools Server（依赖 TRS，必须在 TRS 后启动）
+                // 8. Tools Server（restore_from_gateway 有重试，可与其他服务并行启动）
                 {
                     let mut ts = tools_server_for_start.lock().await;
                     match ts.start(&backend_path, is_binary, &data_dir_for_gateway, resource_dir.as_ref()) {
                         Ok(_) => {
-                            println!("[Tools Server] Auto-started successfully");
                             append_startup_diagnostic(&data_dir_for_gateway, "tools-server", "started", "tools server started");
                         }
                         Err(e) => {
-                            println!("[Tools Server] Failed to auto-start: {}", e);
                             append_startup_diagnostic(&data_dir_for_gateway, "tools-server", "error", e);
                         }
                     }
                 }
-                
-                // 9. 严格等待 Gateway 就绪（health check）（超时则中止，不启动 Workers）
-                // Gateway startup can include migrations and warm-up work in production bundles.
-                // Keep strict readiness, but allow a larger window to avoid false-negative aborts.
-                const GW_HEALTH_TIMEOUT_SECS: u64 = 90;
-                println!("[Services] Waiting for Gateway to be ready (strict)...");
+                append_startup_diagnostic(&data_dir_for_gateway, "phase1-duration", "ok", format!("{:?}", phase1_start.elapsed()));
+
+                // Phase 2: 并发健康检查（先请求再 sleep，间隔 250ms）
+                const HEALTH_CHECK_INTERVAL_MS: u64 = 250;
                 let client = reqwest::Client::new();
-                let health_url = format!("{}/api/health", gateway_url);
-                let mut gw_ready = false;
-                for i in 0..GW_HEALTH_TIMEOUT_SECS {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    match client.get(&health_url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            println!("[Services] Gateway is ready after {}s", i + 1);
-                            gw_ready = true;
-                            break;
-                        }
-                        _ => {}
-                    }
+
+                let ro_health_url = format!("{}/api/health", local_url(PORT_RUNTIME_ORCHESTRATOR));
+                let gw_health_url = format!("{}/api/health", gateway_url);
+                let trs_health_url = format!("{}/api/health", local_url(PORT_TOOL_RESULT_SERVICE));
+                let ts_health_url = format!("{}/api/health", local_url(PORT_TOOLS_SERVER));
+                let qs_health_url = format!("{}/health", local_url(PORT_QUEUE_SERVICE));
+
+                // Brief delay to let services bind to ports before first health check
+                let phase2_start = std::time::Instant::now();
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let (ro_ready, gw_ready, trs_ready, ts_ready, qs_ready) = tokio::join!(
+                    wait_service_ready(&client, &ro_health_url, "Runtime Orchestrator", 60, HEALTH_CHECK_INTERVAL_MS),
+                    wait_service_ready(&client, &gw_health_url, "Gateway", 60, HEALTH_CHECK_INTERVAL_MS),
+                    wait_service_ready(&client, &trs_health_url, "Tool Result Service", 60, HEALTH_CHECK_INTERVAL_MS),
+                    wait_service_ready(&client, &ts_health_url, "Tools Server", 60, HEALTH_CHECK_INTERVAL_MS),
+                    wait_service_ready(&client, &qs_health_url, "Queue Service", 60, HEALTH_CHECK_INTERVAL_MS),
+                );
+
+                if !ro_ready {
+                    append_startup_diagnostic(&data_dir_for_gateway, "runtime-orchestrator-health", "timeout", "not ready");
+                    return;
                 }
                 if !gw_ready {
-                    println!("[Services] Gateway not ready after {}s - aborting startup (Workers not started)", GW_HEALTH_TIMEOUT_SECS);
-                    append_startup_diagnostic(
-                        &data_dir_for_gateway,
-                        "gateway-health",
-                        "timeout",
-                        format!("not ready after {}s", GW_HEALTH_TIMEOUT_SECS),
-                    );
+                    append_startup_diagnostic(&data_dir_for_gateway, "gateway-health", "timeout", "not ready");
                     return;
                 }
-                
-                // 10. 严格等待 Tools Server 就绪（health check）（超时则中止，不启动 Workers）
-                // Tools Server 启动时需 restore_from_gateway，可能超过 15s，延长至 45s
-                const TS_HEALTH_TIMEOUT_SECS: u64 = 45;
-                println!("[Services] Waiting for Tools Server to be ready (strict)...");
-                let ts_health_url = format!("{}/api/health", local_url(PORT_TOOLS_SERVER));
-                let mut ts_ready = false;
-                for i in 0..TS_HEALTH_TIMEOUT_SECS {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    match client.get(&ts_health_url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            println!("[Services] Tools Server is ready after {}s", i + 1);
-                            ts_ready = true;
-                            break;
-                        }
-                        _ => {}
-                    }
+                if !trs_ready {
+                    append_startup_diagnostic(&data_dir_for_gateway, "tool-result-service-health", "timeout", "not ready");
+                    return;
                 }
                 if !ts_ready {
-                    println!("[Services] Tools Server not ready after {}s - aborting startup (Workers not started)", TS_HEALTH_TIMEOUT_SECS);
-                    append_startup_diagnostic(
-                        &data_dir_for_gateway,
-                        "tools-server-health",
-                        "timeout",
-                        format!("not ready after {}s", TS_HEALTH_TIMEOUT_SECS),
-                    );
+                    append_startup_diagnostic(&data_dir_for_gateway, "tools-server-health", "timeout", "not ready");
                     return;
-                }
-                
-                // 11. 严格等待 Queue Service 就绪（health check）（超时则中止，不启动 Workers）
-                const QS_HEALTH_TIMEOUT_SECS: u64 = 15;
-                println!("[Services] Waiting for Queue Service to be ready (strict)...");
-                let qs_health_url = format!("{}/health", local_url(PORT_QUEUE_SERVICE));
-                let mut qs_ready = false;
-                for i in 0..QS_HEALTH_TIMEOUT_SECS {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    match client.get(&qs_health_url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            println!("[Services] Queue Service is ready after {}s", i + 1);
-                            qs_ready = true;
-                            break;
-                        }
-                        _ => {}
-                    }
                 }
                 if !qs_ready {
-                    println!("[Services] Queue Service not ready after {}s - aborting startup (Workers not started)", QS_HEALTH_TIMEOUT_SECS);
-                    append_startup_diagnostic(
-                        &data_dir_for_gateway,
-                        "queue-service-health",
-                        "timeout",
-                        format!("not ready after {}s", QS_HEALTH_TIMEOUT_SECS),
-                    );
+                    append_startup_diagnostic(&data_dir_for_gateway, "queue-service-health", "timeout", "not ready");
                     return;
                 }
-                
-                // 12. 直接启动 Worker 服务（和 Gateway 一样简单）
+
+                append_startup_diagnostic(&data_dir_for_gateway, "phase2-health-duration", "ok", format!("{:?}", phase2_start.elapsed()));
+                append_startup_diagnostic(&data_dir_for_gateway, "all-services-ready", "ok", "parallel startup complete");
+                append_startup_diagnostic(&data_dir_for_gateway, "total-before-workers", "ok", format!("{:?}", startup_begin.elapsed()));
+
+                // Phase 3: 启动 Worker 服务（和 Gateway 一样简单）
                 // v4.1: Saga/Task Architecture - multiple workers for parallelism
                 // v4.2: Worker 池隔离 - Control (saga.parallel 等会阻塞) / Execution (tool.execute 等)
                 let num_control = AppConfig::NUM_TASK_CONTROL_WORKERS;

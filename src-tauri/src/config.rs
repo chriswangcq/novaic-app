@@ -61,10 +61,10 @@ impl AppConfig {
     // ===== HTTP Configuration =====
     
     /// Default HTTP request timeout
-    pub const HTTP_TIMEOUT_SECS: u64 = 30;
+    pub const HTTP_TIMEOUT_SECS: u64 = 60;
     
     /// HTTP connection timeout
-    pub const HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
+    pub const HTTP_CONNECT_TIMEOUT_SECS: u64 = 60;
     
     /// Gateway graceful stop timeout
     pub const GATEWAY_STOP_TIMEOUT_SECS: u64 = 10;
