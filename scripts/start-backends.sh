@@ -172,7 +172,6 @@ QS_URL="http://127.0.0.1:$PORT_QUEUE_SERVICE"
 TS_URL="http://127.0.0.1:$PORT_TOOLS_SERVER"
 FS_URL="http://127.0.0.1:$PORT_FILE_SERVICE"
 TRS_URL="http://127.0.0.1:$PORT_TOOL_RESULT_SERVICE"
-VC_URL="http://127.0.0.1:19996"
 
 # 1. Runtime Orchestrator
 RO_DIR="$ROOT/novaic-runtime-orchestrator"
@@ -201,7 +200,6 @@ if [ -d "$GW_DIR" ]; then
         --runtime-orchestrator-url "$RO_URL" \
         --queue-service-url "$QS_URL" \
         --tools-server-url "$TS_URL" \
-        --vmcontrol-url "$VC_URL" \
         --file-service-url "$FS_URL" \
         --tool-result-service-url "$TRS_URL" \
         >> "$LOG_DIR/gateway.log" 2>&1 &

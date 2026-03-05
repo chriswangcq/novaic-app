@@ -30,6 +30,24 @@ enum IncomingMessage {
         headers: HashMap<String, String>,
     },
     Ping,
+
+    // VM lifecycle control plane messages
+    VmStatus { id: String, vm_id: String },
+    VmStart { id: String, vm_id: String, body: Option<serde_json::Value> },
+    VmShutdown { id: String, vm_id: String, body: Option<serde_json::Value> },
+    VmRestart { id: String, vm_id: String, body: Option<serde_json::Value> },
+
+    // Android device management control plane messages
+    AndroidDevices { id: String },
+    AndroidAvds { id: String },
+    AndroidAvdCreate { id: String, body: serde_json::Value },
+    AndroidAvdDelete { id: String, avd_name: String },
+    AndroidEmulatorStart { id: String, body: serde_json::Value },
+    AndroidEmulatorStop { id: String, body: serde_json::Value },
+    AndroidSystemImageCheck { id: String },
+    AndroidDeviceDefinitions { id: String },
+    AndroidScrcpyStatus { id: String },
+
     // 未知消息类型静默忽略，避免解析错误日志刷屏
     #[serde(other)]
     Unknown,
@@ -174,6 +192,172 @@ async fn connect_and_run(ws_url: &str, vmcontrol_url: &str, http_client: &reqwes
                     }
                 });
             }
+
+            // VM lifecycle
+            IncomingMessage::VmStatus { id, vm_id } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                let path = format!("/api/vms/{}", vm_id);
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "GET", &path, None, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::VmStart { id, vm_id, body } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                let path = format!("/api/vms/{}/start", vm_id);
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "POST", &path, body, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::VmShutdown { id, vm_id, body } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                let path = format!("/api/vms/{}/shutdown", vm_id);
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "POST", &path, body, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::VmRestart { id, vm_id, body } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                let path = format!("/api/vms/{}/restart", vm_id);
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "POST", &path, body, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+
+            // Android device management
+            IncomingMessage::AndroidDevices { id } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "GET", "/api/android/devices", None, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidAvds { id } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "GET", "/api/android/avds", None, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidAvdCreate { id, body } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "POST", "/api/android/avd/create", Some(body), HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidAvdDelete { id, avd_name } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                let path = format!("/api/android/avd/{}", avd_name);
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "DELETE", &path, None, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidEmulatorStart { id, body } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "POST", "/api/android/emulator/start", Some(body), HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidEmulatorStop { id, body } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "POST", "/api/android/emulator/stop", Some(body), HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidSystemImageCheck { id } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "GET", "/api/android/system-image/check", None, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidDeviceDefinitions { id } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "GET", "/api/android/device-definitions", None, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+            IncomingMessage::AndroidScrcpyStatus { id } => {
+                let sink_clone = Arc::clone(&sink);
+                let vmcontrol_url = vmcontrol_url.to_string();
+                let http_client = http_client.clone();
+                tokio::spawn(async move {
+                    let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "GET", "/api/android/scrcpy/status", None, HashMap::new()).await;
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let mut s = sink_clone.lock().await;
+                        let _ = s.send(Message::Text(json)).await;
+                    }
+                });
+            }
+
             IncomingMessage::Unknown => {
                 // 未知消息类型，静默忽略
             }
