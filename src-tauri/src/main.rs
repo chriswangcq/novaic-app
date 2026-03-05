@@ -164,7 +164,7 @@ impl VmControlEmbedded {
         self.join_handle = Some(handle);
         println!("[VmControl] Embedded server spawned on port {}", self.port);
     }
-
+    
     fn stop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             println!("[VmControl] Sending shutdown signal to embedded server...");
@@ -176,11 +176,11 @@ impl VmControlEmbedded {
             println!("[VmControl] Embedded server task exited");
         }
     }
-
+    
     fn is_running(&self) -> bool {
         self.shutdown_tx.is_some()
     }
-
+    
     fn base_url(&self) -> String {
         local_url(self.port)
     }
@@ -208,8 +208,8 @@ impl CloudBridgeState {
     fn start(&mut self, gateway_url: String, vmcontrol_url: String) {
         if self.shutdown_tx.is_some() {
             println!("[CloudBridge] Already running");
-            return;
-        }
+                    return;
+                }
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         self.shutdown_tx = Some(tx);
         tauri::async_runtime::spawn(async move {
@@ -306,11 +306,11 @@ async fn download_file_to_cache(
 ) -> Result<serde_json::Value, String> {
     let cache_dir = app.path().app_cache_dir()
         .map_err(|e| format!("Failed to get cache dir: {}", e))?;
-
+    
     let downloads_dir = cache_dir.join("downloads");
     std::fs::create_dir_all(&downloads_dir)
         .map_err(|e| format!("Failed to create downloads dir: {}", e))?;
-
+    
     let mut target_path = downloads_dir.join(&filename);
     let mut counter = 1;
     while target_path.exists() {
@@ -326,23 +326,23 @@ async fn download_file_to_cache(
         target_path = downloads_dir.join(new_name);
         counter += 1;
     }
-
+    
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await
         .map_err(|e| format!("Download failed: {}", e))?;
-
+    
     if !response.status().is_success() {
         return Err(format!("Download failed: HTTP {}", response.status()));
     }
-
+    
     let bytes = response.bytes().await
         .map_err(|e| format!("Failed to read response: {}", e))?;
-
+    
     let mut file = std::fs::File::create(&target_path)
         .map_err(|e| format!("Failed to create file: {}", e))?;
     file.write_all(&bytes)
         .map_err(|e| format!("Failed to write file: {}", e))?;
-
+    
     Ok(serde_json::json!({
         "success": true,
         "path": target_path.to_string_lossy()
@@ -409,7 +409,7 @@ fn main() {
     // Prevent proxy from intercepting local service traffic
     std::env::set_var("NO_PROXY", "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16");
     std::env::set_var("no_proxy", "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16");
-
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -417,12 +417,12 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             println!("NovAIC starting...");
-
+            
             // Tray menu
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-
+            
             let tray_icon: Image = tauri::include_image!("icons/tray-icon.png");
             let mut tray_builder = TrayIconBuilder::with_id("main-tray")
                 .icon(tray_icon)
@@ -449,7 +449,7 @@ fn main() {
                     }
                 })
                 .build(app)?;
-
+            
             let data_dir = app.path().app_data_dir()
                 .unwrap_or_else(|_| PathBuf::from("."));
             println!("[App] Data directory: {:?}", data_dir);
@@ -458,7 +458,7 @@ fn main() {
             // Managed state: only VmControl + CloudBridge
             let vmcontrol = Arc::new(Mutex::new(VmControlEmbedded::new()));
             app.manage(vmcontrol.clone());
-
+            
             let cloud_bridge = Arc::new(Mutex::new(CloudBridgeState::new()));
             app.manage(cloud_bridge.clone());
 
@@ -470,7 +470,7 @@ fn main() {
             let data_dir_for_task = data_dir.clone();
             let vmcontrol_for_task = vmcontrol.clone();
             let cloud_bridge_for_task = cloud_bridge.clone();
-
+            
             tauri::async_runtime::spawn(async move {
                 let startup_begin = std::time::Instant::now();
 
@@ -481,7 +481,7 @@ fn main() {
                 // Ensure VmControl port is free before binding
                 let required_ports = [(PORT_VMCONTROL, "vmcontrol")];
                 if ensure_ports_available(&data_dir_for_task, &required_ports).is_err() {
-                    return;
+                            return;
                 }
 
                 // Start embedded VmControl
@@ -534,7 +534,7 @@ fn main() {
                         "cloud bridge WebSocket connection starting");
                 }
             });
-
+            
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -574,47 +574,42 @@ fn main() {
             match event {
                 tauri::RunEvent::Exit => {
                     println!("[App] Exiting, stopping services...");
-
+                    
                     // Set cancel token first, preventing startup task from starting CloudBridge
                     if let Some(token) = app_handle.try_state::<StartupCancelToken>() {
                         token.inner().store(true, Ordering::Relaxed);
                     }
 
                     // Stop Cloud Bridge (disconnect WebSocket before VmControl goes down)
+                    // 使用 try_lock 避免在主线程 Tokio 上下文中嵌套 block_on（会 panic）
                     if let Some(cb) = app_handle.try_state::<CloudBridgeHandle>() {
-                        let cb_clone = cb.inner().clone();
-                        tauri::async_runtime::block_on(async {
-                            cb_clone.lock().await.stop();
-                        });
+                        if let Ok(mut guard) = cb.inner().try_lock() {
+                            guard.stop();
+                        }
                     }
 
                     // Send graceful shutdown to all VMs and Android emulators via VmControl
-                    if let Some(vmcontrol) = app_handle.try_state::<VmControlState>() {
-                        let vc_clone = vmcontrol.inner().clone();
-                        let base_url = tauri::async_runtime::block_on(async {
-                            let vc = vc_clone.lock().await;
-                            vc.is_running().then(|| vc.base_url())
-                        });
+                    let base_url = app_handle.try_state::<VmControlState>()
+                        .and_then(|vc| vc.inner().try_lock().ok())
+                        .and_then(|guard| guard.is_running().then(|| guard.base_url()));
 
-                        if let Some(base_url) = base_url {
+                    if let Some(base_url) = base_url {
                             if let Ok(client) = reqwest::blocking::Client::builder()
                                 .timeout(std::time::Duration::from_secs(5))
                                 .build()
                             {
-                                // Linux VMs
-                                let _ = client.post(format!("{}/api/vms/shutdown-all", base_url)).send();
-                                // Android emulators
-                                let _ = client.post(format!("{}/api/android/emulator/shutdown-all", base_url)).send();
-                            }
+                            // Linux VMs
+                            let _ = client.post(format!("{}/api/vms/shutdown-all", base_url)).send();
+                            // Android emulators
+                            let _ = client.post(format!("{}/api/android/emulator/shutdown-all", base_url)).send();
                         }
                     }
 
                     // Stop embedded VmControl
                     if let Some(vmcontrol) = app_handle.try_state::<VmControlState>() {
-                        let vc_clone = vmcontrol.inner().clone();
-                        tauri::async_runtime::block_on(async {
-                            vc_clone.lock().await.stop();
-                        });
+                        if let Ok(mut guard) = vmcontrol.inner().try_lock() {
+                            guard.stop();
+                        }
                     }
                 }
                 // macOS: reopen window on Dock click

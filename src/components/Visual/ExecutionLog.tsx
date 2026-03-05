@@ -1094,7 +1094,15 @@ export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProp
   const llmInputSummary = log.input_summary;
   const hasFullInput = Boolean(llmInput?.messages);
   const hasInputSummary = Boolean(llmInputSummary && log.kind === 'think');
-  const toolName = log.data?.tool || log.event_key || '';
+  // 从 event_key / data.tool（格式 "tool:rt-xxxx:task_create:3"）提取简短名称
+  const toolName = (() => {
+    const raw = log.data?.tool || log.event_key || '';
+    // 解析冒号分隔格式，取倒数第二段（跳过末尾序号）
+    const parts = raw.split(':');
+    if (parts.length >= 3) return parts[parts.length - 2];
+    if (parts.length === 2) return parts[1];
+    return raw;
+  })();
   const isThink = log.kind === 'think' || log.type === 'thinking';
   const isTool = log.kind === 'tool' || log.type === 'tool_start' || log.type === 'tool_end';
   const isRunning = log.status === 'running';
@@ -1125,18 +1133,34 @@ export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProp
     if (isThink && thinkingContent) {
       return truncateString(thinkingContent, 100);
     }
-    if (isTool && result) {
-      const r = result as Record<string, unknown>;
-      if (r.error) return `错误: ${truncateString(String(r.error), 60)}`;
-      if (r.message) return truncateString(String(r.message), 60);
-      if (r.content) return truncateString(String(r.content), 60);
-      const keys = Object.keys(r).filter(k => !['success', 'done'].includes(k));
+    if (isTool) {
+      const r = (result ?? log.data) as Record<string, unknown> | null;
+      if (!r) return '';
+      // 按优先级依次尝试常见字段
+      const priorityFields = ['error', 'message', 'content', 'output', 'text', 'result', 'description', 'summary'];
+      for (const field of priorityFields) {
+        const val = r[field];
+        if (val == null) continue;
+        const str = typeof val === 'string' ? val : JSON.stringify(val);
+        const prefix = field === 'error' ? '错误: ' : '';
+        return `${prefix}${truncateString(str, 70)}`;
+      }
+      // 如果有 id 或 status，作为补充摘要
+      const idVal = r.id ?? r.task_id ?? r.agent_id;
+      const statusVal = r.status ?? r.state;
+      if (idVal || statusVal) {
+        const parts: string[] = [];
+        if (idVal) parts.push(`id: ${String(idVal).slice(0, 12)}`);
+        if (statusVal) parts.push(`状态: ${statusVal}`);
+        return parts.join('  ');
+      }
+      // 兜底：取第一个非通用字段
+      const skipKeys = new Set(['success', 'done', 'ok', 'error']);
+      const keys = Object.keys(r).filter(k => !skipKeys.has(k));
       if (keys.length > 0) {
         const firstVal = r[keys[0]];
-        if (typeof firstVal === 'string' && firstVal.length > 100) {
-          return `${keys[0]}: [${firstVal.length} 字符]`;
-        }
-        return `${keys[0]}: ${truncateString(JSON.stringify(firstVal), 50)}`;
+        const str = typeof firstVal === 'string' ? firstVal : JSON.stringify(firstVal);
+        return str.length > 100 ? `${keys[0]}: [${str.length} 字符]` : `${keys[0]}: ${truncateString(str, 60)}`;
       }
     }
     return '';

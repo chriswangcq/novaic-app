@@ -54,10 +54,7 @@ export function ChatPanel() {
   return (
     <div className="relative flex flex-col h-full bg-nb-bg/50">
       {/* 浮动的 Execution Log（未展开时显示） */}
-      <CollapsibleExecutionLog
-        isExpanded={logExpanded}
-        onExpand={() => setLogExpanded(true)}
-      />
+      <CollapsibleExecutionLog isExpanded={logExpanded} />
 
       {/* 主内容区：MessageList + [Resizer + ExecutionLog] */}
       <div ref={mainAreaRef} className="flex-1 flex flex-col min-h-0">
