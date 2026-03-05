@@ -135,13 +135,46 @@ async fn connect_and_run(ws_url: &str, vmcontrol_url: &str, http_client: &reqwes
     let (sink, mut stream) = ws_stream.split();
     // 用 Arc<Mutex> 共享 sink，支持多个并发 proxy task 同时写回
     let sink = Arc::new(Mutex::new(sink));
+    // 每 45s 发一次应用层 Ping，防止 Nginx/中间代理因无数据活动而断连
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(45));
+    heartbeat.tick().await; // 跳过第一次立即触发
 
-    while let Some(msg_result) = stream.next().await {
+    // 90s 内若收不到任何数据（含 Pong 响应），视为连接已死，主动断开触发重连
+    let read_timeout = Duration::from_secs(90);
+
+    loop {
+        let msg_result = tokio::select! {
+            biased;
+            _ = heartbeat.tick() => {
+                // 主动发送协议层 Ping，Nginx 看到数据活动会重置其 read timeout
+                let sink_clone = Arc::clone(&sink);
+                tokio::spawn(async move {
+                    let mut s = sink_clone.lock().await;
+                    let _ = s.send(Message::Ping(vec![])).await;
+                });
+                continue;
+            }
+            result = tokio::time::timeout(read_timeout, stream.next()) => {
+                match result {
+                    Err(_) => {
+                        // 90s 无任何数据，网络可能已静默断开
+                        eprintln!("[CloudConn] Read timeout ({}s), reconnecting...", read_timeout.as_secs());
+                        return;
+                    }
+                    Ok(Some(r)) => r,
+                    Ok(None) => {
+                        println!("[CloudConn] Stream ended");
+                        return;
+                    }
+                }
+            }
+        };
+
         let text = match msg_result {
             Ok(Message::Text(t)) => t,
             Ok(Message::Close(_)) => {
                 println!("[CloudConn] Server closed connection");
-                break;
+                return;
             }
             Ok(Message::Ping(_)) => {
                 // tokio-tungstenite 0.24 自动队列并发送协议层 Pong，
@@ -150,7 +183,7 @@ async fn connect_and_run(ws_url: &str, vmcontrol_url: &str, http_client: &reqwes
             }
             Err(e) => {
                 eprintln!("[CloudConn] WebSocket receive error: {}", e);
-                break;
+                return;
             }
             _ => continue,
         };
