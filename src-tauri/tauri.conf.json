@@ -41,7 +41,6 @@
         ],
         "resources": {
             "resources/config": "config",
-            "resources/vmcontrol": "vmcontrol",
             "resources/backends": "backends",
             "resources/novaic-mcp-vmuse": "novaic-mcp-vmuse",
             "resources/qemu": "qemu",

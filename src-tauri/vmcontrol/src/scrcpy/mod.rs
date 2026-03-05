@@ -31,13 +31,16 @@ static SCRCPY_SERVERS: Lazy<RwLock<ServerMap>> =
 /// scrcpy-server 版本 (必须与服务器版本匹配)
 const SCRCPY_VERSION: &str = "3.3.4";
 
-/// 获取 bundled Resources 目录（当 vmcontrol 从 .app/Contents/Resources/vmcontrol 运行时）
+/// 获取 bundled Resources 目录。
+///
+/// vmcontrol 以库形式嵌入 Tauri app，exe = `.app/Contents/MacOS/novaic`
+/// Resources 目录是其兄弟目录：`.app/Contents/Resources`
 fn get_bundled_resources_dir() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let vmcontrol_dir = exe.parent()?;
-    let resources_dir = vmcontrol_dir.parent()?;
-    if resources_dir.join("vmcontrol").exists() {
-        Some(resources_dir.to_path_buf())
+    // Contents/MacOS/novaic → Contents/Resources
+    let resources = exe.parent()?.parent()?.join("Resources");
+    if resources.join("android-sdk").exists() {
+        Some(resources)
     } else {
         None
     }
@@ -326,6 +329,7 @@ pub struct ScrcpyProxy {
     device_serial: String,
 }
 
+#[allow(dead_code)]
 impl ScrcpyProxy {
     pub fn new(device_serial: impl Into<String>) -> Self {
         Self {
@@ -594,7 +598,7 @@ impl ScrcpyProxy {
     pub async fn handle_websocket(&self, ws: WebSocket) -> Result<(), VmError> {
         tracing::info!("Starting scrcpy proxy for device: {}", self.device_serial);
         
-        let (mut ws_sender, mut ws_receiver) = ws.split();
+        let (mut ws_sender, ws_receiver) = ws.split();
         
         // 使用持久化服务器（如果可用）或启动新的
         let (video_port, control_port) = match ensure_scrcpy_server(&self.device_serial).await {
@@ -684,7 +688,7 @@ impl ScrcpyProxy {
             }
         };
         
-        let mut control_stream = match TcpStream::connect(format!("127.0.0.1:{}", control_port)).await {
+        let control_stream = match TcpStream::connect(format!("127.0.0.1:{}", control_port)).await {
             Ok(s) => s,
             Err(e) => {
                 let error_msg = serde_json::json!({

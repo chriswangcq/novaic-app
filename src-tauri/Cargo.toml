@@ -30,7 +30,12 @@ uuid = { version = "1.6", features = ["v4"] }
 urlencoding = "2.1.3"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
+# VmControl 内嵌库（HTTP Server + VM/Android 管理）
+vmcontrol = { path = "vmcontrol" }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-native-roots"] }
 # Future: Unix socket support (currently using TCP)
 # hyper = { version = "1.4", features = ["client", "http1"] }
 # hyperlocal = "0.9"

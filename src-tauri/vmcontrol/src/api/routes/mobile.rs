@@ -20,13 +20,16 @@ use crate::api::types::ApiError;
 
 // ============ ADB Path Helper ============
 
-/// 获取 bundled Resources 目录（当 vmcontrol 从 .app/Contents/Resources/vmcontrol 运行时）
+/// 获取 bundled Resources 目录。
+///
+/// vmcontrol 以库形式嵌入 Tauri app，exe = `.app/Contents/MacOS/novaic`
+/// Resources 目录是其兄弟目录：`.app/Contents/Resources`
 fn get_bundled_resources_dir() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let vmcontrol_dir = exe.parent()?;
-    let resources_dir = vmcontrol_dir.parent()?;
-    if resources_dir.join("vmcontrol").exists() {
-        Some(resources_dir.to_path_buf())
+    // Contents/MacOS/novaic → Contents/Resources
+    let resources = exe.parent()?.parent()?.join("Resources");
+    if resources.join("android-sdk").exists() {
+        Some(resources)
     } else {
         None
     }
@@ -3297,6 +3300,7 @@ pub struct FilePullContentResponse {
     pub message: Option<String>,
 }
 
+#[allow(dead_code)]
 fn default_octet_stream() -> String {
     "application/octet-stream".to_string()
 }

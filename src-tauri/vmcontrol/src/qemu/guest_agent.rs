@@ -490,6 +490,7 @@ impl GuestAgentClient {
     /// 
     /// ```no_run
     /// use vmcontrol::qemu::GuestAgentClient;
+    /// use base64::Engine;
     /// 
     /// #[tokio::main]
     /// async fn main() -> vmcontrol::Result<()> {
@@ -499,7 +500,8 @@ impl GuestAgentClient {
     ///         println!("Command exited with code: {}", exit_code);
     ///     }
     ///     if let Some(stdout) = status.stdout {
-    ///         let output = String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(&stdout).unwrap());
+    ///         let decoded = base64::engine::general_purpose::STANDARD.decode(&stdout).unwrap();
+    ///         let output = String::from_utf8_lossy(&decoded);
     ///         println!("Output: {}", output);
     ///     }
     ///     Ok(())
