@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::sleep;
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::api::types::{VmInfo, ApiError, RegisterVmRequest, StartVmRequest, StartVmResponse};
@@ -20,6 +21,9 @@ pub struct SshExecRequest {
     pub command: String,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+    /// SSH port - if provided, use this instead of querying Gateway
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
 }
 
 fn default_timeout() -> u64 { 30 }
@@ -35,7 +39,7 @@ pub struct SshExecResponse {
     pub error: Option<String>,
 }
 
-/// Shared VM state across API handlers
+/// Shared VM state across API handlers (used as cache, not source of truth)
 pub type VmState = Arc<RwLock<HashMap<String, VmManager>>>;
 
 /// VM manager holding VM info and QMP socket path
@@ -43,15 +47,10 @@ pub struct VmManager {
     pub id: String,
     pub name: String,
     pub qmp_socket: String,
-    pub ssh_port: u16,
-    pub vmuse_port: u16,
 }
 
 impl VmManager {
     /// Create a temporary QMP client connection
-    /// 
-    /// This establishes a new connection each time it's called,
-    /// avoiding the "Broken pipe" issues with long-lived connections.
     pub async fn create_qmp_client(&self) -> Result<QmpClient, (StatusCode, Json<ApiError>)> {
         QmpClient::connect(&self.qmp_socket).await.map_err(|e| (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -62,51 +61,162 @@ impl VmManager {
     }
 }
 
-/// List all VMs
+// ==================== Socket-based VM Discovery ====================
+
+const SOCKET_DIR: &str = "/tmp/novaic";
+const QMP_SOCKET_PREFIX: &str = "novaic-qmp-";
+const QMP_SOCKET_SUFFIX: &str = ".sock";
+
+/// Discover all running VMs by scanning QMP socket files
+fn discover_running_vms() -> Vec<(String, PathBuf)> {
+    let socket_dir = PathBuf::from(SOCKET_DIR);
+    if !socket_dir.exists() {
+        return Vec::new();
+    }
+
+    let mut vms = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&socket_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                // Match pattern: novaic-qmp-{agent_id}.sock
+                if filename.starts_with(QMP_SOCKET_PREFIX) && filename.ends_with(QMP_SOCKET_SUFFIX) {
+                    let agent_id = &filename[QMP_SOCKET_PREFIX.len()..filename.len() - QMP_SOCKET_SUFFIX.len()];
+                    if !agent_id.is_empty() {
+                        vms.push((agent_id.to_string(), path));
+                    }
+                }
+            }
+        }
+    }
+    vms
+}
+
+/// Check if a specific VM is running by verifying QMP socket exists and is connectable
+async fn is_vm_running(agent_id: &str) -> Option<PathBuf> {
+    let qmp_socket = PathBuf::from(format!("{}/{}{}{}", SOCKET_DIR, QMP_SOCKET_PREFIX, agent_id, QMP_SOCKET_SUFFIX));
+    
+    if !qmp_socket.exists() {
+        return None;
+    }
+
+    // Verify socket is actually connectable (QEMU process is alive)
+    match QmpClient::connect(qmp_socket.to_str().unwrap_or_default()).await {
+        Ok(_) => Some(qmp_socket),
+        Err(_) => {
+            // Socket file exists but not connectable - stale socket
+            tracing::warn!("[VM] Stale QMP socket found: {}", qmp_socket.display());
+            None
+        }
+    }
+}
+
+/// Get SSH port from Gateway API
+async fn get_ssh_port_from_gateway(agent_id: &str) -> Result<u16, String> {
+    let gateway_url = std::env::var("NOVAIC_GATEWAY_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:19999".to_string());
+    let api_key = std::env::var("NOVAIC_API_KEY").unwrap_or_default();
+
+    let url = format!("{}/api/agents/{}", gateway_url.trim_end_matches('/'), agent_id);
+    
+    let client = reqwest::Client::new();
+    let mut request = client.get(&url);
+    if !api_key.trim().is_empty() {
+        request = request.bearer_auth(api_key.trim());
+    }
+
+    let response = request.send().await
+        .map_err(|e| format!("Gateway request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Gateway returned {}", response.status()));
+    }
+
+    let body: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse Gateway response: {}", e))?;
+
+    // Try devices[].ports.ssh first
+    if let Some(devices) = body.get("devices").and_then(|d| d.as_array()) {
+        for device in devices {
+            if let Some(ports) = device.get("ports") {
+                if let Some(ssh) = ports.get("ssh").and_then(|p| p.as_u64()) {
+                    return Ok(ssh as u16);
+                }
+            }
+        }
+    }
+
+    // Fallback to vm.ports.ssh
+    if let Some(vm) = body.get("vm") {
+        if let Some(ports) = vm.get("ports") {
+            if let Some(ssh) = ports.get("ssh").and_then(|p| p.as_u64()) {
+                return Ok(ssh as u16);
+            }
+        }
+    }
+
+    Err("SSH port not found in agent configuration".to_string())
+}
+
+/// List all VMs - discovers running VMs by scanning QMP socket files
 pub async fn list_vms(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
 ) -> Json<Vec<VmInfo>> {
-    let vms = state.vms.read().await;
-    let list: Vec<VmInfo> = vms.iter().map(|(id, vm)| VmInfo {
-        id: id.clone(),
-        name: vm.name.clone(),
-        status: "running".to_string(), // TODO: query from QMP
-        qmp_socket: format!("/tmp/novaic/novaic-qmp-{}.sock", id),
-    }).collect();
+    let discovered = discover_running_vms();
+    let mut list = Vec::new();
+
+    for (agent_id, qmp_socket) in discovered {
+        // Verify each socket is actually connectable
+        if let Ok(_) = QmpClient::connect(qmp_socket.to_str().unwrap_or_default()).await {
+            list.push(VmInfo {
+                id: agent_id.clone(),
+                name: format!("VM {}", &agent_id[..agent_id.len().min(8)]),
+                status: "running".to_string(),
+                qmp_socket: qmp_socket.to_string_lossy().to_string(),
+            });
+        }
+    }
+
+    tracing::info!("[list_vms] Found {} running VMs", list.len());
     Json(list)
 }
 
-/// Get VM by ID
+/// Get VM by ID - checks if VM is actually running by verifying QMP socket
 pub async fn get_vm(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
     Path(id): Path<String>,
 ) -> Result<Json<VmInfo>, (StatusCode, Json<ApiError>)> {
-    let vms = state.vms.read().await;
-    let vm = vms.get(&id).ok_or((
-        StatusCode::NOT_FOUND,
-        Json(ApiError { error: "VM not found".to_string() })
-    ))?;
-    
+    let qmp_socket = match is_vm_running(&id).await {
+        Some(path) => path,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ApiError { error: format!("VM {} not running", id) })
+            ));
+        }
+    };
+
     Ok(Json(VmInfo {
         id: id.clone(),
-        name: vm.name.clone(),
+        name: format!("VM {}", &id[..id.len().min(8)]),
         status: "running".to_string(),
-        qmp_socket: format!("/tmp/novaic/novaic-qmp-{}.sock", id),
+        qmp_socket: qmp_socket.to_string_lossy().to_string(),
     }))
 }
 
 /// Pause VM execution
 pub async fn pause_vm(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let vms = state.vms.read().await;
-    let vm = vms.get(&id).ok_or((
+    let qmp_socket = is_vm_running(&id).await.ok_or((
         StatusCode::NOT_FOUND,
-        Json(ApiError { error: "VM not found".to_string() })
+        Json(ApiError { error: format!("VM {} not running", id) })
     ))?;
+
+    let mut qmp = QmpClient::connect(qmp_socket.to_str().unwrap_or_default()).await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: e.to_string() })))?;
     
-    let mut qmp = vm.create_qmp_client().await?;
     qmp.execute("stop", None).await.map_err(|e| (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError { error: e.to_string() })
@@ -117,16 +227,17 @@ pub async fn pause_vm(
 
 /// Resume VM execution
 pub async fn resume_vm(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let vms = state.vms.read().await;
-    let vm = vms.get(&id).ok_or((
+    let qmp_socket = is_vm_running(&id).await.ok_or((
         StatusCode::NOT_FOUND,
-        Json(ApiError { error: "VM not found".to_string() })
+        Json(ApiError { error: format!("VM {} not running", id) })
     ))?;
+
+    let mut qmp = QmpClient::connect(qmp_socket.to_str().unwrap_or_default()).await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: e.to_string() })))?;
     
-    let mut qmp = vm.create_qmp_client().await?;
     qmp.execute("cont", None).await.map_err(|e| (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError { error: e.to_string() })
@@ -137,16 +248,17 @@ pub async fn resume_vm(
 
 /// Shutdown VM gracefully
 pub async fn shutdown_vm(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let vms = state.vms.read().await;
-    let vm = vms.get(&id).ok_or((
+    let qmp_socket = is_vm_running(&id).await.ok_or((
         StatusCode::NOT_FOUND,
-        Json(ApiError { error: "VM not found".to_string() })
+        Json(ApiError { error: format!("VM {} not running", id) })
     ))?;
+
+    let mut qmp = QmpClient::connect(qmp_socket.to_str().unwrap_or_default()).await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: e.to_string() })))?;
     
-    let mut qmp = vm.create_qmp_client().await?;
     qmp.execute("system_powerdown", None).await.map_err(|e| (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError { error: e.to_string() })
@@ -155,74 +267,62 @@ pub async fn shutdown_vm(
     Ok(StatusCode::OK)
 }
 
-/// Shutdown all registered VMs gracefully
-/// Sends system_powerdown to all VMs in parallel, returns results
+/// Shutdown all running VMs gracefully
+/// Discovers VMs by scanning socket files, sends system_powerdown to all
 pub async fn shutdown_all_vms(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
 ) -> Json<HashMap<String, String>> {
-    let vms = state.vms.read().await;
+    let discovered = discover_running_vms();
     let mut results = HashMap::new();
-    
-    if vms.is_empty() {
+
+    if discovered.is_empty() {
         return Json(results);
     }
-    
-    tracing::info!("Shutting down {} VMs...", vms.len());
-    
-    let vm_infos: Vec<(String, String)> = vms.iter()
-        .map(|(id, vm)| (id.clone(), vm.qmp_socket.clone()))
-        .collect();
-    
-    drop(vms);
-    
-    let handles: Vec<_> = vm_infos.into_iter().map(|(id, qmp_socket)| {
-        let id_clone = id.clone();
+
+    tracing::info!("[shutdown_all] Found {} VMs to shutdown", discovered.len());
+
+    let handles: Vec<_> = discovered.into_iter().map(|(agent_id, qmp_socket)| {
+        let id_clone = agent_id.clone();
+        let socket_str = qmp_socket.to_string_lossy().to_string();
         tokio::spawn(async move {
-            match QmpClient::connect(&qmp_socket).await {
+            match QmpClient::connect(&socket_str).await {
                 Ok(mut qmp) => {
                     match qmp.execute("system_powerdown", None).await {
                         Ok(_) => {
-                            tracing::info!("VM {} shutdown signal sent", id_clone);
+                            tracing::info!("[shutdown_all] VM {} shutdown signal sent", id_clone);
                             (id_clone, "shutdown_sent".to_string())
                         }
                         Err(e) => {
-                            tracing::warn!("VM {} shutdown failed: {}", id_clone, e);
+                            tracing::warn!("[shutdown_all] VM {} shutdown failed: {}", id_clone, e);
                             (id_clone, format!("error: {}", e))
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("VM {} QMP connect failed: {}", id_clone, e);
+                    tracing::warn!("[shutdown_all] VM {} QMP connect failed: {}", id_clone, e);
                     (id_clone, format!("connect_error: {}", e))
                 }
             }
         })
     }).collect();
-    
+
     for handle in handles {
         if let Ok((id, result)) = handle.await {
             results.insert(id, result);
         }
     }
-    
-    tracing::info!("All VM shutdown signals sent: {:?}", results);
+
+    tracing::info!("[shutdown_all] Results: {:?}", results);
     Json(results)
 }
 
-/// Register an existing VM with vmcontrol
+/// Register an existing VM with vmcontrol (legacy API, kept for compatibility)
+/// Note: With socket-based discovery, this is no longer strictly necessary
 pub async fn register_vm(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
     Json(request): Json<RegisterVmRequest>,
 ) -> Result<Json<VmInfo>, (StatusCode, Json<ApiError>)> {
-    let mut vms = state.vms.write().await;
-    
-    if vms.contains_key(&request.id) {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(ApiError { error: "VM already registered".to_string() })
-        ));
-    }
-    
+    // Just verify the socket exists
     if !std::path::Path::new(&request.qmp_socket).exists() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -230,17 +330,7 @@ pub async fn register_vm(
         ));
     }
     
-    let vm_manager = VmManager {
-        id: request.id.clone(),
-        name: request.name.clone(),
-        qmp_socket: request.qmp_socket.clone(),
-        ssh_port: 0,
-        vmuse_port: 0,
-    };
-    
-    vms.insert(request.id.clone(), vm_manager);
-    
-    tracing::info!("VM {} registered successfully (on-demand QMP mode)", request.id);
+    tracing::info!("[register_vm] VM {} registered (socket: {})", request.id, request.qmp_socket);
     
     Ok(Json(VmInfo {
         id: request.id.clone(),
@@ -259,27 +349,17 @@ pub async fn start_vm(
     tracing::info!("[start_vm] Request for agent {}: memory={}, cpus={}, ssh_port={}, vmuse_port={}", 
         agent_id, req.memory, req.cpus, req.ssh_port, req.vmuse_port);
 
-    // Step A: Check if already running
-    {
-        let processes = state.processes.read().await;
-        if let Some(&pid) = processes.get(&agent_id) {
-            let alive = std::process::Command::new("kill")
-                .args(["-0", &pid.to_string()])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-            if alive {
-                tracing::info!("[start_vm] VM {} already running with PID {}", agent_id, pid);
-                let qmp_socket = format!("/tmp/novaic/novaic-qmp-{}.sock", agent_id);
-                return Ok(Json(StartVmResponse {
-                    status: "already_running".to_string(),
-                    pid: Some(pid),
-                    ssh_port: req.ssh_port,
-                    vmuse_port: req.vmuse_port,
-                    qmp_socket,
-                }));
-            }
-        }
+    // Step A: Check if already running by verifying QMP socket
+    let qmp_socket_path = format!("{}/{}{}{}", SOCKET_DIR, QMP_SOCKET_PREFIX, agent_id, QMP_SOCKET_SUFFIX);
+    if let Some(_) = is_vm_running(&agent_id).await {
+        tracing::info!("[start_vm] VM {} already running", agent_id);
+        return Ok(Json(StartVmResponse {
+            status: "already_running".to_string(),
+            pid: None,
+            ssh_port: req.ssh_port,
+            vmuse_port: req.vmuse_port,
+            qmp_socket: qmp_socket_path,
+        }));
     }
 
     // Step B: Find data_dir
@@ -525,24 +605,7 @@ pub async fn start_vm(
         })));
     }
 
-    // Step H: Register VM in VmState
-    {
-        let mut vms = state.vms.write().await;
-        let vm_name = if req.name.is_empty() {
-            format!("VM {}", &agent_id[..agent_id.len().min(8)])
-        } else {
-            req.name.clone()
-        };
-        vms.insert(agent_id.clone(), VmManager {
-            id: agent_id.clone(),
-            name: vm_name,
-            qmp_socket: qmp_socket.clone(),
-            ssh_port: req.ssh_port,
-            vmuse_port: req.vmuse_port,
-        });
-    }
-
-    // Step I: Track PID
+    // Step H: Track PID (for stop_vm to use)
     {
         let mut processes = state.processes.write().await;
         processes.insert(agent_id.clone(), pid);
@@ -569,18 +632,15 @@ pub async fn stop_vm(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     tracing::info!("[stop_vm] Force stopping VM {}", id);
 
-    // Step 1: Try graceful QMP shutdown first
-    {
-        let vms = state.vms.read().await;
-        if let Some(vm) = vms.get(&id) {
-            if let Ok(mut qmp) = vm.create_qmp_client().await {
-                let _ = qmp.execute("system_powerdown", None).await;
-                tracing::info!("[stop_vm] Sent QMP system_powerdown to VM {}", id);
-            }
-        }
+    let qmp_socket_path = format!("{}/{}{}{}", SOCKET_DIR, QMP_SOCKET_PREFIX, id, QMP_SOCKET_SUFFIX);
+
+    // Step 1: Try graceful QMP shutdown first (if VM is running)
+    if let Ok(mut qmp) = QmpClient::connect(&qmp_socket_path).await {
+        let _ = qmp.execute("system_powerdown", None).await;
+        tracing::info!("[stop_vm] Sent QMP system_powerdown to VM {}", id);
     }
 
-    // Step 2: Get PID
+    // Step 2: Get PID from cache (if available)
     let pid = {
         let processes = state.processes.read().await;
         processes.get(&id).copied()
@@ -624,18 +684,14 @@ pub async fn stop_vm(
         }
     }
 
-    // Step 3: Clean up state
-    {
-        let mut vms = state.vms.write().await;
-        vms.remove(&id);
-    }
+    // Step 3: Clean up PID cache
     {
         let mut processes = state.processes.write().await;
         processes.remove(&id);
     }
 
-    let qmp_socket = format!("/tmp/novaic/novaic-qmp-{}.sock", id);
-    std::fs::remove_file(&qmp_socket).ok();
+    // Clean up socket file
+    std::fs::remove_file(&qmp_socket_path).ok();
 
     tracing::info!("[stop_vm] VM {} stopped and cleaned up", id);
     Ok(Json(serde_json::json!({
@@ -646,11 +702,12 @@ pub async fn stop_vm(
 
 /// Execute SSH command on a VM
 pub async fn ssh_exec(
-    State(state): State<CombinedState>,
+    State(_state): State<CombinedState>,
     Path(id): Path<String>,
     Json(req): Json<SshExecRequest>,
 ) -> Result<Json<SshExecResponse>, (StatusCode, Json<ApiError>)> {
-    tracing::info!("[ssh_exec] VM {}: command={:?}, timeout={}", id, req.command, req.timeout);
+    tracing::info!("[ssh_exec] VM {}: command={:?}, timeout={}, ssh_port={:?}", 
+        id, req.command, req.timeout, req.ssh_port);
 
     if req.command.is_empty() {
         return Err((
@@ -659,34 +716,38 @@ pub async fn ssh_exec(
         ));
     }
 
-    // Get SSH port from VM state
-    let ssh_port = {
-        let vms = state.vms.read().await;
-        let vm = vms.get(&id).ok_or((
+    // Verify VM is running
+    if is_vm_running(&id).await.is_none() {
+        return Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError { error: format!("VM {} not found", id) })
-        ))?;
-        
-        if vm.ssh_port == 0 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiError { error: "VM has no SSH port configured".to_string() })
-            ));
+            Json(ApiError { error: format!("VM {} not running", id) })
+        ));
+    }
+
+    // Get SSH port: prefer request parameter, fallback to Gateway query
+    let ssh_port = match req.ssh_port {
+        Some(port) if port > 0 => port,
+        _ => {
+            // Query Gateway for SSH port
+            get_ssh_port_from_gateway(&id).await.map_err(|e| (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError { error: format!("Failed to get SSH port: {}", e) })
+            ))?
         }
-        vm.ssh_port
     };
+
+    tracing::info!("[ssh_exec] Using SSH port: {}", ssh_port);
 
     // Find SSH private key at fixed location: {data_dir}/.ssh/id_rsa
     let data_dir = {
         let from_env = std::env::var("NOVAIC_DATA_DIR").ok()
             .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from);
+            .map(PathBuf::from);
         match from_env {
             Some(p) => p,
             None => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                std::path::PathBuf::from(home)
-                    .join("Library/Application Support/com.novaic.app")
+                PathBuf::from(home).join("Library/Application Support/com.novaic.app")
             }
         }
     };
@@ -701,8 +762,6 @@ pub async fn ssh_exec(
             })
         ));
     }
-    
-    tracing::info!("[ssh_exec] Using SSH key: {}", ssh_key_path.display());
 
     // Build SSH command
     let ssh_args = vec![

@@ -242,22 +242,10 @@ pub async fn vmuse_agent_proxy(
 
 /// Get the vmuse port for an agent from Gateway
 async fn get_agent_vmuse_port(
-    state: &CombinedState,
+    _state: &CombinedState,
     agent_id: &str,
 ) -> Result<u16, (StatusCode, AxumJson<ApiError>)> {
-    {
-        let vms = state.vms.read().await;
-        if let Some(vm) = vms.get(agent_id) {
-            if vm.vmuse_port > 0 {
-                tracing::info!(
-                    "Using vmuse port {} for agent {} from local vmcontrol state",
-                    vm.vmuse_port, agent_id
-                );
-                return Ok(vm.vmuse_port);
-            }
-        }
-    }
-
+    // Always query Gateway for vmuse port (no local caching)
     let gateway_base = std::env::var("NOVAIC_GATEWAY_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:19999".to_string());
     let gateway_url = format!(

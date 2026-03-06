@@ -17,76 +17,46 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// 自动扫描 /tmp/novaic/ 下的 QMP socket，将运行中的 VM 注册到 state
-pub async fn auto_register_running_vms(state: api::routes::AppState) {
+/// Log discovered running VMs (socket-based discovery, no longer needs state registration)
+pub async fn auto_register_running_vms(_state: api::routes::AppState) {
     use std::path::Path;
-    use crate::api::routes::vm::VmManager;
 
     let socket_dir = Path::new("/tmp/novaic");
 
     if !socket_dir.exists() {
-        tracing::debug!("Socket directory does not exist, skipping auto-registration");
+        tracing::debug!("[VmControl] Socket directory does not exist");
         return;
     }
-
-    tracing::info!("Scanning for running VMs in {}", socket_dir.display());
 
     let entries = match std::fs::read_dir(socket_dir) {
         Ok(entries) => entries,
         Err(e) => {
-            tracing::warn!("Failed to read socket directory: {}", e);
+            tracing::warn!("[VmControl] Failed to read socket directory: {}", e);
             return;
         }
     };
 
-    let mut registered = 0;
-
+    let mut count = 0;
     for entry in entries.flatten() {
         let path = entry.path();
-
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if !name.starts_with("novaic-qmp-") || !name.ends_with(".sock") {
-                continue;
+            if name.starts_with("novaic-qmp-") && name.ends_with(".sock") {
+                let vm_id = name
+                    .strip_prefix("novaic-qmp-")
+                    .and_then(|s| s.strip_suffix(".sock"))
+                    .unwrap_or("");
+                if !vm_id.is_empty() {
+                    tracing::info!("[VmControl] Found running VM: {}", vm_id);
+                    count += 1;
+                }
             }
-
-            let vm_id = name
-                .strip_prefix("novaic-qmp-")
-                .and_then(|s| s.strip_suffix(".sock"))
-                .unwrap_or("")
-                .to_string();
-
-            if vm_id.is_empty() {
-                continue;
-            }
-
-            tracing::debug!("Found QMP socket for VM: {}", vm_id);
-
-            let socket_path = path.to_string_lossy().to_string();
-
-            let vm_manager = VmManager {
-                id: vm_id.clone(),
-                name: format!("novaic-vm-{}", vm_id),
-                qmp_socket: socket_path,
-                ssh_port: 0,
-                vmuse_port: 0,
-            };
-
-            let mut vms = state.write().await;
-            vms.insert(vm_id.clone(), vm_manager);
-            drop(vms);
-
-            tracing::info!("✓ Auto-registered VM: {} (on-demand QMP mode)", vm_id);
-            registered += 1;
         }
     }
 
-    if registered > 0 {
-        tracing::info!(
-            "Auto-registration complete: {} registered (on-demand QMP mode)",
-            registered
-        );
+    if count > 0 {
+        tracing::info!("[VmControl] {} running VM(s) discovered (socket-based)", count);
     } else {
-        tracing::debug!("No running VMs found");
+        tracing::debug!("[VmControl] No running VMs found");
     }
 }
 
