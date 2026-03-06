@@ -35,6 +35,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 # VmControl 内嵌库（HTTP Server + VM/Android 管理）
 vmcontrol = { path = "vmcontrol" }
+# rustls 0.23 (used by tokio-tungstenite 0.24) requires an explicit crypto provider.
+# "ring" gives us a stable, well-tested backend; install_default() is called in main().
+rustls = { version = "0.23", features = ["ring"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-native-roots"] }
 # Future: Unix socket support (currently using TCP)
 # hyper = { version = "1.4", features = ["client", "http1"] }

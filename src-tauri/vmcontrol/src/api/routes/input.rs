@@ -5,15 +5,15 @@ use axum::{
 };
 
 use crate::api::types::{ApiError, KeyboardInput, MouseInput};
-use crate::api::routes::vm::VmState;
+use crate::api::routes::CombinedState;
 
 /// Handle keyboard input
 pub async fn keyboard_input(
-    State(state): State<VmState>,
+    State(state): State<CombinedState>,
     Path(id): Path<String>,
     Json(input): Json<KeyboardInput>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let vms = state.read().await;
+    let vms = state.vms.read().await;
     let vm = vms.get(&id).ok_or((
         StatusCode::NOT_FOUND,
         Json(ApiError { error: "VM not found".to_string() })
@@ -50,11 +50,11 @@ pub async fn keyboard_input(
 
 /// Handle mouse input
 pub async fn mouse_input(
-    State(state): State<VmState>,
+    State(state): State<CombinedState>,
     Path(id): Path<String>,
     Json(input): Json<MouseInput>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let vms = state.read().await;
+    let vms = state.vms.read().await;
     let vm = vms.get(&id).ok_or((
         StatusCode::NOT_FOUND,
         Json(ApiError { error: "VM not found".to_string() })

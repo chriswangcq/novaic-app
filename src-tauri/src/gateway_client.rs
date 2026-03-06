@@ -10,6 +10,7 @@ use crate::config::AppConfig;
 pub struct GatewayClient {
     base_url: String,
     client: reqwest::Client,
+    auth_token: Option<String>,
 }
 
 impl GatewayClient {
@@ -21,15 +22,29 @@ impl GatewayClient {
             .build()
             .unwrap_or_default();
         
-        Self { base_url, client }
+        Self { base_url, client, auth_token: None }
+    }
+
+    /// Attach a Bearer auth token to all requests.
+    pub fn with_auth(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
+        self
+    }
+
+    /// Returns the `Authorization: Bearer <token>` header value if a token is set.
+    fn bearer_header(&self) -> Option<String> {
+        self.auth_token.as_ref().map(|t| format!("Bearer {}", t))
     }
 
     /// Make a GET request to the Gateway
     pub async fn get(&self, path: &str) -> Result<Value, String> {
         let url = format!("{}{}", self.base_url, path);
         
-        let response = self.client
-            .get(&url)
+        let mut req = self.client.get(&url);
+        if let Some(val) = self.bearer_header() {
+            req = req.header("Authorization", val);
+        }
+        let response = req
             .send()
             .await
             .map_err(|e| format!("Request failed: {}", e))?;
@@ -53,7 +68,9 @@ impl GatewayClient {
         let url = format!("{}{}", self.base_url, path);
         
         let mut request = self.client.post(&url);
-        
+        if let Some(val) = self.bearer_header() {
+            request = request.header("Authorization", val);
+        }
         if let Some(json_body) = body {
             request = request
                 .header("Content-Type", "application/json")
@@ -89,7 +106,9 @@ impl GatewayClient {
         let url = format!("{}{}", self.base_url, path);
         
         let mut request = self.client.patch(&url);
-        
+        if let Some(val) = self.bearer_header() {
+            request = request.header("Authorization", val);
+        }
         if let Some(json_body) = body {
             request = request
                 .header("Content-Type", "application/json")
@@ -124,7 +143,9 @@ impl GatewayClient {
         let url = format!("{}{}", self.base_url, path);
         
         let mut request = self.client.put(&url);
-        
+        if let Some(val) = self.bearer_header() {
+            request = request.header("Authorization", val);
+        }
         if let Some(json_body) = body {
             request = request
                 .header("Content-Type", "application/json")
@@ -158,8 +179,11 @@ impl GatewayClient {
     pub async fn delete(&self, path: &str) -> Result<Value, String> {
         let url = format!("{}{}", self.base_url, path);
         
-        let response = self.client
-            .delete(&url)
+        let mut req = self.client.delete(&url);
+        if let Some(val) = self.bearer_header() {
+            req = req.header("Authorization", val);
+        }
+        let response = req
             .send()
             .await
             .map_err(|e| format!("Request failed: {}", e))?;

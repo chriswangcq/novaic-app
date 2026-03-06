@@ -32,6 +32,28 @@ pub struct RegisterVmRequest {
     pub qmp_socket: String,
 }
 
+/// Request to start a new VM (launch QEMU process)
+#[derive(Debug, Deserialize)]
+pub struct StartVmRequest {
+    pub memory: String,       // e.g. "4096"
+    pub cpus: u32,
+    pub ssh_port: u16,
+    pub vmuse_port: u16,
+    pub image_path: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Response for VM start
+#[derive(Debug, Serialize)]
+pub struct StartVmResponse {
+    pub status: String,       // "starting" | "already_running"
+    pub pid: Option<u32>,
+    pub ssh_port: u16,
+    pub vmuse_port: u16,
+    pub qmp_socket: String,
+}
+
 /// Health check response
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {

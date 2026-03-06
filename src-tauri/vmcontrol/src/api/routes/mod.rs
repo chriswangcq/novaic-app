@@ -27,17 +27,21 @@ pub type AppState = Arc<RwLock<HashMap<String, vm::VmManager>>>;
 /// Android Manager state
 pub type AndroidState = Arc<RwLock<AndroidManager>>;
 
+/// Tracks QEMU process PIDs: agent_id -> pid
+pub type ProcessState = Arc<RwLock<HashMap<String, u32>>>;
+
 /// Combined application state
 #[derive(Clone)]
 pub struct CombinedState {
     pub vms: AppState,
     pub android: AndroidState,
+    pub processes: ProcessState,
 }
 
 /// Create the main API router with all routes
 /// 
 /// * `data_dir` - When provided, Android AVD data is stored under data_dir/android/avd
-pub fn create_router(state: AppState, data_dir: Option<PathBuf>) -> Router {
+pub fn create_router(state: AppState, data_dir: Option<PathBuf>, process_state: ProcessState) -> Router {
     // 创建 Android Manager（有 data_dir 时使用 data_dir/android/avd）
     let android_manager = Arc::new(RwLock::new(
         data_dir
@@ -45,6 +49,12 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>) -> Router {
             .unwrap_or_else(AndroidManager::new)
     ));
     
+    let combined_state = CombinedState {
+        vms: state.clone(),
+        android: android_manager.clone(),
+        processes: process_state,
+    };
+
     // 创建 Android 子路由
     let android_router = Router::new()
         // AVD 列表和设备管理
@@ -104,6 +114,8 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>) -> Router {
         .route("/health", get(health::health_check))
         .route("/api/vms", get(vm::list_vms).post(vm::register_vm))
         .route("/api/vms/:id", get(vm::get_vm))
+        .route("/api/vms/:id/start", post(vm::start_vm))
+        .route("/api/vms/:id/stop", post(vm::stop_vm))
         .route("/api/vms/:id/pause", post(vm::pause_vm))
         .route("/api/vms/:id/resume", post(vm::resume_vm))
         .route("/api/vms/:id/shutdown", post(vm::shutdown_vm))
@@ -130,7 +142,7 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>) -> Router {
         // Scrcpy endpoints (legacy, for backward compatibility)
         .route("/api/android/scrcpy", get(scrcpy::scrcpy_websocket))
         .route("/api/android/scrcpy/status", get(scrcpy::scrcpy_status))
-        .with_state(state)
+        .with_state(combined_state)
         // Android emulator management endpoints
         .nest("/api/android", android_router)
         // Mobile Use API endpoints

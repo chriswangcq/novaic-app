@@ -7,7 +7,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { PortConfig } from './api';
-import { VM_CONFIG, API_CONFIG, DEFAULT_PORTS, WS_CONFIG, LOCAL_ENDPOINTS } from '../config';
+import { VM_CONFIG, API_CONFIG, DEFAULT_PORTS, LOCAL_ENDPOINTS } from '../config';
 
 // VM 状态类型 - matches Gateway VmStatus
 export interface VmStatus {
@@ -153,56 +153,42 @@ class VmService {
   }
 
   /**
-   * 获取 VNC WebSocket URL
-   * @param agentId - Agent ID
-   * 
-   * 新方式：通过 vmcontrol 代理
-   * URL 格式：ws://localhost:8080/api/vms/{vm_id}/vnc
-   * 
-   * 支持两种 VM ID 格式：
-   * - agent_index (数字，精确匹配 socket 文件)
-   * - agent_id (UUID，自动查找可用 socket)
-   * 
-   * 兼容性：如果 vmcontrol 不可用，回退到旧的 websockify 方式
+   * 获取 VmControl 的 base URL（通过 Tauri command，动态端口）
+   * 缓存结果以避免每次都 invoke
+   */
+  private vmcontrolBaseUrl: string | null = null;
+
+  async getVmcontrolUrl(): Promise<string | null> {
+    if (this.vmcontrolBaseUrl) return this.vmcontrolBaseUrl;
+    try {
+      const url = await invoke<string>('get_vmcontrol_url');
+      this.vmcontrolBaseUrl = url;
+      return url;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 获取 VNC WebSocket URL（动态端口，通过 Tauri command 获取）
    */
   async getVncUrl(agentId: string): Promise<string> {
     try {
-      // 优先使用 vmcontrol 代理（新方式）
-      const vmcontrolPort = WS_CONFIG.VMCONTROL_PORT;
-      
-      // 检查 vmcontrol 是否可用（快速健康检查）
-      try {
-        const healthUrl = `http://${LOCAL_ENDPOINTS.HTTP_HOST}:${vmcontrolPort}/health`;
-        const response = await fetch(healthUrl, {
-          signal: AbortSignal.timeout(1000), // 快速超时
-        });
-        
-        if (response.ok) {
-          // 直接使用 agent_id (UUID)
-          const vmcontrolUrl = `ws://${LOCAL_ENDPOINTS.WS_HOST}:${vmcontrolPort}/api/vms/${agentId}/vnc`;
-          console.log(`[VM Service] Using vmcontrol proxy: ${vmcontrolUrl}`);
-          return vmcontrolUrl;
-        }
-      } catch (healthError) {
-        console.warn('[VM Service] vmcontrol not available, checking fallback options...');
+      const baseUrl = await this.getVmcontrolUrl();
+      if (baseUrl) {
+        const wsBase = baseUrl.replace(/^http/, 'ws');
+        const url = `${wsBase}/api/vms/${agentId}/vnc`;
+        console.log(`[VM Service] VNC URL: ${url}`);
+        return url;
       }
-      
-      // 回退方式 1：从 VM status 获取 VNC URL
-      const status = await this.getStatus(agentId);
-      if (status?.vnc_url) {
-        console.log(`[VM Service] Using VNC URL from status: ${status.vnc_url}`);
-        return status.vnc_url;
-      }
-      
-      // 回退方式 2：使用旧的 websockify URL（默认 Agent 0）
-      const websockifyUrl = `ws://${LOCAL_ENDPOINTS.WS_HOST}:${DEFAULT_PORTS.WEBSOCKET}/websockify`;
-      console.log(`[VM Service] Falling back to websockify: ${websockifyUrl}`);
-      return websockifyUrl;
     } catch (error) {
-      console.error('[VM Service] Get VNC URL failed:', error);
-      // 最终回退到默认 websockify URL
-      return `ws://${LOCAL_ENDPOINTS.WS_HOST}:${DEFAULT_PORTS.WEBSOCKET}/websockify`;
+      console.warn('[VM Service] vmcontrol not available, falling back:', error);
     }
+
+    // 回退：websockify
+    const websockifyUrl = `ws://${LOCAL_ENDPOINTS.WS_HOST}:${DEFAULT_PORTS.WEBSOCKET}/websockify`;
+    console.log(`[VM Service] Falling back to websockify: ${websockifyUrl}`);
+    return websockifyUrl;
   }
 
   /**
@@ -341,7 +327,7 @@ class VmService {
         vnc_socket_path: '',
         vmcontrol_healthy: false,
         vm_registered: false,
-        vnc_url: `ws://${LOCAL_ENDPOINTS.WS_HOST}:${WS_CONFIG.VMCONTROL_PORT}/api/vms/${agentId}/vnc`,
+        vnc_url: `ws://${LOCAL_ENDPOINTS.WS_HOST}:${DEFAULT_PORTS.WEBSOCKET}/websockify`,
         reason: String(error)
       };
     }

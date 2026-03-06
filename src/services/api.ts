@@ -7,6 +7,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Device, DeviceStatus } from '../types';
 import { API_CONFIG } from '../config';
+import { fetchWithAuth } from './auth';
 
 /**
  * AppConfig - Application configuration from backend.
@@ -537,7 +538,7 @@ export const api = {
     formData.append('agent_id', agentId);
     formData.append('category', 'chat_attachments');
 
-    const res = await fetch(`${base}/api/files/upload`, {
+    const res = await fetchWithAuth(`${base}/api/files/upload`, {
       method: 'POST',
       body: formData,
     });

@@ -153,11 +153,13 @@ pub async fn pre_start_scrcpy_servers() {
 
 /// 以内嵌方式启动 VmControl HTTP Server。
 ///
+/// `port` 传 0 时由 OS 随机分配空闲端口，实际绑定端口通过 `port_tx` 回传。
 /// `shutdown` 收到信号后进行优雅关闭（axum graceful shutdown）。
 pub async fn start_embedded_server(
     port: u16,
     host: String,
     data_dir: Option<PathBuf>,
+    port_tx: Option<tokio::sync::oneshot::Sender<u16>>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     use std::net::SocketAddr;
@@ -169,14 +171,21 @@ pub async fn start_embedded_server(
     // 只做快速的状态扫描（扫描 QMP socket 文件，无网络 IO）
     auto_register_running_vms(state.clone()).await;
 
-    let app = create_router(state, data_dir).layer(CorsLayer::permissive());
+    let process_state: crate::api::routes::ProcessState = Arc::new(RwLock::new(HashMap::new()));
+    let app = create_router(state, data_dir, process_state).layer(CorsLayer::permissive());
 
     let addr: SocketAddr = format!("{}:{}", host, port)
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid address {}:{}: {}", host, port, e))?;
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("vmcontrol embedded server started on {}", addr);
+    let actual_addr = listener.local_addr()?;
+    tracing::info!("vmcontrol embedded server started on {}", actual_addr);
+
+    // 回传实际绑定的端口（port=0 时 OS 分配）
+    if let Some(tx) = port_tx {
+        let _ = tx.send(actual_addr.port());
+    }
 
     // scrcpy 预热放到 bind 之后的后台 task，避免阻塞端口就绪（最长可达 30s）
     tokio::spawn(pre_start_scrcpy_servers());

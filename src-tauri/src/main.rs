@@ -22,7 +22,6 @@ use std::time::Duration;
 use std::path::PathBuf;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::net::TcpListener;
 use tokio::sync::Mutex;
 use tauri::{
     AppHandle,
@@ -35,8 +34,69 @@ use tauri::{
 
 // Fixed service ports
 const LOOPBACK_HOST: &str = "127.0.0.1";
-const PORT_VMCONTROL: u16 = 19996;
 const PORT_GATEWAY: u16 = 19999;
+
+// ─── API Key ──────────────────────────────────────────────────────────────────
+
+/// Shared, immutable API key (loaded once at startup from data_dir/api_key.txt,
+/// or newly generated and persisted if the file is absent/empty).
+type ApiKeyState = Arc<String>;
+
+/// Load the API key from `data_dir/api_key.txt`.
+/// If the file is absent or empty, generate a new random key and persist it.
+fn load_or_generate_api_key(data_dir: &PathBuf) -> String {
+    let key_file = data_dir.join("api_key.txt");
+    if let Ok(key) = fs::read_to_string(&key_file) {
+        let key = key.trim().to_string();
+        if !key.is_empty() {
+            println!("[Auth] Loaded existing API key from {:?}", key_file);
+            return key;
+        }
+    }
+    // Generate a new key (two UUIDs concatenated → 64 hex chars)
+    let key = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    if let Err(e) = fs::write(&key_file, &key) {
+        eprintln!("[Auth] Failed to persist API key to {:?}: {}", key_file, e);
+    } else {
+        println!("[Auth] Generated and saved new API key to {:?}", key_file);
+    }
+    key
+}
+
+// ─── Gateway URL ──────────────────────────────────────────────────────────────
+
+/// Mutable gateway URL — can be switched between local and cloud at runtime.
+/// Uses a std::sync::Mutex so the lock is held only for a brief clone(),
+/// never across async await points.
+type GatewayUrlState = Arc<std::sync::Mutex<String>>;
+
+/// Load gateway URL from `data_dir/gateway_url.txt`.
+/// Falls back to the local loopback URL if the file is absent or empty.
+fn load_gateway_url(data_dir: &PathBuf) -> String {
+    let url_file = data_dir.join("gateway_url.txt");
+    if let Ok(url) = fs::read_to_string(&url_file) {
+        let url = url.trim().to_string();
+        if !url.is_empty() {
+            println!("[Gateway] Using configured URL: {}", url);
+            return url;
+        }
+    }
+    let default_url = local_url(PORT_GATEWAY);
+    println!("[Gateway] Using default local URL: {}", default_url);
+    default_url
+}
+
+fn read_gateway_url(state: &GatewayUrlState) -> String {
+    state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn make_gateway_client(url: &str, token: &str) -> GatewayClient {
+    GatewayClient::new(url.to_string()).with_auth(token)
+}
 
 fn local_url(port: u16) -> String {
     format!("http://{LOOPBACK_HOST}:{port}")
@@ -68,6 +128,73 @@ async fn wait_service_ready(
     false
 }
 
+// ─── Single-instance PID guard ───────────────────────────────────────────────
+
+fn pid_file_path(data_dir: &PathBuf) -> PathBuf {
+    data_dir.join("app.pid")
+}
+
+/// Write current process PID to `data_dir/app.pid`.
+fn write_pid_file(data_dir: &PathBuf) {
+    let pid = std::process::id();
+    let path = pid_file_path(data_dir);
+    let _ = fs::create_dir_all(data_dir);
+    let _ = fs::write(&path, pid.to_string());
+    println!("[PID] Wrote PID {} to {:?}", pid, path);
+}
+
+/// Check `data_dir/app.pid`. If that PID is still alive (a stale instance),
+/// send SIGTERM then SIGKILL and wait up to 3 s for it to exit.
+/// Silently ignores missing file, already-dead PIDs, and permission errors.
+fn kill_stale_instance_if_any(data_dir: &PathBuf) {
+    let path = pid_file_path(data_dir);
+    let Ok(contents) = fs::read_to_string(&path) else { return; };
+    let Ok(old_pid) = contents.trim().parse::<u32>() else { return; };
+
+    let my_pid = std::process::id();
+    if old_pid == my_pid { return; }
+
+    // Check if the process actually exists
+    let alive = std::process::Command::new("kill")
+        .args(["-0", &old_pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !alive {
+        println!("[PID] Stale PID {} no longer running, proceeding", old_pid);
+        let _ = fs::remove_file(&path);
+        return;
+    }
+
+    println!("[PID] Killing stale instance PID {}...", old_pid);
+
+    // Graceful SIGTERM first
+    let _ = std::process::Command::new("kill").args(["-TERM", &old_pid.to_string()]).status();
+
+    // Wait up to 2 s for graceful exit
+    for _ in 0..8 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let still_alive = std::process::Command::new("kill")
+            .args(["-0", &old_pid.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !still_alive {
+            println!("[PID] Stale instance {} exited gracefully", old_pid);
+            let _ = fs::remove_file(&path);
+            return;
+        }
+    }
+
+    // Force kill
+    println!("[PID] Force-killing stale instance PID {}...", old_pid);
+    let _ = std::process::Command::new("kill").args(["-9", &old_pid.to_string()]).status();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _ = fs::remove_file(&path);
+    println!("[PID] Stale instance {} force-killed", old_pid);
+}
+
 fn append_startup_diagnostic(data_dir: &PathBuf, stage: &str, status: &str, detail: impl Into<String>) {
     let log_dir = data_dir.join("logs");
     if fs::create_dir_all(&log_dir).is_err() {
@@ -94,30 +221,10 @@ fn append_startup_diagnostic(data_dir: &PathBuf, stage: &str, status: &str, deta
     let _ = writeln!(file, "{}", entry);
 }
 
-fn ensure_ports_available(data_dir: &PathBuf, ports: &[(u16, &str)]) -> Result<(), String> {
-    let mut occupied: Vec<String> = Vec::new();
-    for (port, service_name) in ports {
-        if TcpListener::bind((LOOPBACK_HOST, *port)).is_err() {
-            occupied.push(format!("{service_name}({LOOPBACK_HOST}:{port})"));
-        }
-    }
-
-    if occupied.is_empty() {
-        append_startup_diagnostic(data_dir, "port-preflight", "ok", "all required ports are available");
-        return Ok(());
-    }
-
-    let detail = format!(
-        "required ports are occupied: {}; please stop conflicting processes and retry",
-        occupied.join(", ")
-    );
-    append_startup_diagnostic(data_dir, "port-preflight", "error", detail.clone());
-    Err(detail)
-}
-
 // ─── VmControl (embedded) ────────────────────────────────────────────────────
 
 /// VmControl runs as an embedded HTTP server inside the Tauri process.
+/// Uses port 0 so the OS assigns a free port — no fixed-port conflicts possible.
 struct VmControlEmbedded {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     join_handle: Option<tauri::async_runtime::JoinHandle<()>>,
@@ -129,29 +236,36 @@ impl VmControlEmbedded {
         Self {
             shutdown_tx: None,
             join_handle: None,
-            port: PORT_VMCONTROL,
+            port: 0,
         }
     }
 
-    fn start(&mut self, data_dir: PathBuf) {
+    /// Start the embedded server. Returns a `Receiver<u16>` that resolves to
+    /// the actual port after the OS assigns it (port 0 → OS picks a free port).
+    fn start(&mut self, data_dir: PathBuf) -> tokio::sync::oneshot::Receiver<u16> {
+        let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
+
         if self.shutdown_tx.is_some() {
             println!("[VmControl] Already running (embedded)");
-            return;
+            // Send the current port so caller doesn't hang
+            let current_port = self.port;
+            let _ = port_tx.send(current_port);
+            return port_rx;
         }
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         self.shutdown_tx = Some(shutdown_tx);
 
-        let port = self.port;
         let host = LOOPBACK_HOST.to_string();
-        println!("[VmControl] Starting embedded server on port {}", port);
+        println!("[VmControl] Starting embedded server (OS-assigned port)");
         println!("[VmControl] Data dir: {:?}", data_dir);
 
         let handle = tauri::async_runtime::spawn(async move {
             if let Err(e) = vmcontrol::start_embedded_server(
-                port,
+                0,   // port 0 → OS picks a free port
                 host,
                 Some(data_dir),
+                Some(port_tx),
                 shutdown_rx,
             )
             .await
@@ -162,7 +276,8 @@ impl VmControlEmbedded {
         });
 
         self.join_handle = Some(handle);
-        println!("[VmControl] Embedded server spawned on port {}", self.port);
+        println!("[VmControl] Embedded server spawned (waiting for OS port assignment)");
+        port_rx
     }
     
     fn stop(&mut self) {
@@ -205,7 +320,7 @@ impl CloudBridgeState {
         Self { shutdown_tx: None }
     }
 
-    fn start(&mut self, gateway_url: String, vmcontrol_url: String) {
+    fn start(&mut self, gateway_url: String, vmcontrol_url: String, auth_token: String) {
         if self.shutdown_tx.is_some() {
             println!("[CloudBridge] Already running");
                     return;
@@ -213,7 +328,7 @@ impl CloudBridgeState {
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         self.shutdown_tx = Some(tx);
         tauri::async_runtime::spawn(async move {
-            cloud_connection::start_cloud_connection(gateway_url, vmcontrol_url, rx).await;
+            cloud_connection::start_cloud_connection(gateway_url, vmcontrol_url, auth_token, rx).await;
         });
         println!("[CloudBridge] Started");
     }
@@ -239,23 +354,65 @@ type StartupCancelToken = Arc<AtomicBool>;
 
 // ─── Tauri commands ───────────────────────────────────────────────────────────
 
-/// Returns the gateway base URL (fixed port, assumed to be started externally).
+/// Returns the currently configured gateway URL.
 #[tauri::command]
-async fn get_gateway_url() -> Result<String, String> {
-    Ok(local_url(PORT_GATEWAY))
+async fn get_gateway_url(gw_url: tauri::State<'_, GatewayUrlState>) -> Result<String, String> {
+    Ok(read_gateway_url(&gw_url))
+}
+
+/// Returns the base URL of the embedded VmControl server (OS-assigned port).
+/// Frontend uses this for VNC WebSocket and scrcpy connections instead of hardcoding port 19996.
+#[tauri::command]
+async fn get_vmcontrol_url(vmcontrol: tauri::State<'_, VmControlState>) -> Result<String, String> {
+    let vc = vmcontrol.lock().await;
+    if !vc.is_running() {
+        return Err("VmControl is not running".to_string());
+    }
+    Ok(vc.base_url())
+}
+
+/// Persist a new gateway URL (e.g. switching between local and cloud).
+/// Pass an empty string to reset to the local default.
+#[tauri::command]
+async fn set_gateway_url(
+    url: String,
+    gw_url: tauri::State<'_, GatewayUrlState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let new_url = if url.trim().is_empty() {
+        local_url(PORT_GATEWAY)
+    } else {
+        url.trim().to_string()
+    };
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    fs::write(data_dir.join("gateway_url.txt"), &new_url)
+        .map_err(|e| format!("Failed to save gateway URL: {}", e))?;
+    *gw_url.lock().unwrap_or_else(|e| e.into_inner()) = new_url.clone();
+    println!("[Gateway] URL updated to: {}", new_url);
+    Ok(())
 }
 
 /// Returns true if the gateway health endpoint responds successfully.
 #[tauri::command]
-async fn get_gateway_status() -> Result<bool, String> {
-    let client = GatewayClient::new(local_url(PORT_GATEWAY));
-    client.health_check().await
+async fn get_gateway_status(gw_url: tauri::State<'_, GatewayUrlState>) -> Result<bool, String> {
+    GatewayClient::new(read_gateway_url(&gw_url)).health_check().await
+}
+
+/// Returns the current API key (needed by frontend settings / Nginx setup wizard).
+#[tauri::command]
+async fn get_api_key(api_key: tauri::State<'_, ApiKeyState>) -> Result<String, String> {
+    Ok(api_key.as_ref().clone())
 }
 
 /// Gateway API GET
 #[tauri::command]
-async fn gateway_get(path: String) -> Result<serde_json::Value, String> {
-    GatewayClient::new(local_url(PORT_GATEWAY)).get(&path).await
+async fn gateway_get(
+    path: String,
+    gw_url: tauri::State<'_, GatewayUrlState>,
+    api_key: tauri::State<'_, ApiKeyState>,
+) -> Result<serde_json::Value, String> {
+    let url = read_gateway_url(&gw_url);
+    make_gateway_client(&url, api_key.as_str()).get(&path).await
 }
 
 /// Gateway API POST
@@ -263,8 +420,11 @@ async fn gateway_get(path: String) -> Result<serde_json::Value, String> {
 async fn gateway_post(
     path: String,
     body: Option<serde_json::Value>,
+    gw_url: tauri::State<'_, GatewayUrlState>,
+    api_key: tauri::State<'_, ApiKeyState>,
 ) -> Result<serde_json::Value, String> {
-    GatewayClient::new(local_url(PORT_GATEWAY)).post(&path, body).await
+    let url = read_gateway_url(&gw_url);
+    make_gateway_client(&url, api_key.as_str()).post(&path, body).await
 }
 
 /// Gateway API PATCH
@@ -272,8 +432,11 @@ async fn gateway_post(
 async fn gateway_patch(
     path: String,
     body: Option<serde_json::Value>,
+    gw_url: tauri::State<'_, GatewayUrlState>,
+    api_key: tauri::State<'_, ApiKeyState>,
 ) -> Result<serde_json::Value, String> {
-    GatewayClient::new(local_url(PORT_GATEWAY)).patch(&path, body).await
+    let url = read_gateway_url(&gw_url);
+    make_gateway_client(&url, api_key.as_str()).patch(&path, body).await
 }
 
 /// Gateway API PUT
@@ -281,20 +444,28 @@ async fn gateway_patch(
 async fn gateway_put(
     path: String,
     body: Option<serde_json::Value>,
+    gw_url: tauri::State<'_, GatewayUrlState>,
+    api_key: tauri::State<'_, ApiKeyState>,
 ) -> Result<serde_json::Value, String> {
-    GatewayClient::new(local_url(PORT_GATEWAY)).put(&path, body).await
+    let url = read_gateway_url(&gw_url);
+    make_gateway_client(&url, api_key.as_str()).put(&path, body).await
 }
 
 /// Gateway API DELETE
 #[tauri::command]
-async fn gateway_delete(path: String) -> Result<serde_json::Value, String> {
-    GatewayClient::new(local_url(PORT_GATEWAY)).delete(&path).await
+async fn gateway_delete(
+    path: String,
+    gw_url: tauri::State<'_, GatewayUrlState>,
+    api_key: tauri::State<'_, ApiKeyState>,
+) -> Result<serde_json::Value, String> {
+    let url = read_gateway_url(&gw_url);
+    make_gateway_client(&url, api_key.as_str()).delete(&path).await
 }
 
 /// Gateway health check
 #[tauri::command]
-async fn gateway_health() -> Result<bool, String> {
-    GatewayClient::new(local_url(PORT_GATEWAY)).health_check().await
+async fn gateway_health(gw_url: tauri::State<'_, GatewayUrlState>) -> Result<bool, String> {
+    GatewayClient::new(read_gateway_url(&gw_url)).health_check().await
 }
 
 /// Download file to app cache directory
@@ -397,6 +568,42 @@ async fn show_in_folder(path: String) -> Result<(), String> {
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 fn main() {
+    // Install rustls 0.23 crypto provider (required by tokio-tungstenite 0.24).
+    // Must happen before any TLS connection is attempted.
+    // Returns Err if already installed (fine to ignore).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Capture panic location+message to ~/Library/Application Support/com.novaic.app/logs/panic.log
+    // before abort() is called (panic="abort" means no unwinding, but the hook still runs first).
+    std::panic::set_hook(Box::new(|info| {
+        let msg = match info.payload().downcast_ref::<&str>() {
+            Some(s) => s.to_string(),
+            None => match info.payload().downcast_ref::<String>() {
+                Some(s) => s.clone(),
+                None => "unknown panic payload".to_string(),
+            },
+        };
+        let location = info.location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+
+        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        let entry = format!("[{}] PANIC at {}: {}\n", ts, location, msg);
+
+        eprintln!("{}", entry.trim());
+
+        // Write to data dir
+        let home = std::env::var("HOME").unwrap_or_default();
+        let log_path = format!(
+            "{}/Library/Application Support/com.novaic.app/logs/panic.log",
+            home
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            use std::io::Write;
+            let _ = f.write_all(entry.as_bytes());
+        }
+    }));
+
     // Initialize tracing so embedded vmcontrol and all library crates emit logs
     tracing_subscriber::registry()
         .with(
@@ -455,7 +662,22 @@ fn main() {
             println!("[App] Data directory: {:?}", data_dir);
             append_startup_diagnostic(&data_dir, "app-bootstrap", "start", "tauri setup started");
 
-            // Managed state: only VmControl + CloudBridge
+            // ── Single-instance guard via PID file ────────────────────────────
+            // On startup: if a PID file exists and that process is still alive,
+            // kill it (stale / crashed previous instance). Then write our own PID.
+            // On exit (RunEvent::Exit): the PID file is deleted.
+            kill_stale_instance_if_any(&data_dir);
+            write_pid_file(&data_dir);
+
+            // Load or generate API key (persisted to data_dir/api_key.txt)
+            let api_key: ApiKeyState = Arc::new(load_or_generate_api_key(&data_dir));
+            app.manage(api_key.clone());
+
+            // Load gateway URL (persisted to data_dir/gateway_url.txt, defaults to local)
+            let gw_url: GatewayUrlState = Arc::new(std::sync::Mutex::new(load_gateway_url(&data_dir)));
+            app.manage(gw_url.clone());
+
+            // Managed state: VmControl + CloudBridge
             let vmcontrol = Arc::new(Mutex::new(VmControlEmbedded::new()));
             app.manage(vmcontrol.clone());
             
@@ -470,6 +692,8 @@ fn main() {
             let data_dir_for_task = data_dir.clone();
             let vmcontrol_for_task = vmcontrol.clone();
             let cloud_bridge_for_task = cloud_bridge.clone();
+            let api_key_for_task = api_key.clone();
+            let gw_url_for_task = gw_url.clone();
             
             tauri::async_runtime::spawn(async move {
                 let startup_begin = std::time::Instant::now();
@@ -478,21 +702,38 @@ fn main() {
                 append_startup_diagnostic(&data_dir_for_task, "cleanup-duration", "ok",
                     format!("{:?}", startup_begin.elapsed()));
 
-                // Ensure VmControl port is free before binding
-                let required_ports = [(PORT_VMCONTROL, "vmcontrol")];
-                if ensure_ports_available(&data_dir_for_task, &required_ports).is_err() {
-                            return;
-                }
-
-                // Start embedded VmControl
-                {
+                // Start embedded VmControl (port 0 → OS assigns a free port, no conflicts)
+                let port_rx = {
                     let mut vc = vmcontrol_for_task.lock().await;
-                    vc.start(data_dir_for_task.clone());
-                    append_startup_diagnostic(&data_dir_for_task, "vmcontrol", "started",
-                        "vmcontrol embedded server spawned");
-                }
+                    vc.start(data_dir_for_task.clone())
+                };
 
-                // Wait for VmControl to become healthy (non-blocking for rest of system)
+                append_startup_diagnostic(&data_dir_for_task, "vmcontrol", "started",
+                    "vmcontrol embedded server spawned (awaiting OS port assignment)");
+
+                // Wait for VmControl to bind and report its actual port (up to 10s)
+                let vmcontrol_url = match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    port_rx,
+                ).await {
+                    Ok(Ok(actual_port)) => {
+                        // Store the actual port back in VmControlEmbedded for base_url()
+                        vmcontrol_for_task.lock().await.port = actual_port;
+                        let url = local_url(actual_port);
+                        append_startup_diagnostic(&data_dir_for_task, "vmcontrol-port", "ok",
+                            format!("OS assigned port {}", actual_port));
+                        println!("[VmControl] OS assigned port {}", actual_port);
+                        url
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        append_startup_diagnostic(&data_dir_for_task, "vmcontrol-port", "error",
+                            "timed out waiting for port assignment — VM/Android features unavailable");
+                        eprintln!("[VmControl] Failed to get OS-assigned port");
+                        return;
+                    }
+                };
+
+                // Health-check VmControl on its actual port
                 const HEALTH_CHECK_INTERVAL_MS: u64 = 250;
                 let client = reqwest::Client::builder()
                     .connect_timeout(Duration::from_millis(500))
@@ -500,9 +741,8 @@ fn main() {
                     .build()
                     .unwrap_or_default();
 
-                let vc_health_url = format!("{}/health", local_url(PORT_VMCONTROL));
+                let vc_health_url = format!("{}/health", vmcontrol_url);
                 let phase_start = std::time::Instant::now();
-                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                 let vc_ready = wait_service_ready(
                     &client, &vc_health_url, "VmControl", 30, HEALTH_CHECK_INTERVAL_MS,
                 ).await;
@@ -529,7 +769,8 @@ fn main() {
                 // CloudBridge has built-in reconnect; it will retry until Gateway becomes available.
                 {
                     let mut cb = cloud_bridge_for_task.lock().await;
-                    cb.start(local_url(PORT_GATEWAY), local_url(PORT_VMCONTROL));
+                    let gateway_url = read_gateway_url(&gw_url_for_task);
+                    cb.start(gateway_url, vmcontrol_url, api_key_for_task.as_ref().clone());
                     append_startup_diagnostic(&data_dir_for_task, "cloud-bridge", "started",
                         "cloud bridge WebSocket connection starting");
                 }
@@ -555,7 +796,12 @@ fn main() {
             deploy_agent,
             // Gateway status / URL
             get_gateway_url,
+            set_gateway_url,
             get_gateway_status,
+            // VmControl URL (OS-assigned dynamic port)
+            get_vmcontrol_url,
+            // Auth
+            get_api_key,
             // Gateway API proxy
             gateway_get,
             gateway_post,
@@ -574,6 +820,11 @@ fn main() {
             match event {
                 tauri::RunEvent::Exit => {
                     println!("[App] Exiting, stopping services...");
+
+                    // Clean up PID file so next launch doesn't try to kill us
+                    if let Ok(data_dir) = app_handle.path().app_data_dir() {
+                        let _ = fs::remove_file(data_dir.join("app.pid"));
+                    }
                     
                     // Set cancel token first, preventing startup task from starting CloudBridge
                     if let Some(token) = app_handle.try_state::<StartupCancelToken>() {

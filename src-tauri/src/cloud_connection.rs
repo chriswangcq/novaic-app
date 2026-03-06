@@ -68,15 +68,21 @@ enum OutgoingMessage {
 ///
 /// - 自动重连（断线后等待 5 秒重试）
 /// - 收到 `shutdown` 信号时停止
+/// - `auth_token` 非空时追加 `?token=<key>` 供 Nginx 鉴权
 pub async fn start_cloud_connection(
     gateway_url: String,
     vmcontrol_url: String,
+    auth_token: String,
     shutdown: oneshot::Receiver<()>,
 ) {
-    let ws_url = gateway_url
+    let base = gateway_url
         .replace("http://", "ws://")
         .replace("https://", "wss://");
-    let ws_url = format!("{}/internal/pc/ws", ws_url);
+    let ws_url = if auth_token.is_empty() {
+        format!("{}/internal/pc/ws", base)
+    } else {
+        format!("{}/internal/pc/ws?token={}", base, auth_token)
+    };
 
     // 将 oneshot 转为共享通知（用 notify_one 存储 permit，避免两个 select! 之间的竞态）
     let notify = Arc::new(tokio::sync::Notify::new());
@@ -191,10 +197,14 @@ async fn connect_and_run(ws_url: &str, vmcontrol_url: &str, http_client: &reqwes
         let incoming: IncomingMessage = match serde_json::from_str(&text) {
             Ok(m) => m,
             Err(e) => {
+                // Safe truncation: find the last valid UTF-8 char boundary at or before 200
+                let preview_end = (0..=text.len().min(200)).rev()
+                    .find(|&i| text.is_char_boundary(i))
+                    .unwrap_or(0);
                 eprintln!(
                     "[CloudConn] Failed to parse message: {} — raw: {}",
                     e,
-                    &text[..text.len().min(200)]
+                    &text[..preview_end]
                 );
                 continue;
             }

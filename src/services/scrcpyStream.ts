@@ -5,7 +5,22 @@
  * 解决缩略图和全屏视图之间的连接冲突问题
  */
 
-import { WS_CONFIG, LOCAL_ENDPOINTS } from '../config';
+import { invoke } from '@tauri-apps/api/core';
+
+/** Cached VmControl base URL (OS-assigned dynamic port, resolved via Tauri command). */
+let _vmcontrolBaseUrl: string | null = null;
+
+async function getVmcontrolWsBase(): Promise<string> {
+  if (_vmcontrolBaseUrl) return _vmcontrolBaseUrl.replace(/^http/, 'ws');
+  try {
+    const url = await invoke<string>('get_vmcontrol_url');
+    _vmcontrolBaseUrl = url;
+    return url.replace(/^http/, 'ws');
+  } catch {
+    // fallback won't connect but avoids a crash
+    return 'ws://127.0.0.1:19996';
+  }
+}
 
 export interface DeviceInfo {
   device: string;
@@ -352,8 +367,18 @@ function connectStream(deviceSerial: string) {
   state.ppsData = null;
   state.decoderConfigured = false;
   state.pendingFrames = [];
-  
-  const wsUrl = `ws://${LOCAL_ENDPOINTS.WS_HOST}:${WS_CONFIG.VMCONTROL_PORT}/api/android/scrcpy?device=${deviceSerial}`;
+
+  // 通过 Tauri command 获取动态端口，再建连接
+  void getVmcontrolWsBase().then(wsBase => {
+    const wsUrl = `${wsBase}/api/android/scrcpy?device=${deviceSerial}`;
+    _doConnectStream(deviceSerial, wsUrl);
+  });
+}
+
+function _doConnectStream(deviceSerial: string, wsUrl: string) {
+  const state = streams.get(deviceSerial);
+  if (!state) return;
+
   const ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
   state.ws = ws;
