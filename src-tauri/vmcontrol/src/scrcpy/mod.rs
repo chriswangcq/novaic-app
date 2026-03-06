@@ -801,6 +801,8 @@ impl ScrcpyProxy {
                     Ok(Message::Text(text)) => {
                         if let Err(e) = handle_control_message(&mut control_stream, &text, screen_width, screen_height).await {
                             tracing::error!("Failed to handle control message: {}", e);
+                            // Control TCP stream broken – close WebSocket so frontend reconnects.
+                            break;
                         }
                     }
                     Ok(Message::Binary(data)) => {
