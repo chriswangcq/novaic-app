@@ -6,6 +6,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { Device, DeviceStatus } from '../types';
+import type { SubAgentMeta } from '../types/subagent';
 import { API_CONFIG } from '../config';
 import { fetchWithAuth } from './auth';
 
@@ -714,6 +715,14 @@ export const api = {
     const params = new URLSearchParams();
     params.set('agent_id', agentId);
     return invoke('gateway_get', { path: `/api/logs/subagents?${params.toString()}` });
+  },
+
+  /**
+   * Get subagent tree with full metadata for the given agent.
+   * @param agentId - Agent ID
+   */
+  async getSubagentTree(agentId: string): Promise<{ success: boolean; subagents: SubAgentMeta[] }> {
+    return invoke('gateway_get', { path: `/api/subagents?agent_id=${agentId}` });
   },
 
   /**

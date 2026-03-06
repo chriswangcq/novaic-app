@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { LogEntry } from '../../types';
@@ -8,6 +9,7 @@ import { LogCapsule } from './LogCapsule';
 import { SmartValue } from './SmartValue';
 import { formatTime } from '../../utils/time';
 import { getTrsFull, toFileUrl, normalizedToContent, type TrsContentItem } from '../../services/trs';
+import { buildSubAgentTree, type SubAgentNode } from '../../types/subagent';
 
 // ==================== LLM Message Types ====================
 
@@ -1392,6 +1394,7 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
     logSubagentId, 
     logSubagents, 
     setLogSubagentId,
+    appendSubagentLogs,
     hasMoreLogs,
     isLoadingMoreLogs,
     loadMoreLogs,
@@ -1473,7 +1476,55 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
   }, [logs.length, isLoadingMoreLogs, isAtBottom, scrollToBottom]);
 
   const groups = useMemo(() => groupLogsBySubagent(logs), [logs]);
-  const sortedCapsuleIds = useMemo(() => getSortedCapsuleIds(groups), [groups]);
+
+  // Build subagent tree for enriched rendering
+  const subAgentTree = useMemo(() => buildSubAgentTree(logSubagents), [logSubagents]);
+  // Map subagent_id -> SubAgentNode for quick lookup
+  const subAgentNodeMap = useMemo(() => {
+    const m = new Map<string, SubAgentNode>();
+    const traverse = (nodes: SubAgentNode[]) => {
+      for (const n of nodes) {
+        m.set(n.subagent_id, n);
+        traverse(n.children);
+      }
+    };
+    traverse(subAgentTree);
+    return m;
+  }, [subAgentTree]);
+
+  // Build a stable capsule ID list using the subAgentTree order as the source of truth.
+  // In-memory load state does NOT affect position — only tree order (created_at) matters.
+  const sortedCapsuleIds = useMemo(() => {
+    const result: string[] = [];
+    const seen = new Set<string>();
+
+    // DFS traversal of the tree to get stable order
+    const traverse = (nodes: SubAgentNode[]) => {
+      for (const n of nodes) {
+        const id = n.subagent_id;
+        if (!seen.has(id) && (n.log_count > 0 || groups.has(id))) {
+          result.push(id);
+          seen.add(id);
+        }
+        traverse(n.children);
+      }
+    };
+    traverse(subAgentTree);
+
+    // Prepend any in-memory groups not covered by tree metadata (e.g. legacy 'main' key).
+    // But skip 'main' (legacy default subagent_id) if the tree already has a main-type node,
+    // because those two groups represent the same agent and would cause visual duplication.
+    const treeHasMainNode = Array.from(subAgentNodeMap.values()).some(n => n.type === 'main');
+    getSortedCapsuleIds(groups).forEach(id => {
+      if (seen.has(id)) return;
+      if (id === 'main' && treeHasMainNode) return; // skip legacy 'main' duplicate
+      result.unshift(id);
+      seen.add(id);
+    });
+
+    return result;
+  }, [groups, subAgentTree]);
+
   const showSubagentBadge = logSubagentId === null && sortedCapsuleIds.length > 1;
 
   const toggleCapsuleExpand = useCallback((capsuleId: string) => {
@@ -1530,19 +1581,26 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
                 >
                   全部
                 </button>
-                {logSubagents.map(id => (
-                  <button
-                    key={id}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
-                      logSubagentId === id 
-                        ? 'bg-white/10 text-nb-text' 
-                        : 'text-nb-text-secondary hover:text-nb-text-muted hover:bg-nb-hover'
-                    }`}
-                    onClick={() => setLogSubagentId(id)}
-                  >
-                    {id}
-                  </button>
-                ))}
+                {logSubagents.map(sub => {
+                  const tabId = sub.subagent_id;
+                  const tabLabel = sub.task
+                    ? (sub.task.length > 20 ? sub.task.slice(0, 20) + '…' : sub.task)
+                    : (tabId.length > 8 ? tabId.slice(-8) : tabId);
+                  return (
+                    <button
+                      key={tabId}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
+                        logSubagentId === tabId
+                          ? 'bg-white/10 text-nb-text' 
+                          : 'text-nb-text-secondary hover:text-nb-text-muted hover:bg-nb-hover'
+                      }`}
+                      onClick={() => setLogSubagentId(tabId)}
+                      title={sub.task || tabId}
+                    >
+                      {tabLabel}
+                    </button>
+                  );
+                })}
               </div>
             </>
           )}
@@ -1590,23 +1648,43 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
               </div>
             )}
 
-            {/* 按 subagent 分组的胶囊列表 */}
+            {/* 按 subagent 分组的胶囊列表（支持树形嵌套） */}
             <div className="space-y-3">
               {sortedCapsuleIds.map(capsuleId => {
-                const capsuleLogs = groups.get(capsuleId)!;
-                const displayName = capsuleId === 'main' ? '主 Agent' : capsuleId;
+                const capsuleLogs = groups.get(capsuleId) ?? [];
+                const subNode = subAgentNodeMap.get(capsuleId);
+                const displayName = subNode?.task
+                  ? (subNode.task.length > 40 ? subNode.task.slice(0, 40) + '…' : subNode.task)
+                  : (capsuleId === 'main' ? '主 Agent' : capsuleId);
                 return (
                   <LogCapsule
                     key={capsuleId}
                     capsuleId={capsuleId}
                     displayName={displayName}
-                    isMain={capsuleId === 'main'}
+                    isMain={capsuleId === 'main' || capsuleId.startsWith('main-')}
                     logs={capsuleLogs}
+                    metaLogCount={subNode?.log_count}
                     isExpanded={isCapsuleExpanded(capsuleId)}
-                    onToggleExpand={() => toggleCapsuleExpand(capsuleId)}
+                    onToggleExpand={() => {
+                      // Only fetch if truly no in-memory logs for this capsule.
+                      // For main-type nodes: also skip if 'main' (legacy key) already has logs,
+                      // since they represent the same agent and re-fetching would duplicate entries.
+                      const noMemLogs = capsuleLogs.length === 0;
+                      const hasDbLogs = (subNode?.log_count ?? 0) > 0;
+                      const isMainNode = subNode?.type === 'main';
+                      const mainAlreadyInMem = isMainNode &&
+                        Array.from(groups.keys()).some(k => k === 'main' || k.startsWith('main-'));
+                      if (noMemLogs && hasDbLogs && !mainAlreadyInMem) {
+                        appendSubagentLogs(capsuleId);
+                      }
+                      toggleCapsuleExpand(capsuleId);
+                    }}
                     showSubagentBadge={showSubagentBadge}
                     expandedLogs={expandedLogs}
                     onToggleLogExpand={toggleLogExpand}
+                    depth={subNode?.depth ?? 0}
+                    taskLabel={subNode?.task}
+                    subagentStatus={subNode?.status}
                   />
                 );
               })}

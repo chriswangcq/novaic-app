@@ -5,7 +5,7 @@
  */
 
 import { useCallback } from 'react';
-import { Monitor, Cpu, ChevronDown, ChevronRight } from 'lucide-react';
+import { Monitor, Cpu, ChevronRight } from 'lucide-react';
 import { LogEntry } from '../../types';
 import { LogCard } from './ExecutionLog';
 import { useVirtualList } from '../../hooks/useVirtualList';
@@ -23,6 +23,14 @@ export interface LogCapsuleProps {
   showSubagentBadge: boolean;
   expandedLogs: Set<string>;
   onToggleLogExpand: (logKey: string) => void;
+  /** Nesting depth: 0 = main agent, 1 = sub-agent, 2 = sub-sub-agent */
+  depth?: number;
+  /** Human-readable task label from SubAgentMeta.task */
+  taskLabel?: string | null;
+  /** Status from SubAgentMeta.status */
+  subagentStatus?: string;
+  /** Log count from DB metadata (used when in-memory logs are empty but DB has logs) */
+  metaLogCount?: number;
 }
 
 export function LogCapsule({
@@ -35,6 +43,10 @@ export function LogCapsule({
   showSubagentBadge,
   expandedLogs,
   onToggleLogExpand,
+  depth = 0,
+  taskLabel,
+  subagentStatus,
+  metaLogCount,
 }: LogCapsuleProps) {
   const toggleLogExpand = useCallback(
     (logKey: string) => {
@@ -48,43 +60,86 @@ export function LogCapsule({
     (l) => l.status === 'failed' || l.data?.success === false || l.result?.error || l.data?.error
   );
 
+  const isUnloaded = logs.length === 0 && (metaLogCount ?? 0) > 0;
+  const displayCount = logs.length > 0 ? logs.length : (metaLogCount ?? 0);
+
+  const label = taskLabel
+    ? (taskLabel.length > 28 ? taskLabel.slice(0, 28) + '…' : taskLabel)
+    : displayName;
+
+  const statusDot = (() => {
+    const s = subagentStatus;
+    if (s === 'running') {
+      return <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" title="running" />;
+    }
+    if (s === 'completed') {
+      return <span className="text-[10px] text-green-400 shrink-0">✓</span>;
+    }
+    if (s === 'failed') {
+      return <span className="text-[10px] text-nb-error shrink-0">✗</span>;
+    }
+    if (s === 'cancelled') {
+      return <span className="text-[10px] text-nb-text-secondary line-through shrink-0">✗</span>;
+    }
+    if (s === 'sleeping' || s === 'awake') {
+      return <span className="w-2 h-2 rounded-full bg-nb-text-secondary/50 shrink-0" title={s} />;
+    }
+    return null;
+  })();
+
   return (
     <div
       data-capsule-id={capsuleId}
-      className={`rounded-xl border border-nb-border bg-nb-surface/80 overflow-hidden ${
-        isMain ? 'border-l-2 border-l-blue-500/50' : 'border-l-2 border-l-violet-500/50'
+      className={`rounded-xl border bg-nb-surface/80 overflow-hidden transition-opacity ${
+        isMain
+          ? 'border-nb-border border-l-2 border-l-blue-500/50'
+          : isUnloaded
+            ? 'border-nb-border/40 border-l-2 border-l-violet-500/20 opacity-60'
+            : 'border-nb-border border-l-2 border-l-violet-500/50'
       }`}
+      style={{ marginLeft: depth * 20 }}
     >
       {/* 标题栏 */}
       <div
-        className="bg-nb-surface-2/50 px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-nb-surface-2/70 transition-colors"
+        className={`px-3 py-2 flex items-center gap-2 cursor-pointer transition-colors ${
+          isUnloaded
+            ? 'bg-nb-surface-2/30 hover:bg-nb-surface-2/50'
+            : 'bg-nb-surface-2/50 hover:bg-nb-surface-2/70'
+        }`}
         onClick={onToggleExpand}
       >
         {isMain ? (
-          <Monitor size={14} className="text-nb-text-secondary shrink-0" />
+          <Monitor size={13} className="text-nb-text-secondary shrink-0" />
         ) : (
-          <Cpu size={14} className="text-nb-text-secondary shrink-0" />
+          <Cpu size={13} className={`shrink-0 ${isUnloaded ? 'text-nb-text-secondary/50' : 'text-nb-text-secondary'}`} />
         )}
-        <span className="text-sm font-medium text-nb-text truncate">{displayName}</span>
-        <span className="text-[11px] text-nb-text-muted shrink-0">{logs.length} 条</span>
+        {statusDot}
+        <span className={`text-[12px] font-medium truncate ${isUnloaded ? 'text-nb-text-muted' : 'text-nb-text'}`}>
+          {label}
+        </span>
+        <span className="text-[11px] text-nb-text-secondary shrink-0 tabular-nums">
+          {displayCount} 条
+        </span>
+        {isUnloaded && (
+          <span className="text-[10px] text-nb-text-secondary/50 shrink-0 border border-nb-border/40 rounded px-1 py-0.5">
+            未加载
+          </span>
+        )}
         {runningCount > 0 && (
-          <span className="text-[10px] text-nb-accent shrink-0">运行中●</span>
+          <span className="text-[10px] text-nb-accent shrink-0">● 运行中</span>
         )}
         {hasFailed && (
-          <span className="text-[10px] text-nb-error shrink-0">失败●</span>
+          <span className="text-[10px] text-nb-error shrink-0">✗ 失败</span>
         )}
         <div className="flex-1" />
-        <div className="shrink-0">
-          {isExpanded ? (
-            <ChevronDown size={14} className="text-nb-text-muted" />
-          ) : (
-            <ChevronRight size={14} className="text-nb-text-muted" />
-          )}
-        </div>
+        <ChevronRight
+          size={13}
+          className={`shrink-0 transition-transform text-nb-text-muted/60 ${isExpanded ? 'rotate-90' : ''}`}
+        />
       </div>
 
       {/* 内容区 */}
-      {isExpanded && (
+      {isExpanded && !isUnloaded && (
         <LogCapsuleContent
           logs={logs}
           showSubagentBadge={showSubagentBadge}

@@ -27,6 +27,7 @@ import {
   SetupProgressInfo,
   CandidateModel,
 } from '../types';
+import type { SubAgentMeta } from '../types/subagent';
 import { 
   API_CONFIG, 
   SSE_CONFIG, 
@@ -345,9 +346,11 @@ interface AppStore extends AppState {
   loadMoreLogs: () => Promise<void>;
   // Log subagent filtering
   logSubagentId: string | null;
-  logSubagents: string[];
+  logSubagents: SubAgentMeta[];
   setLogSubagentId: (id: string | null) => void;
   fetchLogSubagents: (agentId: string) => Promise<void>;
+  fetchSubagentTree: (agentId: string) => Promise<void>;
+  appendSubagentLogs: (subagentId: string) => Promise<void>;
   // Log input cache
   logInputCache: Map<number, any>;
   fetchLogInput: (logId: number) => Promise<any>;
@@ -409,7 +412,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   isLoadingMoreLogs: false,
   // Log subagent filtering
   logSubagentId: null as string | null,
-  logSubagents: [] as string[],
+  logSubagents: [] as SubAgentMeta[],
   // Log input cache
   logInputCache: new Map(),
 
@@ -1219,7 +1222,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   // SSE Connection: Execution logs（SSE 推送历史日志 + 更新通知）
   connectLogsSSE: async (agentId?: string) => {
-    const { currentAgentId, fetchLogSubagents } = get();
+    const { currentAgentId, fetchSubagentTree } = get();
     const targetAgentId = agentId || currentAgentId;
     if (!targetAgentId) {
       console.log('[Store] No agent selected, skipping Logs SSE connection');
@@ -1284,7 +1287,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // 清空现有日志，等待 SSE 推送历史数据
     set({ logs: [], lastLogId: null, hasMoreLogs: true });
     // 预先获取 subagent 列表
-    fetchLogSubagents(targetAgentId);
+    fetchSubagentTree(targetAgentId);
 
     const rawLogsSseUrl = `${API_CONFIG.GATEWAY_URL}/api/logs/stream?agent_id=${targetAgentId}`;
     console.log('[Store] Raw Logs SSE URL:', rawLogsSseUrl);
@@ -1346,7 +1349,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
           const { logSubagentId } = get();
           fetchAndMergeLogs(logSubagentId);
           // Refresh subagent list as well
-          fetchLogSubagents(targetAgentId);
+          fetchSubagentTree(targetAgentId);
+        } else if (data?.event === 'subagent_update') {
+          const { subagent_id, status, task, parent_subagent_id } = data;
+          set(state => {
+            const existing = state.logSubagents.find((s: SubAgentMeta) => s.subagent_id === subagent_id);
+            if (existing) {
+              return {
+                logSubagents: state.logSubagents.map((s: SubAgentMeta) =>
+                  s.subagent_id === subagent_id ? { ...s, status } : s
+                )
+              };
+            } else if (status === 'spawned') {
+              const newSub: SubAgentMeta = {
+                subagent_id,
+                parent_subagent_id: parent_subagent_id || null,
+                type: 'sub',
+                status: 'sleeping',
+                task: task || null,
+                progress: null,
+                error: null,
+                created_at: new Date().toISOString(),
+                log_count: 0,
+              };
+              return { logSubagents: [...state.logSubagents, newSub] };
+            }
+            return state;
+          });
         }
       } catch (e) {
         console.error('[Store] Failed to parse Log SSE message:', e);
@@ -1403,15 +1432,64 @@ export const useAppStore = create<AppStore>((set, get) => ({
     })();
   },
 
-  // Fetch list of subagents that have logs
+  // Fetch list of subagents that have logs (backward compat wrapper)
   fetchLogSubagents: async (agentId: string) => {
+    return get().fetchSubagentTree(agentId);
+  },
+
+  // Fetch subagent tree with full metadata
+  fetchSubagentTree: async (agentId: string) => {
     try {
-      const res = await api.getLogSubagents(agentId);
+      const res = await api.getSubagentTree(agentId);
       if (res.success) {
         set({ logSubagents: res.subagents || [] });
       }
     } catch (e) {
-      console.error('[Store] Failed to fetch log subagents:', e);
+      console.error('[Store] Failed to fetch subagent tree:', e);
+    }
+  },
+
+  // Merge logs for a specific subagent into the existing logs[] WITHOUT clearing state.
+  // Used by unloaded capsules so clicking them loads their logs without disrupting the tree.
+  appendSubagentLogs: async (subagentId: string) => {
+    const { currentAgentId, logSubagents } = get();
+    if (!currentAgentId) return;
+    try {
+      const res = await api.getLogEntries(currentAgentId, {
+        limit: 100,
+        subagent_id: subagentId,
+      });
+      if (res.success && res.entries.length) {
+        const newEntries: LogEntry[] = res.entries.map((e) => ({
+          id: e.id,
+          type: e.type as LogEntry['type'],
+          timestamp: e.timestamp,
+          data: (e.data || {}) as LogData,
+          subagent_id: e.subagent_id,
+          status: e.status,
+          kind: e.kind,
+          event_key: e.event_key,
+          input: e.input,
+          input_summary: e.input_summary,
+          result: e.result,
+          updated_at: e.updated_at,
+        }));
+        set((state) => {
+          // Merge by id to avoid duplicates, keep sort order by id desc
+          const byId = new Map(state.logs.map((l) => [l.id, l]));
+          newEntries.forEach((e) => byId.set(e.id, e));
+          const merged = Array.from(byId.values()).sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+          // Update log_count in logSubagents metadata so the capsule shows correct count
+          const updatedSubagents = logSubagents.map((s) =>
+            s.subagent_id === subagentId
+              ? { ...s, log_count: Math.max(s.log_count, newEntries.length) }
+              : s
+          );
+          return { logs: merged, logSubagents: updatedSubagents };
+        });
+      }
+    } catch (e) {
+      console.error('[Store] Failed to append subagent logs:', e);
     }
   },
 

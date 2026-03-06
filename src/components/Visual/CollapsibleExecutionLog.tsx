@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Terminal, Loader2, CheckCircle, XCircle, Brain, X, Maximize2 } from 'lucide-react';
 import { useAppStore } from '../../store';
@@ -197,10 +197,13 @@ function FullLogModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
 }
 
 export function CollapsibleExecutionLog({ className = '', isExpanded = false }: CollapsibleExecutionLogProps) {
-  const { logs, currentAgentId } = useAppStore();
+  const { logs, currentAgentId, logSubagents } = useAppStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('main');
   const [userPickedTab, setUserPickedTab] = useState(false);
+  const [autoCollapsed, setAutoCollapsed] = useState(false);
+  const autoCollapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runStartTimeRef = useRef<number | null>(null);
 
   // 按 subagent 分组，计算每组的最后活跃时间
   const { tabs, groupedLogs } = useMemo(() => {
@@ -225,6 +228,67 @@ export function CollapsibleExecutionLog({ className = '', isExpanded = false }: 
     const tabIds = groups.has('main') ? ['main', ...others] : others;
     return { tabs: tabIds, groupedLogs: groups };
   }, [logs]);
+
+  // Compute summary from logSubagents metadata
+  const runningCount = logSubagents.filter(s => s.status === 'running').length;
+  const completedCount = logSubagents.filter(s => s.status === 'completed').length;
+  const failedCount = logSubagents.filter(s => s.status === 'failed').length;
+  const totalSubs = logSubagents.filter(s => s.type === 'sub').length;
+
+  // Track run start time for elapsed display
+  useEffect(() => {
+    if (runningCount > 0 && runStartTimeRef.current === null) {
+      runStartTimeRef.current = Date.now();
+      setAutoCollapsed(false);
+      if (autoCollapseTimerRef.current) {
+        clearTimeout(autoCollapseTimerRef.current);
+        autoCollapseTimerRef.current = null;
+      }
+    }
+  }, [runningCount]);
+
+  // Auto-collapse when all done with no failures
+  useEffect(() => {
+    if (runningCount === 0 && failedCount === 0 && completedCount > 0 && logs.length > 0) {
+      if (!autoCollapseTimerRef.current) {
+        autoCollapseTimerRef.current = setTimeout(() => {
+          setAutoCollapsed(true);
+          autoCollapseTimerRef.current = null;
+        }, 3000);
+      }
+    } else if (runningCount > 0 || failedCount > 0) {
+      if (autoCollapseTimerRef.current) {
+        clearTimeout(autoCollapseTimerRef.current);
+        autoCollapseTimerRef.current = null;
+      }
+      setAutoCollapsed(false);
+    }
+  }, [runningCount, failedCount, completedCount, logs.length]);
+
+  // Reset run start time when agent changes
+  useEffect(() => {
+    runStartTimeRef.current = null;
+    setAutoCollapsed(false);
+    if (autoCollapseTimerRef.current) {
+      clearTimeout(autoCollapseTimerRef.current);
+      autoCollapseTimerRef.current = null;
+    }
+  }, [currentAgentId]);
+
+  // Build summary line text
+  const summaryLine = useMemo(() => {
+    const elapsed = runStartTimeRef.current ? Math.round((Date.now() - runStartTimeRef.current) / 1000) : 0;
+    if (failedCount > 0) {
+      return `✗ ${failedCount} failed · click to see details`;
+    }
+    if (runningCount > 0) {
+      return `● ${runningCount} running · ${completedCount} done${elapsed > 0 ? ` · ${elapsed}s` : ''}`;
+    }
+    if (completedCount > 0) {
+      return `✓ done · ${totalSubs} sub-agents${elapsed > 0 ? ` · ${elapsed}s` : ''}`;
+    }
+    return null;
+  }, [runningCount, completedCount, failedCount, totalSubs]);
 
   // 当有新 subagent 活跃（有 running 状态）时自动切换，除非用户手动选过
   useEffect(() => {
@@ -251,6 +315,39 @@ export function CollapsibleExecutionLog({ className = '', isExpanded = false }: 
   if (!currentAgentId || logs.length === 0) return null;
   if (isExpanded) return null;
 
+  // When auto-collapsed, show only a minimal summary bar
+  if (autoCollapsed) {
+    return (
+      <>
+        <div
+          className={`
+            absolute top-4 left-1/2 -translate-x-1/2 z-50
+            bg-nb-surface/95 backdrop-blur-md
+            rounded-full shadow-lg border border-nb-border
+            px-4 py-1.5 flex items-center gap-3 cursor-pointer
+            hover:bg-nb-surface transition-colors
+            ${className}
+          `}
+          onClick={() => setAutoCollapsed(false)}
+        >
+          {failedCount > 0 ? (
+            <span className="text-[11px] text-nb-error font-medium">{summaryLine}</span>
+          ) : (
+            <span className="text-[11px] text-nb-success font-medium">{summaryLine}</span>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); setIsModalOpen(true); }}
+            className="text-nb-text-secondary hover:text-nb-text transition-colors"
+            title="全屏查看"
+          >
+            <Maximize2 size={11} />
+          </button>
+        </div>
+        <FullLogModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      </>
+    );
+  }
+
   return (
     <>
       <div className={`
@@ -260,19 +357,40 @@ export function CollapsibleExecutionLog({ className = '', isExpanded = false }: 
         rounded-xl shadow-lg border border-nb-border
         ${className}
       `}>
+        {/* Summary bar (when logSubagents has data) */}
+        {summaryLine && (
+          <div className={`px-3 py-1.5 flex items-center gap-2 border-b border-nb-border/50 ${
+            failedCount > 0 ? 'bg-nb-error/5' : runningCount > 0 ? 'bg-nb-accent/5' : 'bg-nb-success/5'
+          }`}>
+            <span className={`text-[11px] font-medium ${
+              failedCount > 0 ? 'text-nb-error' : runningCount > 0 ? 'text-nb-accent' : 'text-nb-success'
+            }`}>
+              {summaryLine}
+            </span>
+          </div>
+        )}
+
         {/* Tab 栏 */}
         <div className="flex items-center gap-0.5 px-2 pt-2 pb-0">
           {tabs.map(tabId => {
             const tabLogs = groupedLogs.get(tabId) ?? [];
             const hasRunning = tabLogs.some(l => l.status === 'running');
             const isActive = activeTab === tabId;
+            // Find SubAgentMeta for task label
+            const subMeta = logSubagents.find(s => s.subagent_id === tabId);
+            const tabLabel = tabId === 'main'
+              ? '主 Agent'
+              : subMeta?.task
+                ? (subMeta.task.length > 20 ? subMeta.task.slice(0, 20) + '…' : subMeta.task)
+                : getSubagentLabel(tabId);
             return (
               <button
                 key={tabId}
                 onClick={() => { setActiveTab(tabId); setUserPickedTab(true); }}
+                title={subMeta?.task || tabId}
                 className={`
                   relative flex items-center gap-1.5 px-2.5 py-1 rounded-t-md text-[11px] font-medium
-                  transition-colors duration-150 shrink-0 max-w-[120px]
+                  transition-colors duration-150 shrink-0 max-w-[140px]
                   ${isActive
                     ? 'bg-nb-surface-2 text-nb-text border border-b-transparent border-nb-border'
                     : 'text-nb-text-secondary hover:text-nb-text hover:bg-nb-hover/50 border border-transparent'
@@ -284,7 +402,7 @@ export function CollapsibleExecutionLog({ className = '', isExpanded = false }: 
                   <span className="w-1.5 h-1.5 rounded-full bg-nb-accent animate-pulse shrink-0" />
                 )}
                 <span className="truncate">
-                  {tabId === 'main' ? '主 Agent' : getSubagentLabel(tabId)}
+                  {tabLabel}
                 </span>
                 <span className={`text-[9px] shrink-0 ${isActive ? 'text-nb-text-secondary' : 'text-nb-text-secondary/50'}`}>
                   {tabLogs.length}
