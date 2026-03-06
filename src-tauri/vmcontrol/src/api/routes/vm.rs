@@ -21,6 +21,8 @@ pub struct VmManager {
     pub id: String,
     pub name: String,
     pub qmp_socket: String,
+    pub ssh_port: u16,
+    pub vmuse_port: u16,
 }
 
 impl VmManager {
@@ -210,6 +212,8 @@ pub async fn register_vm(
         id: request.id.clone(),
         name: request.name.clone(),
         qmp_socket: request.qmp_socket.clone(),
+        ssh_port: 0,
+        vmuse_port: 0,
     };
     
     vms.insert(request.id.clone(), vm_manager);
@@ -511,6 +515,8 @@ pub async fn start_vm(
             id: agent_id.clone(),
             name: vm_name,
             qmp_socket: qmp_socket.clone(),
+            ssh_port: req.ssh_port,
+            vmuse_port: req.vmuse_port,
         });
     }
 

@@ -388,6 +388,7 @@ async fn set_gateway_url(
     fs::write(data_dir.join("gateway_url.txt"), &new_url)
         .map_err(|e| format!("Failed to save gateway URL: {}", e))?;
     *gw_url.lock().unwrap_or_else(|e| e.into_inner()) = new_url.clone();
+    std::env::set_var("NOVAIC_GATEWAY_URL", &new_url);
     println!("[Gateway] URL updated to: {}", new_url);
     Ok(())
 }
@@ -679,6 +680,8 @@ fn main() {
             // Load gateway URL (persisted to data_dir/gateway_url.txt, defaults to local)
             let gw_url: GatewayUrlState = Arc::new(std::sync::Mutex::new(load_gateway_url(&data_dir)));
             app.manage(gw_url.clone());
+            std::env::set_var("NOVAIC_GATEWAY_URL", read_gateway_url(&gw_url));
+            std::env::set_var("NOVAIC_API_KEY", api_key.as_str());
 
             // Managed state: VmControl + CloudBridge
             let vmcontrol = Arc::new(Mutex::new(VmControlEmbedded::new()));

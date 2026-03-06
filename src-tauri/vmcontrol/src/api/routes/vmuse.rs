@@ -1,15 +1,13 @@
 use axum::{
-    extract::{Path, Json as AxumJson},
+    extract::{Path, State, Json as AxumJson},
     http::StatusCode,
 };
 use crate::api::types::ApiError;
 use crate::qemu::GuestAgentClient;
+use crate::api::routes::CombinedState;
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value as JsonValue;
 use std::time::Duration;
-
-/// Gateway URL for internal API
-const GATEWAY_URL: &str = "http://127.0.0.1:19999";
 
 /// Default timeout for VMUSE requests (60 seconds)
 const VMUSE_TIMEOUT_SECS: u64 = 60;
@@ -152,6 +150,7 @@ pub async fn vmuse_proxy(
 /// - POST /api/vmuse/agent-123/desktop/screenshot
 /// - POST /api/vmuse/agent-123/shell/command
 pub async fn vmuse_agent_proxy(
+    State(state): State<CombinedState>,
     Path((agent_id, tool, operation)): Path<(String, String, String)>,
     AxumJson(body): AxumJson<JsonValue>,
 ) -> Result<AxumJson<JsonValue>, (StatusCode, AxumJson<ApiError>)> {
@@ -160,8 +159,8 @@ pub async fn vmuse_agent_proxy(
         agent_id, tool, operation
     );
 
-    // 1. Get agent info from Gateway to retrieve vmuse port
-    let vmuse_port = get_agent_vmuse_port(&agent_id).await?;
+    // 1. Resolve vmuse port from local vmcontrol state first; fall back to Gateway.
+    let vmuse_port = get_agent_vmuse_port(&state, &agent_id).await?;
     
     tracing::info!(
         "Got vmuse port {} for agent {}",
@@ -242,9 +241,31 @@ pub async fn vmuse_agent_proxy(
 }
 
 /// Get the vmuse port for an agent from Gateway
-async fn get_agent_vmuse_port(agent_id: &str) -> Result<u16, (StatusCode, AxumJson<ApiError>)> {
-    let gateway_url = format!("{}/internal/agents/{}", GATEWAY_URL, agent_id);
-    
+async fn get_agent_vmuse_port(
+    state: &CombinedState,
+    agent_id: &str,
+) -> Result<u16, (StatusCode, AxumJson<ApiError>)> {
+    {
+        let vms = state.vms.read().await;
+        if let Some(vm) = vms.get(agent_id) {
+            if vm.vmuse_port > 0 {
+                tracing::info!(
+                    "Using vmuse port {} for agent {} from local vmcontrol state",
+                    vm.vmuse_port, agent_id
+                );
+                return Ok(vm.vmuse_port);
+            }
+        }
+    }
+
+    let gateway_base = std::env::var("NOVAIC_GATEWAY_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:19999".to_string());
+    let gateway_url = format!(
+        "{}/api/agents/{}",
+        gateway_base.trim_end_matches('/'),
+        agent_id
+    );
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -258,9 +279,14 @@ async fn get_agent_vmuse_port(agent_id: &str) -> Result<u16, (StatusCode, AxumJs
             )
         })?;
 
-    let response = client
-        .get(&gateway_url)
-        .send()
+    let mut request = client.get(&gateway_url);
+    if let Ok(api_key) = std::env::var("NOVAIC_API_KEY") {
+        if !api_key.trim().is_empty() {
+            request = request.bearer_auth(api_key.trim());
+        }
+    }
+
+    let response = request.send()
         .await
         .map_err(|e| {
             tracing::error!("Failed to query Gateway for agent {}: {}", agent_id, e);
@@ -300,13 +326,35 @@ async fn get_agent_vmuse_port(agent_id: &str) -> Result<u16, (StatusCode, AxumJs
         )
     })?;
 
-    // Extract vmuse port from response: vm.ports.vmuse
     let vmuse_port = agent_info
-        .get("vm")
-        .and_then(|vm| vm.get("ports"))
-        .and_then(|ports| ports.get("vmuse"))
-        .and_then(|port| port.as_u64())
-        .map(|p| p as u16)
+        .get("devices")
+        .and_then(|devices| devices.as_array())
+        .and_then(|devices| {
+            devices.iter().find_map(|device| {
+                let is_linux = device
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .map(|t| t == "linux")
+                    .unwrap_or(false);
+                if !is_linux {
+                    return None;
+                }
+                device
+                    .get("ports")
+                    .and_then(|ports| ports.get("vmuse"))
+                    .and_then(|port| port.as_u64())
+                    .map(|p| p as u16)
+            })
+        })
+        .or_else(|| {
+            agent_info
+                .get("vm")
+                .and_then(|vm| vm.get("ports"))
+                .and_then(|ports| ports.get("vmuse"))
+                .and_then(|port| port.as_u64())
+                .map(|p| p as u16)
+        })
+        .filter(|port| *port > 0)
         .ok_or_else(|| {
             tracing::error!(
                 "Agent {} does not have vmuse port configured. Response: {:?}",

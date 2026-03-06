@@ -26,7 +26,7 @@ declare global {
 const rawGatewayUrl = import.meta.env.VITE_GATEWAY_URL?.trim();
 if (!rawGatewayUrl) {
   throw new Error(
-    'SPLIT_CONFIG_ERROR: VITE_GATEWAY_URL is required in split-only mode (example: http://127.0.0.1:19999)'
+    'SPLIT_CONFIG_ERROR: VITE_GATEWAY_URL is required in split-only mode (example: https://api.example.com)'
   );
 }
 

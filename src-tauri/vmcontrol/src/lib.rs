@@ -67,6 +67,8 @@ pub async fn auto_register_running_vms(state: api::routes::AppState) {
                 id: vm_id.clone(),
                 name: format!("novaic-vm-{}", vm_id),
                 qmp_socket: socket_path,
+                ssh_port: 0,
+                vmuse_port: 0,
             };
 
             let mut vms = state.write().await;
