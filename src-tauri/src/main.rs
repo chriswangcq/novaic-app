@@ -468,12 +468,13 @@ async fn gateway_health(gw_url: tauri::State<'_, GatewayUrlState>) -> Result<boo
     GatewayClient::new(read_gateway_url(&gw_url)).health_check().await
 }
 
-/// Download file to app cache directory
+/// Download file to app cache directory (with API key authentication)
 #[tauri::command]
 async fn download_file_to_cache(
     app: AppHandle,
     url: String,
     filename: String,
+    api_key: tauri::State<'_, ApiKeyState>,
 ) -> Result<serde_json::Value, String> {
     let cache_dir = app.path().app_cache_dir()
         .map_err(|e| format!("Failed to get cache dir: {}", e))?;
@@ -499,7 +500,9 @@ async fn download_file_to_cache(
     }
     
     let client = reqwest::Client::new();
-    let response = client.get(&url).send().await
+    let response = client.get(&url)
+        .header("Authorization", format!("Bearer {}", api_key.as_str()))
+        .send().await
         .map_err(|e| format!("Download failed: {}", e))?;
     
     if !response.status().is_success() {

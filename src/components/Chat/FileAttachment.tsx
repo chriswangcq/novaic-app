@@ -7,11 +7,11 @@
  * 3. 显示文件名、大小、下载进度
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { FileText, Download, Loader2, ExternalLink, Image as ImageIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-shell';
 import { toFileUrl } from '../../services/trs';
+import { getApiKey } from '../../services/auth';
 import type { Attachment } from '../../types';
 
 interface FileAttachmentProps {
@@ -68,12 +68,27 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
   const [downloadState, setDownloadState] = useState<DownloadState>('idle');
   const [localPath, setLocalPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authUrl, setAuthUrl] = useState<string>('');
 
   const url = attachment.url ?? attachment.path;
   const isImage = (attachment.mime_type ?? attachment.type ?? '').startsWith('image/');
   const displayUrl = url ? toFileUrl(url) : '';
   const filename = attachment.name || url?.split('/').pop() || 'file';
   const fileSize = attachment.size || 0;
+
+  // 为图片 URL 添加认证 token
+  useEffect(() => {
+    if (isImage && displayUrl) {
+      getApiKey().then(key => {
+        if (key) {
+          const sep = displayUrl.includes('?') ? '&' : '?';
+          setAuthUrl(`${displayUrl}${sep}token=${encodeURIComponent(key)}`);
+        } else {
+          setAuthUrl(displayUrl);
+        }
+      });
+    }
+  }, [isImage, displayUrl]);
 
   // 下载文件到本地缓存
   const handleDownload = useCallback(async () => {
@@ -119,30 +134,66 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
     }
   }, [localPath]);
 
-  // 在浏览器中打开 URL
-  const handleOpenUrl = useCallback(async (e: React.MouseEvent) => {
-    e.preventDefault();
+  // 下载并用系统应用打开（图片和文件通用）
+  const handleDownloadAndOpen = useCallback(async () => {
     if (!displayUrl) return;
-    try {
-      await open(displayUrl);
-    } catch (err) {
-      console.error('Failed to open URL:', err);
+    
+    // 如果已下载，直接打开
+    if (localPath) {
+      try {
+        await invoke('open_file', { path: localPath });
+      } catch (err) {
+        console.error('Open file failed:', err);
+      }
+      return;
     }
-  }, [displayUrl]);
+    
+    // 下载后打开
+    setDownloadState('downloading');
+    try {
+      const result = await invoke<{ success: boolean; path?: string; error?: string }>('download_file_to_cache', {
+        url: displayUrl,
+        filename: filename,
+      });
+      
+      if (result.success && result.path) {
+        setLocalPath(result.path);
+        setDownloadState('downloaded');
+        // 下载完成后自动用系统应用打开
+        await invoke('open_file', { path: result.path });
+      } else {
+        throw new Error(result.error || '下载失败');
+      }
+    } catch (err) {
+      console.error('Download and open failed:', err);
+      setDownloadState('error');
+    }
+  }, [displayUrl, filename, localPath]);
 
-  // 图片类型：显示缩略图，点击在浏览器中打开
+  // 图片类型：显示缩略图，点击下载后用系统应用打开
   if (isImage && displayUrl) {
     return (
       <div 
-        onClick={handleOpenUrl}
-        className="block max-w-[200px] rounded-lg overflow-hidden border border-nb-border hover:border-nb-accent transition-colors cursor-pointer"
+        onClick={handleDownloadAndOpen}
+        className="block max-w-[200px] rounded-lg overflow-hidden border border-nb-border hover:border-nb-accent transition-colors cursor-pointer relative"
       >
-        <img
-          src={displayUrl}
-          alt={filename}
-          className="max-h-[150px] w-auto object-contain bg-nb-surface"
-          loading="lazy"
-        />
+        {authUrl ? (
+          <img
+            src={authUrl}
+            alt={filename}
+            className="max-h-[150px] w-auto object-contain bg-nb-surface"
+            loading="lazy"
+          />
+        ) : (
+          <div className="h-[100px] w-[150px] bg-nb-surface flex items-center justify-center">
+            <Loader2 className="w-6 h-6 text-nb-text-muted animate-spin" />
+          </div>
+        )}
+        {downloadState === 'downloading' && (
+          <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+            <Loader2 className="w-6 h-6 text-white animate-spin" />
+          </div>
+        )}
       </div>
     );
   }
