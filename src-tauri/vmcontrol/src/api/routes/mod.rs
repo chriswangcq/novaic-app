@@ -116,6 +116,7 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>, process_state: 
         .route("/api/vms/:id", get(vm::get_vm))
         .route("/api/vms/:id/start", post(vm::start_vm))
         .route("/api/vms/:id/stop", post(vm::stop_vm))
+        .route("/api/vms/:id/ssh-exec", post(vm::ssh_exec))
         .route("/api/vms/:id/pause", post(vm::pause_vm))
         .route("/api/vms/:id/resume", post(vm::resume_vm))
         .route("/api/vms/:id/shutdown", post(vm::shutdown_vm))

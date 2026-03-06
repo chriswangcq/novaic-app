@@ -8,10 +8,32 @@ use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::sleep;
+use serde::{Deserialize, Serialize};
 
 use crate::api::types::{VmInfo, ApiError, RegisterVmRequest, StartVmRequest, StartVmResponse};
 use crate::qemu::QmpClient;
 use super::CombinedState;
+
+/// SSH command execution request
+#[derive(Debug, Deserialize)]
+pub struct SshExecRequest {
+    pub command: String,
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+}
+
+fn default_timeout() -> u64 { 30 }
+
+/// SSH command execution response
+#[derive(Debug, Serialize)]
+pub struct SshExecResponse {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
 /// Shared VM state across API handlers
 pub type VmState = Arc<RwLock<HashMap<String, VmManager>>>;
@@ -620,4 +642,121 @@ pub async fn stop_vm(
         "status": "stopped",
         "agent_id": id
     })))
+}
+
+/// Execute SSH command on a VM
+pub async fn ssh_exec(
+    State(state): State<CombinedState>,
+    Path(id): Path<String>,
+    Json(req): Json<SshExecRequest>,
+) -> Result<Json<SshExecResponse>, (StatusCode, Json<ApiError>)> {
+    tracing::info!("[ssh_exec] VM {}: command={:?}, timeout={}", id, req.command, req.timeout);
+
+    if req.command.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError { error: "command is required".to_string() })
+        ));
+    }
+
+    // Get SSH port from VM state
+    let ssh_port = {
+        let vms = state.vms.read().await;
+        let vm = vms.get(&id).ok_or((
+            StatusCode::NOT_FOUND,
+            Json(ApiError { error: format!("VM {} not found", id) })
+        ))?;
+        
+        if vm.ssh_port == 0 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError { error: "VM has no SSH port configured".to_string() })
+            ));
+        }
+        vm.ssh_port
+    };
+
+    // Find SSH private key
+    let data_dir = {
+        let from_env = std::env::var("NOVAIC_DATA_DIR").ok()
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from);
+        match from_env {
+            Some(p) => p,
+            None => {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+                std::path::PathBuf::from(home)
+                    .join("Library/Application Support/com.novaic.app")
+            }
+        }
+    };
+
+    let ssh_key_path = data_dir.join("ssh").join("id_rsa");
+    if !ssh_key_path.exists() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: format!("SSH private key not found: {}", ssh_key_path.display()) })
+        ));
+    }
+
+    // Build SSH command
+    let ssh_args = vec![
+        "-i".to_string(), ssh_key_path.to_string_lossy().to_string(),
+        "-o".to_string(), "StrictHostKeyChecking=no".to_string(),
+        "-o".to_string(), "UserKnownHostsFile=/dev/null".to_string(),
+        "-o".to_string(), format!("ConnectTimeout={}", req.timeout.min(10)),
+        "-p".to_string(), ssh_port.to_string(),
+        "ubuntu@127.0.0.1".to_string(),
+        req.command.clone(),
+    ];
+
+    tracing::debug!("[ssh_exec] Running: ssh {:?}", ssh_args);
+
+    // Execute SSH command with timeout
+    let timeout_duration = Duration::from_secs(req.timeout);
+    let result = tokio::time::timeout(timeout_duration, async {
+        tokio::process::Command::new("ssh")
+            .args(&ssh_args)
+            .output()
+            .await
+    }).await;
+
+    match result {
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let exit_code = output.status.code().unwrap_or(-1);
+            
+            tracing::info!("[ssh_exec] VM {}: exit_code={}, stdout_len={}, stderr_len={}", 
+                id, exit_code, stdout.len(), stderr.len());
+            
+            Ok(Json(SshExecResponse {
+                success: output.status.success(),
+                stdout,
+                stderr,
+                exit_code,
+                error: None,
+            }))
+        }
+        Ok(Err(e)) => {
+            tracing::error!("[ssh_exec] VM {}: spawn error: {}", id, e);
+            Ok(Json(SshExecResponse {
+                success: false,
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: -1,
+                error: Some(format!("Failed to execute SSH: {}", e)),
+            }))
+        }
+        Err(_) => {
+            tracing::error!("[ssh_exec] VM {}: timeout after {}s", id, req.timeout);
+            Ok(Json(SshExecResponse {
+                success: false,
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: -1,
+                error: Some(format!("SSH command timed out after {}s", req.timeout)),
+            }))
+        }
+    }
 }
