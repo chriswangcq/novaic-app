@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState, memo, useCallback } from 'react';
-import { Play, Loader2, Smartphone, Square } from 'lucide-react';
+import { Play, Loader2, Smartphone } from 'lucide-react';
 import {
   subscribeToStream,
   sendControlMessage,
@@ -50,7 +50,6 @@ function ScrcpyViewComponent({
   const [status, setStatus] = useState<StreamStatus>('disconnected');
   const [errorMsg, setErrorMsg] = useState('');
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
-  const [fps, setFps] = useState(0);
   const frameCountRef = useRef(0);
   const lastFpsUpdateRef = useRef(Date.now());
   const retryCountRef = useRef(0);
@@ -75,15 +74,11 @@ function ScrcpyViewComponent({
     // 复制帧
     ctx.drawImage(sourceCanvas, 0, 0);
     
-    // 更新 FPS（仅在非缩略图模式）
-    if (!isThumbnail) {
-      frameCountRef.current++;
-      const now = Date.now();
-      if (now - lastFpsUpdateRef.current >= 1000) {
-        setFps(frameCountRef.current);
-        frameCountRef.current = 0;
-        lastFpsUpdateRef.current = now;
-      }
+    frameCountRef.current++;
+    const now = Date.now();
+    if (now - lastFpsUpdateRef.current >= 1000) {
+      frameCountRef.current = 0;
+      lastFpsUpdateRef.current = now;
     }
   }, [isThumbnail]);
   
@@ -350,52 +345,6 @@ function ScrcpyViewComponent({
   
   return (
     <div className={`flex flex-col h-full bg-black ${className || ''}`}>
-      {/* 工具栏 */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-700">
-        <div className="flex items-center gap-2">
-          <Smartphone size={16} className="text-green-500" />
-          <span className="text-sm text-gray-300">
-            {deviceInfo?.device || deviceSerial || 'Android Device'}
-          </span>
-          {status === 'connected' && deviceInfo && (
-            <>
-              <span className="text-xs text-gray-500">
-                {deviceInfo.width}x{deviceInfo.height}
-              </span>
-              <span className="text-xs text-blue-400">
-                {deviceInfo.codec.toUpperCase()}
-              </span>
-              <span className="text-xs text-green-500">
-                {fps} FPS
-              </span>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {status === 'connected' ? (
-            <button
-              onClick={() => {
-                // 断开连接 - 这里我们不真正断开，因为其他组件可能还在使用
-                // 只是关闭这个视图
-              }}
-              className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors flex items-center gap-1"
-            >
-              <Square size={12} />
-              断开
-            </button>
-          ) : (
-            <button
-              onClick={connect}
-              disabled={status === 'connecting' || !isWebCodecsSupported}
-              className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50 flex items-center gap-1"
-            >
-              <Play size={12} />
-              连接
-            </button>
-          )}
-        </div>
-      </div>
-      
       {/* 视频区域 */}
       <div className="flex-1 relative overflow-hidden bg-black">
         {renderContent()}

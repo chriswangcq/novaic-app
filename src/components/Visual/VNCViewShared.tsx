@@ -48,10 +48,8 @@ function VNCViewSharedComponent({
   const [errorMsg, setErrorMsg] = useState('');
   const [isStarting, setIsStarting] = useState(false);
   
-  // FPS 计算（仅在非缩略图模式）
   const frameCountRef = useRef(0);
   const lastFpsUpdateRef = useRef(Date.now());
-  const [fps, setFps] = useState(0);
   
   // 从共享 canvas 复制帧到本地 canvas
   const copyFrame = useCallback((sourceCanvas: HTMLCanvasElement) => {
@@ -70,15 +68,11 @@ function VNCViewSharedComponent({
     // 复制帧
     ctx.drawImage(sourceCanvas, 0, 0);
     
-    // 更新 FPS（仅在非缩略图模式）
-    if (!isThumbnail) {
-      frameCountRef.current++;
-      const now = Date.now();
-      if (now - lastFpsUpdateRef.current >= 1000) {
-        setFps(frameCountRef.current);
-        frameCountRef.current = 0;
-        lastFpsUpdateRef.current = now;
-      }
+    frameCountRef.current++;
+    const now = Date.now();
+    if (now - lastFpsUpdateRef.current >= 1000) {
+      frameCountRef.current = 0;
+      lastFpsUpdateRef.current = now;
     }
   }, [isThumbnail]);
   
@@ -142,12 +136,6 @@ function VNCViewSharedComponent({
     }
   }, [agentId, isStarting]);
   
-  // 手动重连
-  const reconnect = useCallback(() => {
-    if (agentId) {
-      reconnectVNCStream(agentId);
-    }
-  }, [agentId]);
   
   // 全屏模式：将 RFB 容器附加到我们的容器中
   useEffect(() => {
@@ -242,41 +230,6 @@ function VNCViewSharedComponent({
   
   return (
     <div className={`flex flex-col h-full bg-black ${className || ''}`}>
-      {/* 工具栏 */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-900 border-b border-gray-700">
-        <div className="flex items-center gap-2">
-          <Monitor size={16} className="text-blue-500" />
-          <span className="text-sm text-gray-300">
-            Linux VM
-          </span>
-          {status === 'connected' && (
-            <>
-              <span className="text-xs text-green-500">
-                {fps} FPS
-              </span>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {status === 'connected' ? (
-            <button
-              onClick={reconnect}
-              className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
-            >
-              重连
-            </button>
-          ) : (
-            <button
-              onClick={startVm}
-              disabled={status === 'connecting' || isStarting}
-              className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50 flex items-center gap-1"
-            >
-              <Play size={12} />
-              启动
-            </button>
-          )}
-        </div>
-      </div>
       
       {/* 视频区域 */}
       <div className="flex-1 relative overflow-hidden bg-black">

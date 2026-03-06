@@ -80,9 +80,6 @@ function App() {
     setDrawerWidth,
     drawerOpen,
     setDrawerOpen,
-    sidebarWidth,
-    setSidebarWidth,
-    sidebarMode,
   } = useAppStore();
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
@@ -300,17 +297,13 @@ function App() {
         onAgentCreated={handleAgentCreated}
       />
       
-      {/* Main Container - LayoutContainer 提供 AgentDrawer + Resizer + main */}
+      {/* Main Container - LayoutContainer 提供 AgentDrawer + Resizer + main + DeviceFloatingPanel */}
       <LayoutContainer
         drawerWidth={drawerWidth}
-        sidebarWidth={sidebarWidth}
         drawerOpen={drawerOpen}
-        sidebarMode={sidebarMode}
         onDrawerResize={(delta) => setDrawerWidth(useAppStore.getState().drawerWidth + delta)}
-        onSidebarResize={(delta) => setSidebarWidth(useAppStore.getState().sidebarWidth - delta)}
         onDrawerClose={() => setDrawerOpen(false)}
         onDrawerDoubleClick={() => setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
-        onSidebarDoubleClick={() => setSidebarWidth(LAYOUT_CONFIG.SIDEBAR_WIDTH)}
         onSelectAgent={handleSelectAgent}
         onCreateNew={() => setCreateAgentModalOpen(true)}
       />

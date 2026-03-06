@@ -1,43 +1,35 @@
 /**
  * LayoutContainer - 主布局容器
  *
- * 结构：AgentDrawer | Resizer | main(ChatPanel | Resizer | DeviceSidebar)
- * - 使用 useIsLgOrAbove() 控制 Resizer 显示：lg 以下 Drawer/Sidebar 为 overlay，不渲染 Resizer
+ * 结构：AgentDrawer | Resizer | main(ChatPanel) + DeviceFloatingPanel
+ * - 使用 useIsLgOrAbove() 控制 Resizer 显示：lg 以下 Drawer 为 overlay，不渲染 Resizer
  * - AgentDrawer 传入 resizerPlacement="external"，由本组件提供 Drawer Resizer
- * - CSS 变量 --drawer-width、--sidebar-width 供子组件或未来样式覆盖使用
+ * - DeviceFloatingPanel 作为浮窗显示在右下角
+ * - CSS 变量 --drawer-width 供子组件或未来样式覆盖使用
  */
 
 import { AgentDrawer } from './AgentDrawer';
 import { Resizer } from './Resizer';
 import { ChatPanel } from '../Chat/ChatPanel';
-import { DeviceSidebar } from './DeviceSidebar';
+import { DeviceFloatingPanel } from './DeviceFloatingPanel';
 import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
-import type { SidebarMode } from '../../types';
 
 interface LayoutContainerProps {
   drawerWidth: number;
-  sidebarWidth: number;
   drawerOpen: boolean;
-  sidebarMode?: SidebarMode;
   onDrawerResize: (delta: number) => void;
-  onSidebarResize: (delta: number) => void;
   onDrawerClose: () => void;
   onDrawerDoubleClick?: () => void;
-  onSidebarDoubleClick?: () => void;
   onSelectAgent: (agentId: string, needsSetup: boolean) => void;
   onCreateNew: () => void;
 }
 
 export function LayoutContainer({
   drawerWidth,
-  sidebarWidth,
   drawerOpen,
-  sidebarMode = 'expanded',
   onDrawerResize,
-  onSidebarResize,
   onDrawerClose,
   onDrawerDoubleClick,
-  onSidebarDoubleClick,
   onSelectAgent,
   onCreateNew,
 }: LayoutContainerProps) {
@@ -48,9 +40,7 @@ export function LayoutContainer({
       className="flex-1 flex overflow-hidden"
       style={
         {
-          // 供子组件或未来样式覆盖使用，当前 AgentDrawer/DeviceSidebar 从 props 取宽
           '--drawer-width': `${drawerWidth}px`,
-          '--sidebar-width': `${sidebarWidth}px`,
         } as React.CSSProperties
       }
     >
@@ -72,22 +62,15 @@ export function LayoutContainer({
         />
       )}
 
-      {/* Main: ChatPanel | Resizer | DeviceSidebar */}
+      {/* Main: ChatPanel */}
       <main className="flex-1 flex overflow-hidden min-w-0">
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <ChatPanel />
         </div>
-
-        {isLgOrAbove && sidebarMode !== 'hidden' && (
-          <Resizer
-            axis="horizontal"
-            onResize={onSidebarResize}
-            onDoubleClick={onSidebarDoubleClick ?? (() => {})}
-          />
-        )}
-
-        <DeviceSidebar sidebarWidth={sidebarWidth} />
       </main>
+
+      {/* 设备浮窗 - fixed 定位，不占布局空间 */}
+      <DeviceFloatingPanel />
     </div>
   );
 }

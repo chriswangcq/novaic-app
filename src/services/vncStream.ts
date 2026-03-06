@@ -157,7 +157,7 @@ async function connectStream(agentId: string) {
     });
     
     rfb.scaleViewport = true;
-    rfb.clipViewport = true;
+    rfb.clipViewport = false;  // conflicts with scaleViewport
     rfb.resizeSession = false;
     rfb.viewOnly = state.viewOnly;
     rfb.qualityLevel = 6;

@@ -11,6 +11,9 @@ use tokio::time::sleep;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
+
 use crate::api::types::{VmInfo, ApiError, RegisterVmRequest, StartVmRequest, StartVmResponse};
 use crate::qemu::QmpClient;
 use super::CombinedState;
@@ -92,23 +95,37 @@ fn discover_running_vms() -> Vec<(String, PathBuf)> {
     vms
 }
 
-/// Check if a specific VM is running by verifying QMP socket exists and is connectable
-async fn is_vm_running(agent_id: &str) -> Option<PathBuf> {
+/// Check if a specific VM is running by verifying QMP socket exists
+/// Note: We don't try to connect because QMP only allows one client at a time
+fn is_vm_running_sync(agent_id: &str) -> Option<PathBuf> {
     let qmp_socket = PathBuf::from(format!("{}/{}{}{}", SOCKET_DIR, QMP_SOCKET_PREFIX, agent_id, QMP_SOCKET_SUFFIX));
     
     if !qmp_socket.exists() {
+        tracing::debug!("[is_vm_running] Socket not found: {}", qmp_socket.display());
         return None;
     }
 
-    // Verify socket is actually connectable (QEMU process is alive)
-    match QmpClient::connect(qmp_socket.to_str().unwrap_or_default()).await {
-        Ok(_) => Some(qmp_socket),
-        Err(_) => {
-            // Socket file exists but not connectable - stale socket
-            tracing::warn!("[VM] Stale QMP socket found: {}", qmp_socket.display());
+    // Check if the socket file is a valid socket (not a stale regular file)
+    match std::fs::metadata(&qmp_socket) {
+        Ok(meta) => {
+            if meta.file_type().is_socket() {
+                tracing::debug!("[is_vm_running] VM {} is running (socket exists)", agent_id);
+                Some(qmp_socket)
+            } else {
+                tracing::warn!("[is_vm_running] {} exists but is not a socket", qmp_socket.display());
+                None
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[is_vm_running] Cannot stat {}: {}", qmp_socket.display(), e);
             None
         }
     }
+}
+
+/// Async wrapper for is_vm_running_sync (for API compatibility)
+async fn is_vm_running(agent_id: &str) -> Option<PathBuf> {
+    is_vm_running_sync(agent_id)
 }
 
 /// Get SSH port from Gateway API
@@ -166,14 +183,16 @@ pub async fn list_vms(
     let mut list = Vec::new();
 
     for (agent_id, qmp_socket) in discovered {
-        // Verify each socket is actually connectable
-        if let Ok(_) = QmpClient::connect(qmp_socket.to_str().unwrap_or_default()).await {
-            list.push(VmInfo {
-                id: agent_id.clone(),
-                name: format!("VM {}", &agent_id[..agent_id.len().min(8)]),
-                status: "running".to_string(),
-                qmp_socket: qmp_socket.to_string_lossy().to_string(),
-            });
+        // Just check if socket file is valid (don't connect - QMP is single-client)
+        if let Ok(meta) = std::fs::metadata(&qmp_socket) {
+            if meta.file_type().is_socket() {
+                list.push(VmInfo {
+                    id: agent_id.clone(),
+                    name: format!("VM {}", &agent_id[..agent_id.len().min(8)]),
+                    status: "running".to_string(),
+                    qmp_socket: qmp_socket.to_string_lossy().to_string(),
+                });
+            }
         }
     }
 

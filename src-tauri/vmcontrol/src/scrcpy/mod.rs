@@ -37,13 +37,32 @@ const SCRCPY_VERSION: &str = "3.3.4";
 /// Resources 目录是其兄弟目录：`.app/Contents/Resources`
 fn get_bundled_resources_dir() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    // Contents/MacOS/novaic → Contents/Resources
+    
+    // 1. Production: Contents/MacOS/novaic → Contents/Resources
     let resources = exe.parent()?.parent()?.join("Resources");
     if resources.join("android-sdk").exists() {
-        Some(resources)
-    } else {
-        None
+        return Some(resources);
     }
+    
+    // 2. Dev mode: target/debug/novaic → target/debug (where android-sdk is copied)
+    let exe_dir = exe.parent()?;
+    if exe_dir.join("android-sdk").exists() {
+        return Some(exe_dir.to_path_buf());
+    }
+    
+    // 3. Dev mode fallback: check CARGO_MANIFEST_DIR/../target/debug
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let target_debug = std::path::PathBuf::from(manifest_dir)
+            .parent()
+            .map(|p| p.join("target").join("debug"));
+        if let Some(ref td) = target_debug {
+            if td.join("android-sdk").exists() {
+                return target_debug;
+            }
+        }
+    }
+    
+    None
 }
 
 /// scrcpy-server.jar 路径
@@ -599,34 +618,29 @@ impl ScrcpyProxy {
         tracing::info!("Starting scrcpy proxy for device: {}", self.device_serial);
         
         let (mut ws_sender, ws_receiver) = ws.split();
+
+        // Try to connect + read metadata, with one restart-retry on failure.
+        // Failure modes covered:
+        //   1. TCP connect fails (server not listening)  → restart
+        //   2. read_metadata gets EOF (server process died on Android side
+        //      but adb forward is still alive)           → restart
+        let connect_result = self.try_connect_and_read_metadata().await;
         
-        // 使用持久化服务器（如果可用）或启动新的
-        let (video_port, control_port) = match ensure_scrcpy_server(&self.device_serial).await {
-            Ok(ports) => {
-                tracing::info!("Using scrcpy-server on ports {}/{}", ports.0, ports.1);
-                ports
-            }
-            Err(e) => {
-                let error_msg = serde_json::json!({
-                    "type": "error",
-                    "message": e.to_string()
-                });
-                let _ = ws_sender.send(Message::Text(error_msg.to_string())).await;
-                return Err(e);
-            }
-        };
-        
-        // 连接到视频和控制端口
-        let mut video_stream = match TcpStream::connect(format!("127.0.0.1:{}", video_port)).await {
-            Ok(s) => s,
-            Err(e) => {
-                // 连接失败，可能服务器已经被上一个连接消耗了，重新启动
-                tracing::warn!("Failed to connect to existing server, restarting: {}", e);
-                stop_scrcpy_server(&self.device_serial).await;
+        let (video_stream, control_stream, metadata) = match connect_result {
+            Ok(tuple) => tuple,
+            Err(first_err) => {
+                tracing::warn!(
+                    "Initial scrcpy connect failed ({}), restarting server and retrying...",
+                    first_err
+                );
                 
-                // 重新启动服务器
-                let (new_video_port, new_control_port) = match ensure_scrcpy_server(&self.device_serial).await {
-                    Ok(ports) => ports,
+                // Remove stale entry and restart
+                stop_scrcpy_server(&self.device_serial).await;
+                // Brief pause so Android has time to clean up the old socket
+                tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+                
+                match self.try_connect_and_read_metadata().await {
+                    Ok(tuple) => tuple,
                     Err(e) => {
                         let error_msg = serde_json::json!({
                             "type": "error",
@@ -635,81 +649,7 @@ impl ScrcpyProxy {
                         let _ = ws_sender.send(Message::Text(error_msg.to_string())).await;
                         return Err(e);
                     }
-                };
-                
-                // 等待服务器准备好
-                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                
-                match TcpStream::connect(format!("127.0.0.1:{}", new_video_port)).await {
-                    Ok(s) => {
-                        // 更新端口变量（虽然这里不能直接修改，但我们需要用新端口连接控制）
-                        let control_stream = TcpStream::connect(format!("127.0.0.1:{}", new_control_port))
-                            .await
-                            .map_err(|e| VmError::ScrcpyError(format!("Failed to connect control: {}", e)))?;
-                        
-                        // 读取元数据
-                        let mut video = s;
-                        let metadata = match self.read_metadata(&mut video).await {
-                            Ok(m) => m,
-                            Err(e) => {
-                                let error_msg = serde_json::json!({
-                                    "type": "error",
-                                    "message": e.to_string()
-                                });
-                                let _ = ws_sender.send(Message::Text(error_msg.to_string())).await;
-                                return Err(e);
-                            }
-                        };
-                        
-                        // 发送设备信息
-                        let info_msg = serde_json::json!({
-                            "type": "info",
-                            "device": metadata.device_name,
-                            "codec": metadata.codec.as_str(),
-                            "width": metadata.width,
-                            "height": metadata.height,
-                        });
-                        if ws_sender.send(Message::Text(info_msg.to_string())).await.is_err() {
-                            return Err(VmError::ScrcpyError("Failed to send device info".to_string()));
-                        }
-                        
-                        // 继续处理流
-                        return self.handle_streams(video, control_stream, ws_sender, ws_receiver, metadata.width, metadata.height).await;
-                    }
-                    Err(e) => {
-                        let error_msg = serde_json::json!({
-                            "type": "error",
-                            "message": format!("Failed to connect after restart: {}", e)
-                        });
-                        let _ = ws_sender.send(Message::Text(error_msg.to_string())).await;
-                        return Err(VmError::ScrcpyError(format!("Failed to connect: {}", e)));
-                    }
                 }
-            }
-        };
-        
-        let control_stream = match TcpStream::connect(format!("127.0.0.1:{}", control_port)).await {
-            Ok(s) => s,
-            Err(e) => {
-                let error_msg = serde_json::json!({
-                    "type": "error",
-                    "message": format!("Failed to connect control: {}", e)
-                });
-                let _ = ws_sender.send(Message::Text(error_msg.to_string())).await;
-                return Err(VmError::ScrcpyError(format!("Failed to connect control: {}", e)));
-            }
-        };
-        
-        // 读取元数据
-        let metadata = match self.read_metadata(&mut video_stream).await {
-            Ok(m) => m,
-            Err(e) => {
-                let error_msg = serde_json::json!({
-                    "type": "error",
-                    "message": e.to_string()
-                });
-                let _ = ws_sender.send(Message::Text(error_msg.to_string())).await;
-                return Err(e);
             }
         };
         
@@ -727,6 +667,42 @@ impl ScrcpyProxy {
         
         // 处理流
         self.handle_streams(video_stream, control_stream, ws_sender, ws_receiver, metadata.width, metadata.height).await
+    }
+
+    /// Ensure server is running, then connect video + control sockets and read metadata.
+    /// On any error the caller should stop the server and retry.
+    async fn try_connect_and_read_metadata(
+        &self,
+    ) -> Result<(TcpStream, TcpStream, DeviceMetadata), VmError> {
+        let (video_port, control_port) = ensure_scrcpy_server(&self.device_serial).await?;
+        tracing::info!("Using scrcpy-server on ports {}/{}", video_port, control_port);
+
+        // Connect video socket (short retry for slow emulator start)
+        let mut retry = 0u8;
+        let mut video_stream = loop {
+            match TcpStream::connect(format!("127.0.0.1:{}", video_port)).await {
+                Ok(s) => break s,
+                Err(e) => {
+                    retry += 1;
+                    if retry > 10 {
+                        return Err(VmError::ScrcpyError(
+                            format!("Failed to connect video socket after {} retries: {}", retry, e)
+                        ));
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+                }
+            }
+        };
+
+        let control_stream = TcpStream::connect(format!("127.0.0.1:{}", control_port))
+            .await
+            .map_err(|e| VmError::ScrcpyError(format!("Failed to connect control socket: {}", e)))?;
+
+        // read_metadata can return early-eof if the Android-side server process died
+        // while the adb forward was still active – propagate as error so caller retries.
+        let metadata = self.read_metadata(&mut video_stream).await?;
+
+        Ok((video_stream, control_stream, metadata))
     }
     
     /// 处理视频和控制流
