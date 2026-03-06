@@ -267,7 +267,9 @@ async fn connect_and_run(ws_url: &str, vmcontrol_url: &str, http_client: &reqwes
                 let sink_clone = Arc::clone(&sink);
                 let vmcontrol_url = vmcontrol_url.to_string();
                 let http_client = http_client.clone();
-                let path = format!("/api/vms/{}/shutdown", vm_id);
+                // Use /stop endpoint for force stop (graceful QMP → SIGTERM → SIGKILL)
+                // instead of /shutdown which only sends QMP powerdown (shows shutdown dialog)
+                let path = format!("/api/vms/{}/stop", vm_id);
                 tokio::spawn(async move {
                     let response = handle_proxy_request(&http_client, &vmcontrol_url, id, "POST", &path, body, HashMap::new()).await;
                     if let Ok(json) = serde_json::to_string(&response) {

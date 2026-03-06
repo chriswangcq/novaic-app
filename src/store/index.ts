@@ -332,8 +332,8 @@ interface AppStore extends AppState {
     useCnMirrors: boolean;
   }) => Promise<void>;
   // SSE connection
-  connectChatSSE: (agentId?: string) => void;
-  connectLogsSSE: (agentId?: string) => void;
+  connectChatSSE: (agentId?: string) => Promise<void>;
+  connectLogsSSE: (agentId?: string) => Promise<void>;
   disconnectSSE: () => void;
   // Message pagination
   hasMoreMessages: boolean;
@@ -451,8 +451,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       
       // Try to connect SSE streams (will only connect if currentAgentId is set)
       // If no agent is selected yet, SSE will be connected when selectAgent() is called
-      connectChatSSE();
-      connectLogsSSE();
+      await connectChatSSE();
+      await connectLogsSSE();
       console.log('[Store] SSE connection attempted (requires agent selection)');
       
       // Load chat history (persisted messages with summary)
@@ -970,8 +970,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
       
       // 3. 连接 SSE（后端会先推最近 10 条 chat / 20 条 log，addMessage 按 id 去重）
-      connectChatSSE(agentId);
-      connectLogsSSE(agentId);
+      await connectChatSSE(agentId);
+      await connectLogsSSE(agentId);
       
       // 4. 加载新 agent 的模型配置
       try {
@@ -1143,9 +1143,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
     
     const rawChatSseUrl = `${API_CONFIG.GATEWAY_URL}/api/chat/messages?agent_id=${targetAgentId}`;
+    console.log('[Store] Raw Chat SSE URL:', rawChatSseUrl);
     const sseUrl = await appendTokenToUrl(rawChatSseUrl);
-    console.log('[Store] Connecting to Chat SSE:', sseUrl);
+    console.log('[Store] Chat SSE URL with token:', sseUrl);
+    console.log('[Store] Token present:', sseUrl.includes('token='));
     chatEventSource = new EventSource(sseUrl);
+    
+    chatEventSource.onopen = () => {
+      console.log('[Store] Chat SSE connection opened');
+    };
     
     chatEventSource.onmessage = (event) => {
       try {
@@ -1200,16 +1206,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
     };
     
-    chatEventSource.onerror = () => {
-      // Only reconnect if connection is actually closed
-      if (chatEventSource?.readyState === EventSource.CLOSED) {
-        console.error('[Store] Chat SSE closed, reconnecting...');
-        setTimeout(() => {
-          if (get().isInitialized && get().currentAgentId) {
-            get().connectChatSSE(get().currentAgentId!);
-          }
-        }, SSE_CONFIG.RECONNECT_DELAY);
-      }
+    chatEventSource.onerror = (e) => {
+      console.error('[Store] Chat SSE error:', e);
+      // Reconnect after delay with same agentId
+      setTimeout(() => {
+        if (get().isInitialized && get().currentAgentId) {
+          get().connectChatSSE(get().currentAgentId!);
+        }
+      }, SSE_CONFIG.RECONNECT_DELAY);
     };
   },
 
@@ -1283,9 +1287,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     fetchLogSubagents(targetAgentId);
 
     const rawLogsSseUrl = `${API_CONFIG.GATEWAY_URL}/api/logs/stream?agent_id=${targetAgentId}`;
+    console.log('[Store] Raw Logs SSE URL:', rawLogsSseUrl);
     const sseUrl = await appendTokenToUrl(rawLogsSseUrl);
-    console.log('[Store] Connecting to Logs SSE (with history push):', sseUrl);
+    console.log('[Store] Logs SSE URL with token:', sseUrl);
+    console.log('[Store] Token present:', sseUrl.includes('token='));
     logsEventSource = new EventSource(sseUrl);
+    
+    logsEventSource.onopen = () => {
+      console.log('[Store] Logs SSE connection opened');
+    };
     
     logsEventSource.onmessage = (event) => {
       try {
@@ -1344,15 +1354,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     };
     
     logsEventSource.onerror = () => {
-      // Only reconnect if connection is actually closed
-      if (logsEventSource?.readyState === EventSource.CLOSED) {
-        console.error('[Store] Logs SSE closed, reconnecting...');
-        setTimeout(() => {
-          if (get().isInitialized && get().currentAgentId) {
-            get().connectLogsSSE(get().currentAgentId!);
-          }
-        }, SSE_CONFIG.RECONNECT_DELAY);
-      }
+      setTimeout(() => {
+        if (get().isInitialized && get().currentAgentId) {
+          get().connectLogsSSE(get().currentAgentId!);
+        }
+      }, SSE_CONFIG.RECONNECT_DELAY);
     };
   },
 
