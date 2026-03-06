@@ -676,7 +676,8 @@ pub async fn ssh_exec(
         vm.ssh_port
     };
 
-    // Find SSH private key
+    // Find SSH private key - check multiple locations
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let data_dir = {
         let from_env = std::env::var("NOVAIC_DATA_DIR").ok()
             .filter(|s| !s.is_empty())
@@ -684,20 +685,46 @@ pub async fn ssh_exec(
         match from_env {
             Some(p) => p,
             None => {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                std::path::PathBuf::from(home)
+                std::path::PathBuf::from(&home)
                     .join("Library/Application Support/com.novaic.app")
             }
         }
     };
 
-    let ssh_key_path = data_dir.join("ssh").join("id_rsa");
-    if !ssh_key_path.exists() {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError { error: format!("SSH private key not found: {}", ssh_key_path.display()) })
-        ));
+    // Try multiple SSH key locations in order of preference
+    let ssh_key_candidates = vec![
+        data_dir.join("ssh").join("id_rsa"),           // App data dir
+        data_dir.join(".ssh").join("id_rsa"),          // App .ssh dir (Gateway style)
+        std::path::PathBuf::from(&home).join(".ssh").join("id_rsa"),  // User default
+        std::path::PathBuf::from(&home).join(".ssh").join("id_ed25519"), // ED25519 key
+    ];
+
+    // Also check for any id_* files in app .ssh dir (Gateway generates with UUID suffix)
+    let mut all_candidates = ssh_key_candidates;
+    let app_ssh_dir = data_dir.join(".ssh");
+    if app_ssh_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&app_ssh_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if name.starts_with("id_") && !name.ends_with(".pub") {
+                        all_candidates.insert(0, path); // Prioritize app-generated keys
+                    }
+                }
+            }
+        }
     }
+
+    let ssh_key_path = all_candidates.into_iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError { error: format!("SSH private key not found. Checked: {}/ssh/id_rsa, {}/.ssh/id_rsa, ~/.ssh/id_rsa", 
+                data_dir.display(), data_dir.display()) })
+        ))?;
+    
+    tracing::info!("[ssh_exec] Using SSH key: {}", ssh_key_path.display());
 
     // Build SSH command
     let ssh_args = vec![
