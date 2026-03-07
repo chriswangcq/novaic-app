@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { Settings, Trash2, Menu, Play, Square, Lock, Unlock, RefreshCw, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CreateAgentModal } from '../Agent/CreateAgentModal';
 import { useAppStore } from '../../store';
@@ -15,6 +15,7 @@ interface HeaderProps {
 
 export function Header(props: HeaderProps) {
   const { onOpenSettings, onToggleDrawer, isDrawerOpen, onAgentCreated } = props;
+  const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);
   const { createAgentModalOpen, setCreateAgentModalOpen, clearMessages, agents, currentAgentId, selectAgent, vncLocked, setVncLocked, setVncConnected } = useAppStore();
   
   const currentAgent = agents.find(a => a.id === currentAgentId);
@@ -83,7 +84,7 @@ export function Header(props: HeaderProps) {
 
   return (
     <>
-      <header className="h-10 bg-nb-surface border-b border-nb-border flex items-center px-3 no-select shrink-0" data-tauri-drag-region>
+      <header className={`h-10 bg-nb-surface border-b border-nb-border flex items-center pr-3 no-select shrink-0 ${isMacOS ? 'pl-[72px]' : 'pl-3'}`} data-tauri-drag-region>
         {/* Menu Button */}
         <button
           onClick={onToggleDrawer}

@@ -221,16 +221,17 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
       <div
         ref={cardRef}
         className={`
-          fixed flex flex-col border shadow-xl cursor-pointer
-          transition-[left,top,width,height,border-radius,box-shadow] duration-[350ms]
+          fixed flex flex-col cursor-pointer
+          transition-[left,top,width,height,border-radius,box-shadow,border-color] duration-[350ms]
           ease-[cubic-bezier(0.34,1.56,0.64,1)]
+          border
           ${operating
             ? 'border-nb-accent ring-2 ring-nb-accent/30 shadow-[0_0_60px_rgba(99,102,241,0.35)]'
             : expanded
-              ? 'border-nb-border-hover shadow-[0_12px_80px_rgba(0,0,0,0.6)]'
-              : 'border-nb-border hover:border-nb-border-hover hover:shadow-2xl'
+              ? 'border-nb-border/60 shadow-[0_12px_80px_rgba(0,0,0,0.6)]'
+              : 'border-transparent hover:border-nb-border/40'
           }
-          bg-nb-surface
+          bg-black
         `}
         style={{
           left:         rect.left,
@@ -298,7 +299,7 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
           {/* Preview hover hint */}
           {!expanded && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none
-                            opacity-0 group-hover/card:opacity-100 transition-opacity bg-black/10">
+                            opacity-0 group-hover/card:opacity-100 transition-opacity">
               <span className="bg-black/70 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-sm">
                 点击放大 · 双击操作
               </span>
@@ -427,8 +428,8 @@ function StoppedDeviceChip({ device, bottomOffset }: ChipProps) {
 
   return (
     <div
-      className="fixed flex items-center gap-2 px-2.5 border border-nb-border bg-nb-surface/90
-                 backdrop-blur-sm shadow-lg cursor-default select-none
+      className="fixed flex items-center gap-2 px-2.5 border border-nb-border/50 bg-nb-surface/70
+                 backdrop-blur-sm cursor-default select-none
                  transition-[top] duration-300"
       style={{
         left,
