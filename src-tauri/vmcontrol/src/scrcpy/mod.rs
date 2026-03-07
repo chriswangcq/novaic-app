@@ -626,11 +626,11 @@ impl ScrcpyProxy {
         // the adb forward port is open.  Emulators on slow hosts can take 10-15 s
         // to fully initialise scrcpy-server, so we use a generous retry window.
         //
-        // Official scrcpy tunnel_forward protocol:
-        //   1. Connect to port  → server accepts as VIDEO socket, sends dummy byte + metadata
-        //   2. Connect to same port AGAIN → server accepts as CONTROL socket
-        // We do step 2 only AFTER successfully reading metadata, guaranteeing the server
-        // has finished its first accept() before we present the second connection.
+        // Official scrcpy tunnel_forward protocol (3.x):
+        //   1. Connect to port → server accepts as VIDEO socket
+        //   2. Connect to same port → server accepts as CONTROL socket
+        //   3. Server sends dummy byte + metadata on video socket
+        // Both connections MUST be open before the server sends the dummy byte.
         //
         // Strategy: attempt every 800 ms, giving up after 15 attempts (~12 s total).
         const MAX_METADATA_ATTEMPTS: u8 = 15;
@@ -646,7 +646,13 @@ impl ScrcpyProxy {
                 tokio::time::sleep(tokio::time::Duration::from_millis(METADATA_RETRY_INTERVAL_MS)).await;
             }
 
-            // Step 1: connect video socket (TCP-level retry only)
+            // scrcpy-server 3.x connection order (tunnel_forward=true):
+            //   server: accept #1 (video) → accept #2 (control) → send dummy byte
+            //
+            // The server sends the dummy byte only AFTER accepting BOTH connections.
+            // We must therefore open both sockets before reading metadata.
+            //
+            // Step 1: connect video socket (TCP-level retry)
             let mut tcp_retry = 0u8;
             let mut video_stream = loop {
                 match TcpStream::connect(format!("127.0.0.1:{}", port)).await {
@@ -664,19 +670,22 @@ impl ScrcpyProxy {
                 }
             };
 
-            // Step 2: read metadata BEFORE opening control connection.
-            // scrcpy-server does: accept() #1 (video) → accept() #2 (control).
-            // Connecting control too early (before the server processes the video
-            // handshake) used to cause a "Broken pipe" on the first control write.
+            // Step 2: connect control socket (same port, second accept on server side).
+            // A small delay lets the server finish processing the video accept() before
+            // we present the control connection, avoiding a potential race on startup.
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            let control_stream = match TcpStream::connect(format!("127.0.0.1:{}", port)).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // If control connect fails it's transient (server not ready); retry.
+                    last_err = VmError::ScrcpyError(format!("Failed to connect control socket: {}", e));
+                    continue;
+                }
+            };
+
+            // Step 3: NOW read metadata — server will send dummy byte after accept #2.
             match self.read_metadata(&mut video_stream).await {
                 Ok(metadata) => {
-                    // Step 3: now connect control (server is ready for its second accept)
-                    let control_stream =
-                        TcpStream::connect(format!("127.0.0.1:{}", port))
-                            .await
-                            .map_err(|e| {
-                                VmError::ScrcpyError(format!("Failed to connect control socket: {}", e))
-                            })?;
                     tracing::info!("Connected video + control sockets for {}", self.device_serial);
                     return Ok((video_stream, control_stream, metadata));
                 }
