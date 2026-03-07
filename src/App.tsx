@@ -8,7 +8,7 @@ import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { SetupConfig } from './components/Agent/CreateAgentModal';
-import { useAuth, useUser, SignIn, UserButton } from '@clerk/react';
+import { useAuth, useUser, SignIn, SignUp, UserButton } from '@clerk/react';
 import { invoke } from '@tauri-apps/api/core';
 
 // Global Error Boundary
@@ -65,6 +65,68 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
     }
     return this.props.children;
   }
+}
+
+function AuthScreen() {
+  const [mode, setMode] = useState<'signIn' | 'signUp'>('signIn');
+
+  const bg = (
+    <div
+      className="absolute inset-0 opacity-[0.03] pointer-events-none"
+      style={{
+        backgroundImage: `
+          linear-gradient(to right, #ffffff 1px, transparent 1px),
+          linear-gradient(to bottom, #ffffff 1px, transparent 1px)
+        `,
+        backgroundSize: '40px 40px',
+      }}
+    />
+  );
+
+  const logo = (
+    <div className="flex flex-col items-center gap-2 mb-2">
+      <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-white/10">
+        <span className="text-2xl font-bold text-white">N</span>
+      </div>
+      <h1 className="text-lg font-semibold text-white">NovAIC</h1>
+    </div>
+  );
+
+  return (
+    <div className="h-screen flex items-center justify-center bg-[#0a0a0a]">
+      {bg}
+      <div className="relative flex flex-col items-center gap-4">
+        {logo}
+        {mode === 'signIn' ? (
+          <>
+            <SignIn routing="hash" afterSignInUrl="/" />
+            <p className="text-white/40 text-sm">
+              没有账号？{' '}
+              <button
+                className="text-white/70 underline hover:text-white transition-colors"
+                onClick={() => setMode('signUp')}
+              >
+                注册
+              </button>
+            </p>
+          </>
+        ) : (
+          <>
+            <SignUp routing="hash" afterSignUpUrl="/" />
+            <p className="text-white/40 text-sm">
+              已有账号？{' '}
+              <button
+                className="text-white/70 underline hover:text-white transition-colors"
+                onClick={() => setMode('signIn')}
+              >
+                登录
+              </button>
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function App() {
@@ -288,29 +350,7 @@ function App() {
   }
 
   if (!isSignedIn) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-[#0a0a0a]">
-        <div
-          className="absolute inset-0 opacity-[0.03] pointer-events-none"
-          style={{
-            backgroundImage: `
-              linear-gradient(to right, #ffffff 1px, transparent 1px),
-              linear-gradient(to bottom, #ffffff 1px, transparent 1px)
-            `,
-            backgroundSize: '40px 40px',
-          }}
-        />
-        <div className="relative flex flex-col items-center gap-6">
-          <div className="flex flex-col items-center gap-2 mb-2">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-white/10">
-              <span className="text-2xl font-bold text-white">N</span>
-            </div>
-            <h1 className="text-lg font-semibold text-white">NovAIC</h1>
-          </div>
-          <SignIn routing="hash" />
-        </div>
-      </div>
-    );
+    return <AuthScreen />;
   }
 
   // 连接超时：显示错误和重试
