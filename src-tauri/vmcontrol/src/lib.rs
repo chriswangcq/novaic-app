@@ -96,12 +96,11 @@ pub async fn pre_start_scrcpy_servers() {
             let serial = device.serial.clone();
             tokio::spawn(async move {
                 match ensure_scrcpy_server(&serial).await {
-                    Ok((video_port, control_port)) => {
+                    Ok(port) => {
                         tracing::info!(
-                            "✓ Pre-started scrcpy-server for {} on ports {}/{}",
+                            "✓ Pre-started scrcpy-server for {} on port {}",
                             serial,
-                            video_port,
-                            control_port
+                            port
                         );
                     }
                     Err(e) => {

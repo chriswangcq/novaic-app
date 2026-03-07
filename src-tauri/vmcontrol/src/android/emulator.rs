@@ -379,10 +379,10 @@ impl AndroidManager {
             
             // 启动持久化的 scrcpy-server
             match ensure_scrcpy_server(&serial_clone).await {
-                Ok((video_port, control_port)) => {
+                Ok(port) => {
                     tracing::info!(
-                        "Persistent scrcpy-server started for {} on ports {}/{}",
-                        serial_clone, video_port, control_port
+                        "Persistent scrcpy-server started for {} on port {}",
+                        serial_clone, port
                     );
                 }
                 Err(e) => {

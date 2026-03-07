@@ -14,8 +14,10 @@ use once_cell::sync::Lazy;
 /// 持久化的 scrcpy-server 信息
 struct PersistentServer {
     scid: u32,
-    video_port: u16,
-    control_port: u16,
+    /// Single ADB-forwarded port shared for both video and control connections.
+    /// The official scrcpy protocol requires two sequential connections to the
+    /// same port: first accepted → video, second accepted → control.
+    port: u16,
     #[allow(dead_code)]
     process: tokio::process::Child,
 }
@@ -156,32 +158,28 @@ pub struct DeviceMetadata {
     pub height: u32,
 }
 
-/// 为设备分配端口（基于设备序列号）
-fn allocate_ports_for_device(device_serial: &str) -> (u16, u16) {
-    // 从设备序列号中提取端口偏移
-    // emulator-5554 -> 5554, emulator-5556 -> 5556
+/// 为设备分配单一转发端口（基于设备序列号）
+/// Both video and control connections share the same port, matching the
+/// official scrcpy tunnel_forward protocol.
+fn allocate_port_for_device(device_serial: &str) -> u16 {
     let port_offset: u16 = device_serial
         .split('-')
         .last()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5554);
-    
-    // 使用不同的基础端口避免冲突
-    // 视频端口: 27000 + (port_offset - 5554) * 2
-    // 控制端口: 27001 + (port_offset - 5554) * 2
-    let base = 27000 + ((port_offset - 5554) / 2) * 2;
-    (base, base + 1)
+    // emulator-5554 → 27100, emulator-5556 → 27101, etc.
+    27100 + (port_offset.saturating_sub(5554))
 }
 
 /// 启动持久化的 scrcpy-server（如果还没有运行）
-pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<(u16, u16), VmError> {
+pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<u16, VmError> {
     // 检查是否已有运行的服务器
     {
         let servers = SCRCPY_SERVERS.read().await;
         if let Some(server) = servers.get(device_serial) {
             let server = server.lock().await;
             tracing::info!("Reusing existing scrcpy-server for {}, scid={:08x}", device_serial, server.scid);
-            return Ok((server.video_port, server.control_port));
+            return Ok(server.port);
         }
     }
     
@@ -236,39 +234,27 @@ pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<(u16, u16), VmE
         let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
         (duration.as_nanos() & 0x7FFFFFFF) as u32
     };
-    let (video_port, control_port) = allocate_ports_for_device(device_serial);
+    let port = allocate_port_for_device(device_serial);
     let socket_name = format!("scrcpy_{:08x}", scid);
     
-    // 设置端口转发
+    // Single ADB forward – both video and control connections reuse the same port.
+    // This matches the official scrcpy tunnel_forward protocol where the client
+    // connects to the same port twice (first connection = video, second = control).
     let _ = Command::new(&adb_path)
-        .args(["-s", device_serial, "forward", "--remove", &format!("tcp:{}", video_port)])
-        .output()
-        .await;
-    let _ = Command::new(&adb_path)
-        .args(["-s", device_serial, "forward", "--remove", &format!("tcp:{}", control_port)])
+        .args(["-s", device_serial, "forward", "--remove", &format!("tcp:{}", port)])
         .output()
         .await;
     
     let forward_target = format!("localabstract:{}", socket_name);
     
     let output = Command::new(&adb_path)
-        .args(["-s", device_serial, "forward", &format!("tcp:{}", video_port), &forward_target])
+        .args(["-s", device_serial, "forward", &format!("tcp:{}", port), &forward_target])
         .output()
         .await
-        .map_err(|e| VmError::ScrcpyError(format!("Failed to forward video: {}", e)))?;
+        .map_err(|e| VmError::ScrcpyError(format!("Failed to set up adb forward: {}", e)))?;
     
     if !output.status.success() {
-        return Err(VmError::ScrcpyError("Failed to forward video port".to_string()));
-    }
-    
-    let output = Command::new(&adb_path)
-        .args(["-s", device_serial, "forward", &format!("tcp:{}", control_port), &forward_target])
-        .output()
-        .await
-        .map_err(|e| VmError::ScrcpyError(format!("Failed to forward control: {}", e)))?;
-    
-    if !output.status.success() {
-        return Err(VmError::ScrcpyError("Failed to forward control port".to_string()));
+        return Err(VmError::ScrcpyError("adb forward failed".to_string()));
     }
     
     // 启动 scrcpy-server
@@ -296,8 +282,8 @@ pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<(u16, u16), VmE
         scid
     );
     
-    tracing::info!("Starting scrcpy-server for {} with scid={:08x}, ports={}/{}", 
-        device_serial, scid, video_port, control_port);
+    tracing::info!("Starting scrcpy-server for {} with scid={:08x}, port={}", 
+        device_serial, scid, port);
     
     let process = Command::new(&adb_path)
         .args(["-s", device_serial, "shell", &server_args])
@@ -313,8 +299,7 @@ pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<(u16, u16), VmE
     // 保存到全局状态
     let server = PersistentServer {
         scid,
-        video_port,
-        control_port,
+        port,
         process,
     };
     
@@ -324,7 +309,7 @@ pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<(u16, u16), VmE
     }
     
     tracing::info!("Persistent scrcpy-server started for {}", device_serial);
-    Ok((video_port, control_port))
+    Ok(port)
 }
 
 /// 停止设备的 scrcpy-server
@@ -468,96 +453,6 @@ impl ScrcpyProxy {
         Ok(child)
     }
 
-    /// 建立 ADB 端口转发并连接
-    async fn setup_and_connect(&self, scid: u32) -> Result<(TcpStream, TcpStream), VmError> {
-        let adb_path = get_adb_path();
-        
-        // 使用 scid 创建唯一的 socket 名称
-        let socket_name = format!("scrcpy_{:08x}", scid);
-        
-        // 设置端口转发
-        // 视频 socket: 27183
-        // 控制 socket: 27184
-        let video_port = 27183;
-        let control_port = 27184;
-        
-        // 先移除可能存在的旧转发
-        let _ = Command::new(&adb_path)
-            .args(["-s", &self.device_serial, "forward", "--remove", &format!("tcp:{}", video_port)])
-            .output()
-            .await;
-        let _ = Command::new(&adb_path)
-            .args(["-s", &self.device_serial, "forward", "--remove", &format!("tcp:{}", control_port)])
-            .output()
-            .await;
-        
-        // 建立视频端口转发
-        let forward_target = format!("localabstract:{}", socket_name);
-        tracing::info!("Setting up forward: tcp:{} -> {}", video_port, forward_target);
-        
-        let output = Command::new(&adb_path)
-            .args(["-s", &self.device_serial, "forward", &format!("tcp:{}", video_port), &forward_target])
-            .output()
-            .await
-            .map_err(|e| VmError::ScrcpyError(format!("Failed to forward video port: {}", e)))?;
-        
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(VmError::ScrcpyError(format!("Failed to forward video port: {}", stderr)));
-        }
-        
-        // 建立控制端口转发 (使用同一个 socket)
-        let output = Command::new(&adb_path)
-            .args(["-s", &self.device_serial, "forward", &format!("tcp:{}", control_port), &forward_target])
-            .output()
-            .await
-            .map_err(|e| VmError::ScrcpyError(format!("Failed to forward control port: {}", e)))?;
-        
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(VmError::ScrcpyError(format!("Failed to forward control port: {}", stderr)));
-        }
-        
-        tracing::info!("Port forwarding established");
-        
-        // 等待服务器启动（减少初始等待时间）
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        
-        // 连接到视频 socket (第一个 socket)
-        // 使用更短的重试间隔，更多的重试次数
-        let mut retry_count = 0;
-        let video_stream = loop {
-            match TcpStream::connect(format!("127.0.0.1:{}", video_port)).await {
-                Ok(stream) => break stream,
-                Err(e) => {
-                    retry_count += 1;
-                    if retry_count > 20 {
-                        return Err(VmError::ScrcpyError(format!("Failed to connect to video socket after {} retries: {}", retry_count, e)));
-                    }
-                    if retry_count <= 5 {
-                        // 前 5 次快速重试
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    } else {
-                        // 之后慢一点
-                        tracing::warn!("Retry {} connecting to video socket: {}", retry_count, e);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                    }
-                }
-            }
-        };
-        
-        tracing::info!("Connected to video socket");
-        
-        // 连接到控制 socket (第二个 socket)
-        let control_stream = TcpStream::connect(format!("127.0.0.1:{}", control_port))
-            .await
-            .map_err(|e| VmError::ScrcpyError(format!("Failed to connect to control socket: {}", e)))?;
-        
-        tracing::info!("Connected to control socket");
-        
-        Ok((video_stream, control_stream))
-    }
-
     /// 读取设备元数据 (scrcpy 协议)
     /// 
     /// 协议格式 (tunnel_forward=true, send_device_meta=true, send_codec_meta=true):
@@ -683,13 +578,19 @@ impl ScrcpyProxy {
     async fn try_connect_and_read_metadata(
         &self,
     ) -> Result<(TcpStream, TcpStream, DeviceMetadata), VmError> {
-        let (video_port, control_port) = ensure_scrcpy_server(&self.device_serial).await?;
-        tracing::info!("Using scrcpy-server on ports {}/{}", video_port, control_port);
+        let port = ensure_scrcpy_server(&self.device_serial).await?;
+        tracing::info!("Using scrcpy-server on port {} (video+control)", port);
 
         // Retry the entire connect + dummy-byte exchange.
         // The Android-side JVM may not be ready to send the dummy byte even after
         // the adb forward port is open.  Emulators on slow hosts can take 10-15 s
         // to fully initialise scrcpy-server, so we use a generous retry window.
+        //
+        // Official scrcpy tunnel_forward protocol:
+        //   1. Connect to port  → server accepts as VIDEO socket, sends dummy byte + metadata
+        //   2. Connect to same port AGAIN → server accepts as CONTROL socket
+        // We do step 2 only AFTER successfully reading metadata, guaranteeing the server
+        // has finished its first accept() before we present the second connection.
         //
         // Strategy: attempt every 800 ms, giving up after 15 attempts (~12 s total).
         const MAX_METADATA_ATTEMPTS: u8 = 15;
@@ -705,10 +606,10 @@ impl ScrcpyProxy {
                 tokio::time::sleep(tokio::time::Duration::from_millis(METADATA_RETRY_INTERVAL_MS)).await;
             }
 
-            // Connect video socket (short retry for TCP-level failures only)
+            // Step 1: connect video socket (TCP-level retry only)
             let mut tcp_retry = 0u8;
             let mut video_stream = loop {
-                match TcpStream::connect(format!("127.0.0.1:{}", video_port)).await {
+                match TcpStream::connect(format!("127.0.0.1:{}", port)).await {
                     Ok(s) => break s,
                     Err(e) => {
                         tcp_retry += 1;
@@ -723,20 +624,27 @@ impl ScrcpyProxy {
                 }
             };
 
-            let control_stream =
-                TcpStream::connect(format!("127.0.0.1:{}", control_port))
-                    .await
-                    .map_err(|e| {
-                        VmError::ScrcpyError(format!("Failed to connect control socket: {}", e))
-                    })?;
-
+            // Step 2: read metadata BEFORE opening control connection.
+            // scrcpy-server does: accept() #1 (video) → accept() #2 (control).
+            // Connecting control too early (before the server processes the video
+            // handshake) used to cause a "Broken pipe" on the first control write.
             match self.read_metadata(&mut video_stream).await {
-                Ok(metadata) => return Ok((video_stream, control_stream, metadata)),
+                Ok(metadata) => {
+                    // Step 3: now connect control (server is ready for its second accept)
+                    let control_stream =
+                        TcpStream::connect(format!("127.0.0.1:{}", port))
+                            .await
+                            .map_err(|e| {
+                                VmError::ScrcpyError(format!("Failed to connect control socket: {}", e))
+                            })?;
+                    tracing::info!("Connected video + control sockets for {}", self.device_serial);
+                    return Ok((video_stream, control_stream, metadata));
+                }
                 Err(e) => {
                     // Retry on any connection-level transient failure:
-                    //   - "failed to fill whole buffer"  → tokio read_exact gets 0 bytes (EOF)
-                    //   - "early eof" / "early EOF"       → legacy alias
-                    //   - "connection reset by peer"      → scrcpy-server process died mid-handshake
+                    //   - "failed to fill whole buffer"  → tokio read_exact EOF (newer tokio)
+                    //   - "early eof" / "early EOF"       → tokio read_exact EOF (older tokio)
+                    //   - "connection reset by peer"      → scrcpy-server died mid-handshake
                     //   - "broken pipe"                   → same, write path
                     // Anything else (codec unknown, bad data) is a hard error.
                     let msg = e.to_string();
@@ -904,10 +812,10 @@ impl ScrcpyProxy {
             
             // 重新启动服务器
             match ensure_scrcpy_server(&device_serial).await {
-                Ok((video_port, control_port)) => {
+                Ok(port) => {
                     tracing::info!(
-                        "Restarted scrcpy-server for {} on ports {}/{} (ready for next connection)",
-                        device_serial, video_port, control_port
+                        "Restarted scrcpy-server for {} on port {} (ready for next connection)",
+                        device_serial, port
                     );
                 }
                 Err(e) => {
