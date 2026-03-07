@@ -16,7 +16,10 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{oneshot, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, http::header::AUTHORIZATION, Message},
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -104,11 +107,6 @@ pub async fn start_cloud_connection(
         // Re-read token before each connection attempt so short-lived Clerk JWTs
         // (default 60 s expiry) are always fresh.
         let current_token = auth_token.read().await.clone();
-        let ws_url = if current_token.is_empty() {
-            ws_base.clone()
-        } else {
-            format!("{}?token={}", ws_base, current_token)
-        };
 
         tokio::select! {
             biased;
@@ -116,7 +114,7 @@ pub async fn start_cloud_connection(
                 println!("[CloudConn] Shutdown signal received, stopping");
                 return;
             }
-            _ = connect_and_run(&ws_url, &vmcontrol_url, &http_client) => {
+            _ = connect_and_run(&ws_base, &vmcontrol_url, &current_token, &http_client) => {
                 println!("[CloudConn] Disconnected from Gateway, retrying in 5s...");
             }
         }
@@ -131,8 +129,28 @@ pub async fn start_cloud_connection(
 }
 
 /// 建立 WebSocket 连接并处理消息，直到连接断开。
-async fn connect_and_run(ws_url: &str, vmcontrol_url: &str, http_client: &reqwest::Client) {
-    let (ws_stream, _) = match connect_async(ws_url).await {
+///
+/// JWT 通过标准 `Authorization: Bearer <token>` 请求头发送，nginx auth_request
+/// 将其转发给 `/internal/auth/validate` 端点进行验证。
+async fn connect_and_run(ws_url: &str, vmcontrol_url: &str, token: &str, http_client: &reqwest::Client) {
+    // Build WS upgrade request with Authorization header so nginx auth_request
+    // can validate the Clerk JWT without relying on query-string forwarding.
+    let ws_request = match ws_url.into_client_request() {
+        Ok(mut req) => {
+            if !token.is_empty() {
+                if let Ok(val) = format!("Bearer {}", token).parse() {
+                    req.headers_mut().insert(AUTHORIZATION, val);
+                }
+            }
+            req
+        }
+        Err(e) => {
+            eprintln!("[CloudConn] Invalid WS URL: {}", e);
+            return;
+        }
+    };
+
+    let (ws_stream, _) = match connect_async(ws_request).await {
         Ok(s) => {
             println!("[CloudConn] Connected to Gateway WebSocket");
             s
