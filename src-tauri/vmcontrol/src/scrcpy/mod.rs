@@ -307,8 +307,8 @@ pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<(u16, u16), VmE
         .map_err(|e| VmError::ScrcpyError(format!("Failed to start server: {}", e)))?;
     
     // Wait for the Android JVM to fully initialise scrcpy-server.
-    // 500ms is not enough on the emulator; 1200ms avoids the first-connect EOF.
-    tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+    // Emulators on slow hosts can need 2-3 s before the abstract socket is bound.
+    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
     
     // 保存到全局状态
     let server = PersistentServer {
@@ -688,18 +688,21 @@ impl ScrcpyProxy {
 
         // Retry the entire connect + dummy-byte exchange.
         // The Android-side JVM may not be ready to send the dummy byte even after
-        // the adb forward port is open, so we back off and retry on early-EOF.
-        const MAX_METADATA_ATTEMPTS: u8 = 6;
+        // the adb forward port is open.  Emulators on slow hosts can take 10-15 s
+        // to fully initialise scrcpy-server, so we use a generous retry window.
+        //
+        // Strategy: attempt every 800 ms, giving up after 15 attempts (~12 s total).
+        const MAX_METADATA_ATTEMPTS: u8 = 15;
+        const METADATA_RETRY_INTERVAL_MS: u64 = 800;
         let mut last_err = VmError::ScrcpyError("unreachable".to_string());
 
         for attempt in 0..MAX_METADATA_ATTEMPTS {
             if attempt > 0 {
-                let wait_ms = 400u64 * u64::from(attempt);
                 tracing::warn!(
                     "Dummy-byte early EOF (attempt {}/{}), waiting {}ms before retry…",
-                    attempt, MAX_METADATA_ATTEMPTS, wait_ms
+                    attempt, MAX_METADATA_ATTEMPTS, METADATA_RETRY_INTERVAL_MS
                 );
-                tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(METADATA_RETRY_INTERVAL_MS)).await;
             }
 
             // Connect video socket (short retry for TCP-level failures only)
