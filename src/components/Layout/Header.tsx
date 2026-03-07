@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Settings, Trash2, Menu, Play, Square, Lock, Unlock, RefreshCw, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Settings, Menu, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CreateAgentModal } from '../Agent/CreateAgentModal';
 import { useAppStore } from '../../store';
 import { useVNCConnection } from '../Visual/useVNCConnection';
@@ -13,16 +13,26 @@ interface HeaderProps {
   onAgentCreated?: () => void;
 }
 
+// Status dot config
+const STATUS_DOT: Record<string, { dot: string; label: string; pulse: boolean }> = {
+  running:     { dot: 'bg-emerald-400',  label: 'Running',     pulse: false },
+  starting:    { dot: 'bg-amber-400',    label: 'Starting',    pulse: true  },
+  stopped:     { dot: 'bg-nb-text-secondary', label: 'Stopped', pulse: false },
+  error:       { dot: 'bg-red-400',      label: 'Error',       pulse: false },
+  setup_error: { dot: 'bg-red-400',      label: 'Error',       pulse: false },
+  setting_up:  { dot: 'bg-amber-400',    label: 'Setting up',  pulse: true  },
+  needs_setup: { dot: 'bg-nb-text-secondary', label: 'Needs setup', pulse: false },
+};
+
 export function Header(props: HeaderProps) {
   const { onOpenSettings, onToggleDrawer, isDrawerOpen, onAgentCreated } = props;
   const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);
-  const { createAgentModalOpen, setCreateAgentModalOpen, clearMessages, agents, currentAgentId, selectAgent, vncLocked, setVncLocked, setVncConnected } = useAppStore();
-  
+  const { createAgentModalOpen, setCreateAgentModalOpen, agents, currentAgentId, selectAgent, setVncConnected } = useAppStore();
+
   const currentAgent = agents.find(a => a.id === currentAgentId);
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
   const agentDropdownRef = useRef<HTMLDivElement>(null);
 
-  // 最近 3~5 个 Agent：当前 + 其余最多 4 个
   const recentAgents = (() => {
     const others = agents.filter(a => a.id !== currentAgentId);
     const list = currentAgent ? [currentAgent, ...others] : others;
@@ -34,14 +44,10 @@ export function Header(props: HeaderProps) {
   const canGoNext = currentIndex >= 0 && currentIndex < recentAgents.length - 1;
 
   const handlePrevAgent = () => {
-    if (canGoPrev && recentAgents[currentIndex - 1]) {
-      selectAgent(recentAgents[currentIndex - 1].id);
-    }
+    if (canGoPrev && recentAgents[currentIndex - 1]) selectAgent(recentAgents[currentIndex - 1].id);
   };
   const handleNextAgent = () => {
-    if (canGoNext && recentAgents[currentIndex + 1]) {
-      selectAgent(recentAgents[currentIndex + 1].id);
-    }
+    if (canGoNext && recentAgents[currentIndex + 1]) selectAgent(recentAgents[currentIndex + 1].id);
   };
 
   useEffect(() => {
@@ -56,99 +62,96 @@ export function Header(props: HeaderProps) {
     }
   }, [agentDropdownOpen]);
 
-  // Use VNC connection hook for VM control buttons
-  const [connectionState, connectionActions] = useVNCConnection(currentAgentId, setVncConnected);
+  const [connectionState] = useVNCConnection(currentAgentId, setVncConnected);
   const { status } = connectionState;
-  const { startVm, stopVm, refreshStatus } = connectionActions;
 
-  // Get status display info
-  const getStatusInfo = () => {
-    if (!currentAgent) return { color: 'bg-gray-500/20 text-gray-400', text: '' };
-    
+  const statusKey = (() => {
+    if (!currentAgent) return 'stopped';
     if (!currentAgent.setup_complete) {
-      if (currentAgent.setup_progress?.error) return { color: 'bg-red-500/20 text-red-400', text: 'Error' };
-      if (currentAgent.setup_progress) return { color: 'bg-yellow-500/20 text-yellow-400', text: 'Setting up' };
-      return { color: 'bg-gray-500/20 text-gray-400', text: 'Needs setup' };
+      if (currentAgent.setup_progress?.error) return 'setup_error';
+      if (currentAgent.setup_progress) return 'setting_up';
+      return 'needs_setup';
     }
-
-    switch (status) {
-      case 'running': return { color: 'bg-emerald-500/20 text-emerald-400', text: 'Running' };
-      case 'starting': return { color: 'bg-yellow-500/20 text-yellow-400', text: 'Starting' };
-      case 'stopped': return { color: 'bg-gray-500/20 text-gray-400', text: 'Stopped' };
-      case 'error': return { color: 'bg-red-500/20 text-red-400', text: 'Error' };
-      default: return { color: 'bg-gray-500/20 text-gray-400', text: 'Stopped' };
-    }
-  };
-
-  const statusInfo = getStatusInfo();
+    return status ?? 'stopped';
+  })();
+  const statusDot = STATUS_DOT[statusKey] ?? STATUS_DOT.stopped;
 
   return (
     <>
-      <header className={`h-10 bg-nb-surface border-b border-nb-border flex items-center pr-3 no-select shrink-0 ${isMacOS ? 'pl-[72px]' : 'pl-3'}`} data-tauri-drag-region>
-        {/* Menu Button */}
+      <header
+        className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
+                    flex items-center pr-2 no-select shrink-0
+                    ${isMacOS ? 'pl-[76px]' : 'pl-2'}`}
+        data-tauri-drag-region
+      >
+        {/* Menu toggle */}
         <button
           onClick={onToggleDrawer}
-          className={`p-1.5 rounded-lg transition-all mr-1 ${
-            isDrawerOpen 
-              ? 'bg-nb-surface-2 shadow-inner' 
-              : 'hover:bg-nb-surface-2'
-          }`}
-          title="Agent List"
+          className={`w-7 h-7 flex items-center justify-center rounded-md transition-all shrink-0
+                      ${isDrawerOpen ? 'bg-white/[0.08] text-nb-text' : 'text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text'}`}
+          title="Toggle sidebar"
+          data-tauri-drag-region="false"
         >
-          <Menu size={18} className="text-nb-text-muted" />
+          <Menu size={15} strokeWidth={1.8} />
         </button>
 
-        {/* Logo */}
-        <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="NovAIC" className="w-6 h-6" />
-          <span className="font-semibold text-nb-text text-[13px]">NovAIC</span>
+        {/* Logo + wordmark */}
+        <div className="flex items-center gap-1.5 ml-2 mr-1 shrink-0">
+          <img src="/logo.png" alt="NovAIC" className="w-5 h-5 opacity-90" />
+          <span className="text-[13px] font-semibold tracking-tight text-nb-text/80">NovAIC</span>
         </div>
 
-        {/* Spacer left */}
-        <div className="flex-1" data-tauri-drag-region />
+        {/* Drag zone left */}
+        <div className="flex-1 min-w-0" data-tauri-drag-region />
 
-        {/* Center - Agent name + 切换下拉/左右箭头 + status */}
-        {currentAgent && (
-          <div className="flex items-center gap-1.5">
-            <div ref={agentDropdownRef} className="relative flex items-center gap-0.5">
-              <button
-                onClick={handlePrevAgent}
-                disabled={!canGoPrev}
-                className="p-1 rounded hover:bg-nb-surface-hover text-nb-text-muted disabled:opacity-30 disabled:cursor-not-allowed"
-                title="上一个 Agent"
-              >
-                <ChevronLeft size={14} />
-              </button>
+        {/* Center — agent selector + status */}
+        {currentAgent ? (
+          <div className="flex items-center gap-1 shrink-0" data-tauri-drag-region="false">
+            {/* Prev */}
+            <button
+              onClick={handlePrevAgent}
+              disabled={!canGoPrev}
+              className="w-5 h-5 flex items-center justify-center rounded text-nb-text-secondary
+                         hover:text-nb-text hover:bg-white/[0.06] disabled:opacity-25 disabled:pointer-events-none transition-all"
+              title="Previous agent"
+            >
+              <ChevronLeft size={13} />
+            </button>
+
+            {/* Selector pill */}
+            <div ref={agentDropdownRef} className="relative">
               <button
                 onClick={() => setAgentDropdownOpen(!agentDropdownOpen)}
-                className="flex items-center gap-1 px-2 py-1 rounded hover:bg-nb-surface-hover text-nb-text max-w-[180px] truncate text-sm"
-                title="切换 Agent"
+                className="flex items-center gap-2 h-7 px-2.5 rounded-lg
+                           bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06]
+                           hover:border-white/[0.12] transition-all"
               >
-                <span className="truncate">{currentAgent.name}</span>
-                <ChevronDown size={12} className="text-nb-text-muted shrink-0" />
+                {/* Status dot */}
+                <span className="relative flex items-center justify-center shrink-0">
+                  <span className={`w-1.5 h-1.5 rounded-full ${statusDot.dot}`} />
+                  {statusDot.pulse && (
+                    <span className={`absolute w-1.5 h-1.5 rounded-full ${statusDot.dot} animate-ping opacity-60`} />
+                  )}
+                </span>
+                <span className="text-[12.5px] font-medium text-nb-text max-w-[140px] truncate">
+                  {currentAgent.name}
+                </span>
+                <ChevronDown size={11} className="text-nb-text-secondary shrink-0 -ml-0.5" />
               </button>
-              <button
-                onClick={handleNextAgent}
-                disabled={!canGoNext}
-                className="p-1 rounded hover:bg-nb-surface-hover text-nb-text-muted disabled:opacity-30 disabled:cursor-not-allowed"
-                title="下一个 Agent"
-              >
-                <ChevronRight size={14} />
-              </button>
+
+              {/* Dropdown */}
               {agentDropdownOpen && recentAgents.length > 0 && (
-                <div className="absolute top-full left-0 mt-1 min-w-[160px] py-1 rounded-lg bg-nb-surface border border-nb-border shadow-xl z-[100]">
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5
+                                min-w-[160px] py-1 rounded-xl
+                                bg-nb-surface border border-nb-border/80 shadow-2xl z-[100]">
                   {recentAgents.map((agent) => (
                     <button
                       key={agent.id}
-                      onClick={() => {
-                        selectAgent(agent.id);
-                        setAgentDropdownOpen(false);
-                      }}
-                      className={`w-full px-3 py-1.5 text-left text-[12px] transition-colors truncate ${
-                        agent.id === currentAgentId
-                          ? 'bg-nb-surface-hover text-nb-text'
-                          : 'text-nb-text-muted hover:bg-nb-surface-hover hover:text-nb-text'
-                      }`}
+                      onClick={() => { selectAgent(agent.id); setAgentDropdownOpen(false); }}
+                      className={`w-full px-3 py-1.5 text-left text-[12px] transition-colors truncate rounded-lg mx-auto
+                                  ${agent.id === currentAgentId
+                                    ? 'text-nb-text bg-white/[0.06]'
+                                    : 'text-nb-text-muted hover:bg-white/[0.04] hover:text-nb-text'}`}
                     >
                       {agent.name}
                     </button>
@@ -156,86 +159,46 @@ export function Header(props: HeaderProps) {
                 </div>
               )}
             </div>
-            <span className={`text-[11px] px-1.5 py-0.5 rounded shrink-0 ${statusInfo.color}`}>
-              {statusInfo.text}
+
+            {/* Status label */}
+            <span className="text-[11px] text-nb-text-secondary/70 hidden sm:block">
+              {statusDot.label}
             </span>
+
+            {/* Next */}
+            <button
+              onClick={handleNextAgent}
+              disabled={!canGoNext}
+              className="w-5 h-5 flex items-center justify-center rounded text-nb-text-secondary
+                         hover:text-nb-text hover:bg-white/[0.06] disabled:opacity-25 disabled:pointer-events-none transition-all"
+              title="Next agent"
+            >
+              <ChevronRight size={13} />
+            </button>
           </div>
+        ) : (
+          <span className="text-[12px] text-nb-text-secondary/50 shrink-0" data-tauri-drag-region="false">
+            No agent selected
+          </span>
         )}
 
-        {/* Spacer right */}
-        <div className="flex-1" data-tauri-drag-region />
+        {/* Drag zone right */}
+        <div className="flex-1 min-w-0" data-tauri-drag-region />
 
-        {/* VM Control + Actions */}
-        <div className="flex items-center gap-0.5">
-          {/* Start/Stop VM */}
-          {currentAgent?.setup_complete && (
-            status === 'running' ? (
-              <button
-                onClick={stopVm}
-                className="p-1.5 rounded hover:bg-red-500/20 text-nb-text-muted hover:text-red-400 transition-colors"
-                title="Stop VM"
-              >
-                <Square size={14} />
-              </button>
-            ) : status !== 'starting' && (
-              <button
-                onClick={startVm}
-                className="p-1.5 rounded hover:bg-green-500/20 text-nb-text-muted hover:text-green-400 transition-colors"
-                title="Start VM"
-              >
-                <Play size={14} />
-              </button>
-            )
-          )}
-
-          {/* Lock */}
-          {status === 'running' && (
-            <button
-              onClick={() => setVncLocked(!vncLocked)}
-              className="p-1.5 hover:bg-white/[0.06] rounded transition-colors"
-              title={vncLocked ? 'Unlock VNC' : 'Lock VNC'}
-            >
-              {vncLocked ? <Lock size={14} className="text-nb-text-muted" /> : <Unlock size={14} className="text-nb-text-muted" />}
-            </button>
-          )}
-
-          {/* Refresh */}
-          {currentAgent?.setup_complete && (
-            <button
-              onClick={refreshStatus}
-              className="p-1.5 hover:bg-white/[0.06] rounded transition-colors"
-              title="Refresh VM status"
-            >
-              <RefreshCw size={14} className="text-nb-text-muted" />
-            </button>
-          )}
-
-          {/* Divider */}
-          <div className="w-px h-4 bg-nb-border mx-1" />
-
-          {/* Clear chat */}
-          <button
-            className="p-1.5 hover:bg-nb-surface-2 rounded-lg transition-colors"
-            onClick={clearMessages}
-            title="Clear chat"
-          >
-            <Trash2 size={15} className="text-nb-text-muted" />
-          </button>
-          
-          {/* Settings */}
-          <button
-            className="p-1.5 hover:bg-nb-surface-2 rounded-lg transition-colors"
-            onClick={onOpenSettings}
-            title="Settings"
-          >
-            <Settings size={15} className="text-nb-text-muted" />
-          </button>
-        </div>
+        {/* Settings */}
+        <button
+          onClick={onOpenSettings}
+          className="w-7 h-7 flex items-center justify-center rounded-md
+                     text-nb-text-muted hover:text-nb-text hover:bg-white/[0.06] transition-all shrink-0"
+          title="Settings"
+          data-tauri-drag-region="false"
+        >
+          <Settings size={15} strokeWidth={1.6} />
+        </button>
       </header>
 
-      {/* Create Agent Modal */}
-      <CreateAgentModal 
-        isOpen={createAgentModalOpen} 
+      <CreateAgentModal
+        isOpen={createAgentModalOpen}
         onClose={() => setCreateAgentModalOpen(false)}
         onCreated={onAgentCreated}
       />
