@@ -6,8 +6,10 @@ import { useAppStore } from './store';
 import { LAYOUT_CONFIG } from './config';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
-import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Loader2, AlertTriangle, RefreshCw, LogOut } from 'lucide-react';
 import type { SetupConfig } from './components/Agent/CreateAgentModal';
+import { LoginPage } from './components/Auth/LoginPage';
+import { isAuthenticated, logout, getCurrentUser } from './services/auth';
 
 // Global Error Boundary
 interface ErrorBoundaryState {
@@ -84,13 +86,26 @@ function App() {
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
+  // Auth gate: true once a valid JWT exists in localStorage
+  const [authed, setAuthed] = useState<boolean>(isAuthenticated);
+
+  const handleAuthenticated = useCallback(() => {
+    setAuthed(true);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await logout();
+    setAuthed(false);
+  }, []);
+
   // Page state: 'setup' | 'workspace'
   const [currentPage, setCurrentPage] = useState<'setup' | 'workspace'>('workspace');
   const [setupConfig, setSetupConfig] = useState<SetupConfig | null>(null);
 
+  // Only start gateway connection after the user is authenticated
   useEffect(() => {
-    initialize();
-  }, [initialize]);
+    if (authed) initialize();
+  }, [authed, initialize]);
 
   // 连接超时：超过 35 秒未就绪则显示错误和重试
   useEffect(() => {
@@ -228,6 +243,11 @@ function App() {
     }
   }, [selectAgent]);
 
+  // ── Auth Gate ────────────────────────────────────────────────────────────
+  if (!authed) {
+    return <LoginPage onAuthenticated={handleAuthenticated} />;
+  }
+
   // 连接超时：显示错误和重试
   if (initTimeout && !isInitialized) {
     return (
@@ -314,7 +334,22 @@ function App() {
       <footer className="h-6 bg-nb-surface border-t border-nb-border px-4 flex items-center text-xs text-nb-text-muted">
         <span className={`w-2 h-2 rounded-full mr-2 ${isInitialized ? 'bg-nb-success' : 'bg-nb-warning'}`} />
         <span>{isInitialized ? 'Connected' : 'Connecting...'}</span>
-        <span className="ml-auto">NovAIC v0.1.0</span>
+        <span className="ml-auto flex items-center gap-3">
+          {getCurrentUser()?.email && (
+            <span className="text-nb-text-muted/60 truncate max-w-[160px]">
+              {getCurrentUser()!.email}
+            </span>
+          )}
+          <button
+            onClick={handleLogout}
+            title="退出登录"
+            className="flex items-center gap-1 hover:text-nb-text transition-colors"
+          >
+            <LogOut size={11} />
+            <span>退出</span>
+          </button>
+          <span className="text-nb-text-muted/40">NovAIC v0.1.0</span>
+        </span>
       </footer>
     </div>
   );

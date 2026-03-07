@@ -1,72 +1,222 @@
 /**
- * Frontend auth helper.
+ * Frontend JWT auth helper.
  *
- * The API key lives in Rust state (data_dir/api_key.txt).
- * We fetch it once via Tauri invoke and cache it for the lifetime of the
- * frontend process.
+ * Tokens are stored in localStorage and automatically refreshed before expiry.
+ * nginx validates the JWT and injects X-User-ID into gateway requests.
  *
- * Usage:
- *   - fetchWithAuth(url, opts)  – drop-in replacement for fetch() that adds
- *                                  Authorization: Bearer <key>
- *   - appendTokenToUrl(url)     – for EventSource / WebSocket URLs where
- *                                  custom headers aren't supported
+ * Public API:
+ *   getAccessToken()         – returns current JWT (refreshes if near-expiry)
+ *   fetchWithAuth(url, opts) – drop-in fetch() that adds Authorization: Bearer <token>
+ *   appendTokenToUrl(url)    – for EventSource / WebSocket that can't set headers
+ *   login(email, password)   – returns tokens, persists to localStorage
+ *   register(email, pw, name)– same
+ *   logout()                 – clears localStorage tokens
+ *   isAuthenticated()        – true if a non-expired token is stored
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { API_CONFIG } from '../config';
 
-let _cachedKey: string | null = null;
-let _pending: Promise<string> | null = null;
+// ── Storage Keys ────────────────────────────────────────────────────────────
+const STORAGE = {
+  ACCESS_TOKEN:  'novaic_access_token',
+  REFRESH_TOKEN: 'novaic_refresh_token',
+  USER_ID:       'novaic_user_id',
+  EMAIL:         'novaic_email',
+  DISPLAY_NAME:  'novaic_display_name',
+} as const;
 
-/** Returns the API key, fetching from Rust exactly once per session. */
+// ── Token Types ─────────────────────────────────────────────────────────────
+export interface AuthTokens {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;  // seconds
+  user_id: string;
+  email: string;
+  display_name: string;
+}
+
+export interface UserInfo {
+  user_id: string;
+  email: string;
+  display_name: string;
+}
+
+// ── JWT Decode (no verify — nginx already verified) ─────────────────────────
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const [, payloadB64] = token.split('.');
+    const json = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+function tokenExpiresAt(token: string): number {
+  const payload = decodeJwtPayload(token);
+  return typeof payload?.exp === 'number' ? payload.exp * 1000 : 0;
+}
+
+function isTokenExpired(token: string, bufferMs = 5 * 60 * 1000): boolean {
+  const exp = tokenExpiresAt(token);
+  return exp === 0 || Date.now() + bufferMs >= exp;
+}
+
+// ── Storage Helpers ──────────────────────────────────────────────────────────
+function persistTokens(tokens: AuthTokens) {
+  localStorage.setItem(STORAGE.ACCESS_TOKEN,  tokens.access_token);
+  localStorage.setItem(STORAGE.REFRESH_TOKEN, tokens.refresh_token);
+  localStorage.setItem(STORAGE.USER_ID,       tokens.user_id);
+  localStorage.setItem(STORAGE.EMAIL,         tokens.email);
+  localStorage.setItem(STORAGE.DISPLAY_NAME,  tokens.display_name);
+}
+
+function clearTokens() {
+  Object.values(STORAGE).forEach(k => localStorage.removeItem(k));
+}
+
+function getStoredToken(): string | null {
+  return localStorage.getItem(STORAGE.ACCESS_TOKEN);
+}
+
+function getStoredRefreshToken(): string | null {
+  return localStorage.getItem(STORAGE.REFRESH_TOKEN);
+}
+
+// ── User Info ────────────────────────────────────────────────────────────────
+export function getCurrentUser(): UserInfo | null {
+  const user_id = localStorage.getItem(STORAGE.USER_ID);
+  if (!user_id) return null;
+  return {
+    user_id,
+    email:        localStorage.getItem(STORAGE.EMAIL)        ?? '',
+    display_name: localStorage.getItem(STORAGE.DISPLAY_NAME) ?? '',
+  };
+}
+
+// ── Token Refresh ────────────────────────────────────────────────────────────
+let _refreshPromise: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = (async () => {
+    try {
+      const refreshToken = getStoredRefreshToken();
+      if (!refreshToken) return null;
+
+      const res = await fetch(`${API_CONFIG.GATEWAY_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+
+      if (!res.ok) {
+        clearTokens();
+        return null;
+      }
+      const data: AuthTokens = await res.json();
+      persistTokens(data);
+      return data.access_token;
+    } catch {
+      return null;
+    } finally {
+      _refreshPromise = null;
+    }
+  })();
+  return _refreshPromise;
+}
+
+// ── Public: Get Access Token (auto-refresh) ──────────────────────────────────
+export async function getAccessToken(): Promise<string | null> {
+  const token = getStoredToken();
+  if (!token) return null;
+  if (isTokenExpired(token)) {
+    return refreshAccessToken();
+  }
+  return token;
+}
+
+/** @deprecated alias kept for backward compat with appendTokenToUrl callers */
 export async function getApiKey(): Promise<string> {
-  if (_cachedKey !== null) {
-    console.log('[Auth] Using cached API key');
-    return _cachedKey;
-  }
-  if (_pending) {
-    console.log('[Auth] Waiting for pending API key request');
-    return _pending;
-  }
+  return (await getAccessToken()) ?? '';
+}
 
-  console.log('[Auth] Fetching API key from backend...');
-  _pending = invoke<string>('get_api_key').then((key) => {
-    _cachedKey = key;
-    _pending = null;
-    console.log('[Auth] Got API key from backend, length:', key?.length || 0);
-    return key;
-  }).catch((err) => {
-    _pending = null;
-    console.warn('[Auth] Failed to get API key from backend:', err);
-    return '';
+// ── Public: Auth Status ───────────────────────────────────────────────────────
+export function isAuthenticated(): boolean {
+  const token = getStoredToken();
+  if (!token) return false;
+  return !isTokenExpired(token);
+}
+
+// ── Public: Login ─────────────────────────────────────────────────────────────
+export async function login(email: string, password: string): Promise<AuthTokens> {
+  const res = await fetch(`${API_CONFIG.GATEWAY_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
   });
-
-  return _pending;
-}
-
-/** Appends ?token=<key> (or &token=<key>) to a URL. */
-export async function appendTokenToUrl(url: string): Promise<string> {
-  console.log('[Auth] appendTokenToUrl called for:', url);
-  const key = await getApiKey();
-  console.log('[Auth] Got key for URL, key length:', key?.length || 0);
-  if (!key) {
-    console.warn('[Auth] No API key available, returning original URL');
-    return url;
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Login failed' }));
+    throw new Error(err.detail ?? 'Login failed');
   }
-  const sep = url.includes('?') ? '&' : '?';
-  const result = `${url}${sep}token=${encodeURIComponent(key)}`;
-  console.log('[Auth] URL with token:', result.substring(0, 100) + '...');
-  return result;
+  const tokens: AuthTokens = await res.json();
+  persistTokens(tokens);
+  return tokens;
 }
 
-/** drop-in fetch() wrapper that adds Authorization: Bearer <key>. */
+// ── Public: Register ──────────────────────────────────────────────────────────
+export async function register(
+  email: string,
+  password: string,
+  display_name?: string,
+): Promise<AuthTokens> {
+  const res = await fetch(`${API_CONFIG.GATEWAY_URL}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, display_name: display_name ?? '' }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
+    throw new Error(err.detail ?? 'Registration failed');
+  }
+  const tokens: AuthTokens = await res.json();
+  persistTokens(tokens);
+  return tokens;
+}
+
+// ── Public: Logout ────────────────────────────────────────────────────────────
+export async function logout(): Promise<void> {
+  const refreshToken = getStoredRefreshToken();
+  if (refreshToken) {
+    try {
+      await fetch(`${API_CONFIG.GATEWAY_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+    } catch { /* best-effort */ }
+  }
+  clearTokens();
+}
+
+// ── Public: fetchWithAuth ─────────────────────────────────────────────────────
 export async function fetchWithAuth(
   url: string,
   options: RequestInit = {},
 ): Promise<Response> {
-  const key = await getApiKey();
+  const token = await getAccessToken();
   const headers = new Headers(options.headers);
-  if (key) {
-    headers.set('Authorization', `Bearer ${key}`);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
   }
   return fetch(url, { ...options, headers });
+}
+
+// ── Public: appendTokenToUrl (SSE / EventSource) ─────────────────────────────
+export async function appendTokenToUrl(url: string): Promise<string> {
+  const token = await getAccessToken();
+  if (!token) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
 }
