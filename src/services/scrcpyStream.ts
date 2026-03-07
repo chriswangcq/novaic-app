@@ -54,6 +54,8 @@ interface StreamState {
   spsData: Uint8Array | null;
   ppsData: Uint8Array | null;
   decoderConfigured: boolean;
+  /** Guard: don't decode until the first IDR frame arrives after configuration. */
+  hasDecodedFirstKeyFrame: boolean;
   pendingFrames: { data: Uint8Array; pts: number; isKeyFrame: boolean }[];
   frameCount: number;
   lastFpsUpdate: number;
@@ -200,6 +202,7 @@ function createStreamState(): StreamState {
     spsData: null,
     ppsData: null,
     decoderConfigured: false,
+    hasDecodedFirstKeyFrame: false,
     pendingFrames: [],
     frameCount: 0,
     lastFpsUpdate: Date.now(),
@@ -269,6 +272,9 @@ function createDecoder(state: StreamState) {
     output: (frame) => renderFrame(state, frame),
     error: (e) => {
       console.error('[ScrcpyStream] VideoDecoder error:', e);
+      // Reset so the next IDR triggers fresh reconfiguration
+      state.decoderConfigured = false;
+      state.hasDecodedFirstKeyFrame = false;
       notifySubscribers(state, 'error', `Decoder error: ${e.message}`);
     }
   });
@@ -322,9 +328,11 @@ function configureDecoder(state: StreamState) {
     });
     
     state.decoderConfigured = true;
-    
-    // 处理等待中的帧
+    state.hasDecodedFirstKeyFrame = false;  // must wait for real IDR
+
+    // 处理等待中的帧（全是 key frames）
     for (const frame of state.pendingFrames) {
+      state.hasDecodedFirstKeyFrame = true;
       decodeFrame(state, frame.data, frame.pts, frame.isKeyFrame);
     }
     state.pendingFrames = [];
@@ -366,6 +374,7 @@ function connectStream(deviceSerial: string) {
   state.spsData = null;
   state.ppsData = null;
   state.decoderConfigured = false;
+  state.hasDecodedFirstKeyFrame = false;
   state.pendingFrames = [];
 
   // 通过 Tauri command 获取动态端口，再建连接
@@ -448,6 +457,14 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
       const hasKeyFrame = containsKeyFrame(nalUnits) || isKeyFrame === 1 || isConfig === 1;
       
       if (state.decoderConfigured && state.decoder && state.decoder.state === 'configured') {
+        if (!hasKeyFrame && !state.hasDecodedFirstKeyFrame) {
+          // Decoder configured but no IDR seen yet — drop delta frame to avoid
+          // "Key frame is required" error (happens when SPS/PPS arrive without IDR)
+          return;
+        }
+        if (hasKeyFrame) {
+          state.hasDecodedFirstKeyFrame = true;
+        }
         decodeFrame(state, h264Data, Number(pts), hasKeyFrame);
       } else if (hasKeyFrame) {
         state.pendingFrames.push({
