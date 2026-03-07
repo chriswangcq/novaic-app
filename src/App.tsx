@@ -8,7 +8,7 @@ import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { SetupConfig } from './components/Agent/CreateAgentModal';
-import { useAuth, useUser, SignIn, SignUp, UserButton } from '@clerk/react';
+import { login, register, logout, getAccessToken, getCurrentUser, type UserInfo } from './services/auth';
 import { invoke } from '@tauri-apps/api/core';
 
 // Global Error Boundary
@@ -67,71 +67,123 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
   }
 }
 
-function AuthScreen() {
+interface AuthScreenProps {
+  onAuth: (user: UserInfo) => void;
+}
+
+function AuthScreen({ onAuth }: AuthScreenProps) {
   const [mode, setMode] = useState<'signIn' | 'signUp'>('signIn');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const bg = (
-    <div
-      className="absolute inset-0 opacity-[0.03] pointer-events-none"
-      style={{
-        backgroundImage: `
-          linear-gradient(to right, #ffffff 1px, transparent 1px),
-          linear-gradient(to bottom, #ffffff 1px, transparent 1px)
-        `,
-        backgroundSize: '40px 40px',
-      }}
-    />
-  );
-
-  const logo = (
-    <div className="flex flex-col items-center gap-2 mb-2">
-      <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-white/10">
-        <span className="text-2xl font-bold text-white">N</span>
-      </div>
-      <h1 className="text-lg font-semibold text-white">NovAIC</h1>
-    </div>
-  );
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const user = mode === 'signIn'
+        ? await login(email, password)
+        : await register(email, password, displayName);
+      onAuth(user);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="h-screen flex items-center justify-center bg-[#0a0a0a]">
-      {bg}
-      <div className="relative flex flex-col items-center gap-4">
-        {logo}
-        {mode === 'signIn' ? (
-          <>
-            <SignIn routing="hash" afterSignInUrl="/" />
-            <p className="text-white/40 text-sm">
-              没有账号？{' '}
-              <button
-                className="text-white/70 underline hover:text-white transition-colors"
-                onClick={() => setMode('signUp')}
-              >
-                注册
-              </button>
-            </p>
-          </>
-        ) : (
-          <>
-            <SignUp routing="hash" afterSignUpUrl="/" />
-            <p className="text-white/40 text-sm">
-              已有账号？{' '}
-              <button
-                className="text-white/70 underline hover:text-white transition-colors"
-                onClick={() => setMode('signIn')}
-              >
-                登录
-              </button>
-            </p>
-          </>
-        )}
+      <div
+        className="absolute inset-0 opacity-[0.03] pointer-events-none"
+        style={{
+          backgroundImage: `
+            linear-gradient(to right, #ffffff 1px, transparent 1px),
+            linear-gradient(to bottom, #ffffff 1px, transparent 1px)
+          `,
+          backgroundSize: '40px 40px',
+        }}
+      />
+      <div className="relative flex flex-col items-center gap-6 w-80">
+        {/* Logo */}
+        <div className="flex flex-col items-center gap-2">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-white/10">
+            <span className="text-2xl font-bold text-white">N</span>
+          </div>
+          <h1 className="text-lg font-semibold text-white">NovAIC</h1>
+        </div>
+
+        {/* Card */}
+        <form
+          onSubmit={handleSubmit}
+          className="w-full bg-white/5 border border-white/10 rounded-2xl p-6 flex flex-col gap-4"
+        >
+          <h2 className="text-white font-medium text-center">
+            {mode === 'signIn' ? '登录' : '注册'}
+          </h2>
+
+          {mode === 'signUp' && (
+            <input
+              type="text"
+              placeholder="昵称（可选）"
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm outline-none focus:border-white/30"
+            />
+          )}
+
+          <input
+            type="email"
+            placeholder="邮箱"
+            required
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm outline-none focus:border-white/30"
+          />
+
+          <input
+            type="password"
+            placeholder="密码（至少 8 位）"
+            required
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm outline-none focus:border-white/30"
+          />
+
+          {error && (
+            <p className="text-red-400 text-xs text-center">{error}</p>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-white text-black font-medium rounded-lg py-2 text-sm hover:bg-white/90 disabled:opacity-50 transition-colors"
+          >
+            {loading ? '请稍候…' : mode === 'signIn' ? '登录' : '注册'}
+          </button>
+        </form>
+
+        <p className="text-white/40 text-sm">
+          {mode === 'signIn' ? '没有账号？' : '已有账号？'}{' '}
+          <button
+            type="button"
+            className="text-white/70 underline hover:text-white transition-colors"
+            onClick={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setError(''); }}
+          >
+            {mode === 'signIn' ? '注册' : '登录'}
+          </button>
+        </p>
       </div>
     </div>
   );
 }
 
 function App() {
-  const { isSignedIn, isLoaded: isAuthLoaded, getToken } = useAuth();
-  const { user } = useUser();
+  const [isSignedIn, setIsSignedIn] = useState(() => getCurrentUser() !== null);
+  const [currentUserInfo, setCurrentUserInfo] = useState<UserInfo | null>(() => getCurrentUser());
 
   const { 
     initialize, 
@@ -155,22 +207,21 @@ function App() {
   const [currentPage, setCurrentPage] = useState<'setup' | 'workspace'>('workspace');
   const [setupConfig, setSetupConfig] = useState<SetupConfig | null>(null);
 
-  // After Clerk sign-in: push JWT to Rust first, THEN start gateway initialization.
-  // Both the Tauri gateway commands (gateway_get/post/…) and the CloudBridge WS
-  // connection rely on the Clerk JWT stored in CloudTokenState.
-  // Clerk dev-mode tokens expire in 60 s → refresh every 45 s.
+  // After sign-in: push JWT to Rust CloudTokenState first, THEN start gateway init.
+  // Both Tauri gateway commands and the CloudBridge WS connection read from CloudTokenState.
+  // Our HS256 tokens expire in 60 min; refresh proactively every 55 min via auth.ts auto-refresh.
   useEffect(() => {
     if (!isSignedIn) return;
 
     const pushToken = async (): Promise<string | null> => {
       try {
-        const token = await getToken();
-        console.log('[CloudBridge] getToken() result:', token ? `len=${token.length} prefix=${token.slice(0,20)}` : 'NULL');
+        const token = await getAccessToken();
+        console.log('[CloudBridge] getAccessToken() result:', token ? `len=${token.length} prefix=${token.slice(0,20)}` : 'NULL');
         if (token) {
           await invoke('update_cloud_token', { token });
           return token;
         }
-        console.warn('[CloudBridge] getToken() returned null — will retry');
+        console.warn('[CloudBridge] getAccessToken() returned null — will retry');
       } catch (e) {
         console.warn('[CloudBridge] Failed to push token to Rust:', e);
       }
@@ -178,14 +229,12 @@ function App() {
     };
 
     // Push token first, then start gateway polling.
-    // If getToken() returns null on first try (Clerk still initializing),
-    // fall back to a shorter retry interval until we get a valid token.
+    // Retry every 3 s until we get a token (handles edge cases on startup).
     let fallbackInterval: ReturnType<typeof setInterval> | null = null;
     pushToken().then((token) => {
       if (token) {
         initialize();
       } else {
-        // Retry every 3 seconds until we get a token
         fallbackInterval = setInterval(async () => {
           const t = await pushToken();
           if (t) {
@@ -197,12 +246,13 @@ function App() {
       }
     });
 
-    const interval = setInterval(pushToken, 10 * 60 * 1000); // refresh every 10 min (production JWT ~60 min TTL)
+    // Proactive refresh every 55 min (token TTL is 60 min; auth.ts handles the actual refresh call)
+    const interval = setInterval(pushToken, 55 * 60 * 1000);
     return () => {
       clearInterval(interval);
       if (fallbackInterval) clearInterval(fallbackInterval);
     };
-  }, [isSignedIn, initialize, getToken]);
+  }, [isSignedIn, initialize]);
 
   // 连接超时：超过 35 秒未就绪则显示错误和重试
   useEffect(() => {
@@ -340,17 +390,15 @@ function App() {
     }
   }, [selectAgent]);
 
-  // ── Auth Gate — show Clerk's sign-in widget until session is active ─────
-  if (!isAuthLoaded) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-[#0a0a0a]">
-        <Loader2 size={32} className="animate-spin text-white/40" />
-      </div>
-    );
-  }
-
   if (!isSignedIn) {
-    return <AuthScreen />;
+    return (
+      <AuthScreen
+        onAuth={(user) => {
+          setCurrentUserInfo(user);
+          setIsSignedIn(true);
+        }}
+      />
+    );
   }
 
   // 连接超时：显示错误和重试
@@ -440,12 +488,18 @@ function App() {
         <span className={`w-2 h-2 rounded-full mr-2 ${isInitialized ? 'bg-nb-success' : 'bg-nb-warning'}`} />
         <span>{isInitialized ? 'Connected' : 'Connecting...'}</span>
         <span className="ml-auto flex items-center gap-3">
-          {user?.primaryEmailAddress?.emailAddress && (
+          {currentUserInfo?.email && (
             <span className="text-nb-text-muted/60 truncate max-w-[160px]">
-              {user.primaryEmailAddress.emailAddress}
+              {currentUserInfo.email}
             </span>
           )}
-          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: 'w-4 h-4' } }} />
+          <button
+            onClick={async () => { await logout(); setIsSignedIn(false); setCurrentUserInfo(null); }}
+            className="text-nb-text-muted/60 hover:text-nb-text-muted transition-colors text-xs"
+            title="退出登录"
+          >
+            退出
+          </button>
           <span className="text-nb-text-muted/40">NovAIC v0.1.0</span>
         </span>
       </footer>
