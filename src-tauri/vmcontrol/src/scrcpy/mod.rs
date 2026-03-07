@@ -648,6 +648,9 @@ impl ScrcpyProxy {
                             "message": e.to_string()
                         });
                         let _ = ws_sender.send(Message::Text(error_msg.to_string())).await;
+                        // Send a proper close frame so WebKit gets onclose rather than
+                        // an abrupt TCP RST ("Socket is not connected" in the console).
+                        let _ = ws_sender.close().await;
                         return Err(e);
                     }
                 }
@@ -727,9 +730,19 @@ impl ScrcpyProxy {
             match self.read_metadata(&mut video_stream).await {
                 Ok(metadata) => return Ok((video_stream, control_stream, metadata)),
                 Err(e) => {
-                    // Only retry on early-EOF (server not ready); propagate other errors.
+                    // Retry on any connection-level transient failure:
+                    //   - "failed to fill whole buffer"  → tokio read_exact gets 0 bytes (EOF)
+                    //   - "early eof" / "early EOF"       → legacy alias
+                    //   - "connection reset by peer"      → scrcpy-server process died mid-handshake
+                    //   - "broken pipe"                   → same, write path
+                    // Anything else (codec unknown, bad data) is a hard error.
                     let msg = e.to_string();
-                    if msg.contains("early eof") || msg.contains("early EOF") {
+                    let is_transient = msg.contains("failed to fill whole buffer")
+                        || msg.contains("early eof")
+                        || msg.contains("early EOF")
+                        || msg.contains("connection reset")
+                        || msg.contains("broken pipe");
+                    if is_transient {
                         last_err = e;
                         // continue to next attempt
                     } else {

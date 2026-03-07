@@ -418,6 +418,9 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
           notifySubscribers(state, 'status');
         } else if (message.type === 'error') {
           state.status = 'error';
+          // Backend already did its own restart-retry cycle before sending this.
+          // Exhaust retryCount so onclose doesn't trigger a redundant reconnect loop.
+          state.retryCount = 3;
           notifySubscribers(state, 'error', message.message);
           notifySubscribers(state, 'status');
         }
@@ -494,15 +497,16 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
     state.status = wasConnected ? 'disconnected' : 'error';
     notifySubscribers(state, 'status');
     
-    // 自动重连（如果有订阅者）
+    // 自动重连（如果有订阅者）。指数退避：2s / 4s / 8s
     if (state.subscribers.size > 0 && state.retryCount < 3) {
       state.retryCount++;
-      console.log(`[ScrcpyStream] Scheduling reconnect for ${deviceSerial} (${state.retryCount}/3)`);
+      const delay = 2000 * Math.pow(2, state.retryCount - 1);
+      console.log(`[ScrcpyStream] Scheduling reconnect for ${deviceSerial} (${state.retryCount}/3, delay=${delay}ms)`);
       state.retryTimer = setTimeout(() => {
         if (state && state.subscribers.size > 0) {
           connectStream(deviceSerial);
         }
-      }, 2000);
+      }, delay);
     }
   };
 }
