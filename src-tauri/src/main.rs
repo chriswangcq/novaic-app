@@ -311,34 +311,34 @@ type VmControlState = Arc<Mutex<VmControlEmbedded>>;
 
 // ─── Cloud Bridge ─────────────────────────────────────────────────────────────
 
+/// Shared auth token — updated by the frontend via `update_cloud_token` command.
+/// The CloudBridge reconnect loop reads this fresh before every WS connect attempt
+/// so short-lived Clerk session tokens (60 s in dev) are always current.
+type CloudTokenState = Arc<tokio::sync::RwLock<String>>;
+
 struct CloudBridgeState {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Last gateway URL used — needed when restarting with a new token.
-    gateway_url: String,
-    /// Last vmcontrol URL used — needed when restarting with a new token.
-    vmcontrol_url: String,
 }
 
 impl CloudBridgeState {
     fn new() -> Self {
-        Self {
-            shutdown_tx: None,
-            gateway_url: String::new(),
-            vmcontrol_url: String::new(),
-        }
+        Self { shutdown_tx: None }
     }
 
-    fn start(&mut self, gateway_url: String, vmcontrol_url: String, auth_token: String) {
+    fn start(
+        &mut self,
+        gateway_url: String,
+        vmcontrol_url: String,
+        token: CloudTokenState,
+    ) {
         if self.shutdown_tx.is_some() {
             println!("[CloudBridge] Already running");
             return;
         }
-        self.gateway_url = gateway_url.clone();
-        self.vmcontrol_url = vmcontrol_url.clone();
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         self.shutdown_tx = Some(tx);
         tauri::async_runtime::spawn(async move {
-            cloud_connection::start_cloud_connection(gateway_url, vmcontrol_url, auth_token, rx).await;
+            cloud_connection::start_cloud_connection(gateway_url, vmcontrol_url, token, rx).await;
         });
         println!("[CloudBridge] Started");
     }
@@ -348,18 +348,6 @@ impl CloudBridgeState {
             let _ = tx.send(());
             println!("[CloudBridge] Stopped");
         }
-    }
-
-    /// Stop the current connection and restart with a new auth token.
-    fn restart_with_token(&mut self, auth_token: String) {
-        let gateway_url = self.gateway_url.clone();
-        let vmcontrol_url = self.vmcontrol_url.clone();
-        if gateway_url.is_empty() || vmcontrol_url.is_empty() {
-            println!("[CloudBridge] Not yet initialised, skip restart");
-            return;
-        }
-        self.stop();
-        self.start(gateway_url, vmcontrol_url, auth_token);
     }
 }
 
@@ -427,17 +415,16 @@ async fn get_api_key(api_key: tauri::State<'_, ApiKeyState>) -> Result<String, S
     Ok(api_key.as_ref().clone())
 }
 
-/// Called by the frontend after Clerk sign-in (or token refresh) to pass the
-/// JWT to the CloudBridge WebSocket connection. Restarts the bridge with the
-/// new token so nginx can validate the Clerk JWT.
+/// Called by the frontend after Clerk sign-in (or token refresh) to supply a
+/// fresh JWT to the CloudBridge. The bridge reads this token before every
+/// reconnect attempt, so no restart is needed — just update the shared value.
 #[tauri::command]
 async fn update_cloud_token(
     token: String,
-    cloud_bridge: tauri::State<'_, CloudBridgeHandle>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
 ) -> Result<(), String> {
-    println!("[CloudBridge] Received new auth token from frontend (len={})", token.len());
-    let mut cb = cloud_bridge.lock().await;
-    cb.restart_with_token(token);
+    println!("[CloudBridge] Auth token updated (len={})", token.len());
+    *cloud_token.write().await = token;
     Ok(())
 }
 
@@ -719,10 +706,15 @@ fn main() {
             std::env::set_var("NOVAIC_GATEWAY_URL", read_gateway_url(&gw_url));
             std::env::set_var("NOVAIC_API_KEY", api_key.as_str());
 
-            // Managed state: VmControl + CloudBridge
+            // Managed state: VmControl + CloudBridge + shared auth token
             let vmcontrol = Arc::new(Mutex::new(VmControlEmbedded::new()));
             app.manage(vmcontrol.clone());
-            
+
+            // Shared token: frontend writes via update_cloud_token(),
+            // CloudBridge reads before each WS connect attempt.
+            let cloud_token: CloudTokenState = Arc::new(tokio::sync::RwLock::new(String::new()));
+            app.manage(cloud_token.clone());
+
             let cloud_bridge = Arc::new(Mutex::new(CloudBridgeState::new()));
             app.manage(cloud_bridge.clone());
 
@@ -734,6 +726,7 @@ fn main() {
             let data_dir_for_task = data_dir.clone();
             let vmcontrol_for_task = vmcontrol.clone();
             let cloud_bridge_for_task = cloud_bridge.clone();
+            let cloud_token_for_task = cloud_token.clone();
             let gw_url_for_task = gw_url.clone();
             
             tauri::async_runtime::spawn(async move {
@@ -806,14 +799,14 @@ fn main() {
                     return;
                 }
 
-                // Start Cloud Bridge with an empty token.
-                // The frontend will call update_cloud_token() with a Clerk JWT after sign-in,
-                // which restarts the bridge with the real token.
-                // The bridge will keep retrying with 401s until then (harmless).
+                // Start Cloud Bridge. The shared `cloud_token` starts empty; the
+                // frontend calls update_cloud_token() after Clerk sign-in and every
+                // 45 s thereafter. The bridge reads the token fresh before each
+                // reconnect, so short-lived Clerk JWTs (60 s) are always current.
                 {
                     let mut cb = cloud_bridge_for_task.lock().await;
                     let gateway_url = read_gateway_url(&gw_url_for_task);
-                    cb.start(gateway_url, vmcontrol_url, String::new());
+                    cb.start(gateway_url, vmcontrol_url, cloud_token_for_task);
                     append_startup_diagnostic(&data_dir_for_task, "cloud-bridge", "started",
                         "cloud bridge initialised (waiting for Clerk JWT from frontend)");
                 }

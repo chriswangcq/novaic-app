@@ -68,21 +68,17 @@ enum OutgoingMessage {
 ///
 /// - 自动重连（断线后等待 5 秒重试）
 /// - 收到 `shutdown` 信号时停止
-/// - `auth_token` 非空时追加 `?token=<key>` 供 Nginx 鉴权
+/// - `auth_token` 每次重连前重新读取（支持动态 JWT 刷新，应对短效 Clerk session token）
 pub async fn start_cloud_connection(
     gateway_url: String,
     vmcontrol_url: String,
-    auth_token: String,
+    auth_token: std::sync::Arc<tokio::sync::RwLock<String>>,
     shutdown: oneshot::Receiver<()>,
 ) {
     let base = gateway_url
         .replace("http://", "ws://")
         .replace("https://", "wss://");
-    let ws_url = if auth_token.is_empty() {
-        format!("{}/internal/pc/ws", base)
-    } else {
-        format!("{}/internal/pc/ws?token={}", base, auth_token)
-    };
+    let ws_base = format!("{}/internal/pc/ws", base);
 
     // 将 oneshot 转为共享通知（用 notify_one 存储 permit，避免两个 select! 之间的竞态）
     let notify = Arc::new(tokio::sync::Notify::new());
@@ -102,9 +98,18 @@ pub async fn start_cloud_connection(
             reqwest::Client::new()
         });
 
-    println!("[CloudConn] Starting cloud connection to {}", ws_url);
+    println!("[CloudConn] Starting cloud connection to {}", ws_base);
 
     loop {
+        // Re-read token before each connection attempt so short-lived Clerk JWTs
+        // (default 60 s expiry) are always fresh.
+        let current_token = auth_token.read().await.clone();
+        let ws_url = if current_token.is_empty() {
+            ws_base.clone()
+        } else {
+            format!("{}?token={}", ws_base, current_token)
+        };
+
         tokio::select! {
             biased;
             _ = notify.notified() => {

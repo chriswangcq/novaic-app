@@ -98,7 +98,9 @@ function App() {
     if (isSignedIn) initialize();
   }, [isSignedIn, initialize]);
 
-  // Pass Clerk JWT to the Rust CloudBridge after sign-in, then refresh every 55 min
+  // Pass Clerk JWT to the Rust CloudBridge after sign-in.
+  // Clerk dev-mode session tokens expire in 60 s, so refresh every 45 s so
+  // the token in the shared RwLock is always valid on the next WS reconnect.
   useEffect(() => {
     if (!isSignedIn) return;
 
@@ -114,8 +116,7 @@ function App() {
     };
 
     pushToken();
-    // Clerk access tokens expire in 60 min; refresh 5 min early
-    const interval = setInterval(pushToken, 55 * 60 * 1000);
+    const interval = setInterval(pushToken, 45 * 1000); // refresh every 45 s
     return () => clearInterval(interval);
   }, [isSignedIn]);
 
