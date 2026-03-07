@@ -9,6 +9,7 @@ import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { SetupConfig } from './components/Agent/CreateAgentModal';
 import { useAuth, useUser, SignIn, UserButton } from '@clerk/react';
+import { invoke } from '@tauri-apps/api/core';
 
 // Global Error Boundary
 interface ErrorBoundaryState {
@@ -96,6 +97,27 @@ function App() {
   useEffect(() => {
     if (isSignedIn) initialize();
   }, [isSignedIn, initialize]);
+
+  // Pass Clerk JWT to the Rust CloudBridge after sign-in, then refresh every 55 min
+  useEffect(() => {
+    if (!isSignedIn) return;
+
+    const pushToken = async () => {
+      try {
+        const token = await window.Clerk?.session?.getToken();
+        if (token) {
+          await invoke('update_cloud_token', { token });
+        }
+      } catch (e) {
+        console.warn('[CloudBridge] Failed to push token to Rust:', e);
+      }
+    };
+
+    pushToken();
+    // Clerk access tokens expire in 60 min; refresh 5 min early
+    const interval = setInterval(pushToken, 55 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [isSignedIn]);
 
   // 连接超时：超过 35 秒未就绪则显示错误和重试
   useEffect(() => {

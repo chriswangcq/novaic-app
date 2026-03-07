@@ -313,18 +313,28 @@ type VmControlState = Arc<Mutex<VmControlEmbedded>>;
 
 struct CloudBridgeState {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Last gateway URL used — needed when restarting with a new token.
+    gateway_url: String,
+    /// Last vmcontrol URL used — needed when restarting with a new token.
+    vmcontrol_url: String,
 }
 
 impl CloudBridgeState {
     fn new() -> Self {
-        Self { shutdown_tx: None }
+        Self {
+            shutdown_tx: None,
+            gateway_url: String::new(),
+            vmcontrol_url: String::new(),
+        }
     }
 
     fn start(&mut self, gateway_url: String, vmcontrol_url: String, auth_token: String) {
         if self.shutdown_tx.is_some() {
             println!("[CloudBridge] Already running");
-                    return;
-                }
+            return;
+        }
+        self.gateway_url = gateway_url.clone();
+        self.vmcontrol_url = vmcontrol_url.clone();
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         self.shutdown_tx = Some(tx);
         tauri::async_runtime::spawn(async move {
@@ -338,6 +348,18 @@ impl CloudBridgeState {
             let _ = tx.send(());
             println!("[CloudBridge] Stopped");
         }
+    }
+
+    /// Stop the current connection and restart with a new auth token.
+    fn restart_with_token(&mut self, auth_token: String) {
+        let gateway_url = self.gateway_url.clone();
+        let vmcontrol_url = self.vmcontrol_url.clone();
+        if gateway_url.is_empty() || vmcontrol_url.is_empty() {
+            println!("[CloudBridge] Not yet initialised, skip restart");
+            return;
+        }
+        self.stop();
+        self.start(gateway_url, vmcontrol_url, auth_token);
     }
 }
 
@@ -403,6 +425,20 @@ async fn get_gateway_status(gw_url: tauri::State<'_, GatewayUrlState>) -> Result
 #[tauri::command]
 async fn get_api_key(api_key: tauri::State<'_, ApiKeyState>) -> Result<String, String> {
     Ok(api_key.as_ref().clone())
+}
+
+/// Called by the frontend after Clerk sign-in (or token refresh) to pass the
+/// JWT to the CloudBridge WebSocket connection. Restarts the bridge with the
+/// new token so nginx can validate the Clerk JWT.
+#[tauri::command]
+async fn update_cloud_token(
+    token: String,
+    cloud_bridge: tauri::State<'_, CloudBridgeHandle>,
+) -> Result<(), String> {
+    println!("[CloudBridge] Received new auth token from frontend (len={})", token.len());
+    let mut cb = cloud_bridge.lock().await;
+    cb.restart_with_token(token);
+    Ok(())
 }
 
 /// Gateway API GET
@@ -698,7 +734,6 @@ fn main() {
             let data_dir_for_task = data_dir.clone();
             let vmcontrol_for_task = vmcontrol.clone();
             let cloud_bridge_for_task = cloud_bridge.clone();
-            let api_key_for_task = api_key.clone();
             let gw_url_for_task = gw_url.clone();
             
             tauri::async_runtime::spawn(async move {
@@ -771,14 +806,16 @@ fn main() {
                     return;
                 }
 
-                // Start Cloud Bridge (connects to Gateway WebSocket, proxies VM/Mobile tool requests)
-                // CloudBridge has built-in reconnect; it will retry until Gateway becomes available.
+                // Start Cloud Bridge with an empty token.
+                // The frontend will call update_cloud_token() with a Clerk JWT after sign-in,
+                // which restarts the bridge with the real token.
+                // The bridge will keep retrying with 401s until then (harmless).
                 {
                     let mut cb = cloud_bridge_for_task.lock().await;
                     let gateway_url = read_gateway_url(&gw_url_for_task);
-                    cb.start(gateway_url, vmcontrol_url, api_key_for_task.as_ref().clone());
+                    cb.start(gateway_url, vmcontrol_url, String::new());
                     append_startup_diagnostic(&data_dir_for_task, "cloud-bridge", "started",
-                        "cloud bridge WebSocket connection starting");
+                        "cloud bridge initialised (waiting for Clerk JWT from frontend)");
                 }
             });
             
@@ -808,6 +845,7 @@ fn main() {
             get_vmcontrol_url,
             // Auth
             get_api_key,
+            update_cloud_token,
             // Gateway API proxy
             gateway_get,
             gateway_post,
