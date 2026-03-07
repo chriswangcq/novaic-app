@@ -68,7 +68,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 }
 
 function App() {
-  const { isSignedIn, isLoaded: isAuthLoaded } = useAuth();
+  const { isSignedIn, isLoaded: isAuthLoaded, getToken } = useAuth();
   const { user } = useUser();
 
   const { 
@@ -102,25 +102,45 @@ function App() {
 
     const pushToken = async (): Promise<string | null> => {
       try {
-        const token = await window.Clerk?.session?.getToken();
+        const token = await getToken();
+        console.log('[CloudBridge] getToken() result:', token ? `len=${token.length} prefix=${token.slice(0,20)}` : 'NULL');
         if (token) {
           await invoke('update_cloud_token', { token });
           return token;
         }
+        console.warn('[CloudBridge] getToken() returned null — will retry');
       } catch (e) {
         console.warn('[CloudBridge] Failed to push token to Rust:', e);
       }
       return null;
     };
 
-    // Push token first, then start gateway polling
+    // Push token first, then start gateway polling.
+    // If getToken() returns null on first try (Clerk still initializing),
+    // fall back to a shorter retry interval until we get a valid token.
+    let fallbackInterval: ReturnType<typeof setInterval> | null = null;
     pushToken().then((token) => {
-      if (token) initialize();
+      if (token) {
+        initialize();
+      } else {
+        // Retry every 3 seconds until we get a token
+        fallbackInterval = setInterval(async () => {
+          const t = await pushToken();
+          if (t) {
+            initialize();
+            if (fallbackInterval) clearInterval(fallbackInterval);
+            fallbackInterval = null;
+          }
+        }, 3000);
+      }
     });
 
     const interval = setInterval(pushToken, 10 * 60 * 1000); // refresh every 10 min (production JWT ~60 min TTL)
-    return () => clearInterval(interval);
-  }, [isSignedIn, initialize]);
+    return () => {
+      clearInterval(interval);
+      if (fallbackInterval) clearInterval(fallbackInterval);
+    };
+  }, [isSignedIn, initialize, getToken]);
 
   // 连接超时：超过 35 秒未就绪则显示错误和重试
   useEffect(() => {
