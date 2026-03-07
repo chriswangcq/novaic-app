@@ -306,8 +306,9 @@ pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<(u16, u16), VmE
         .spawn()
         .map_err(|e| VmError::ScrcpyError(format!("Failed to start server: {}", e)))?;
     
-    // 等待服务器启动
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Wait for the Android JVM to fully initialise scrcpy-server.
+    // 500ms is not enough on the emulator; 1200ms avoids the first-connect EOF.
+    tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
     
     // 保存到全局状态
     let server = PersistentServer {
@@ -636,8 +637,8 @@ impl ScrcpyProxy {
                 
                 // Remove stale entry and restart
                 stop_scrcpy_server(&self.device_serial).await;
-                // Brief pause so Android has time to clean up the old socket
-                tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+                // Give Android time to tear down the old socket and JVM to restart
+                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
                 
                 match self.try_connect_and_read_metadata().await {
                     Ok(tuple) => tuple,
@@ -671,38 +672,74 @@ impl ScrcpyProxy {
 
     /// Ensure server is running, then connect video + control sockets and read metadata.
     /// On any error the caller should stop the server and retry.
+    ///
+    /// Internally retries the full connect+read cycle up to 6 times when the server
+    /// sends an early EOF on the dummy byte.  This handles the race where the Android
+    /// JVM has not yet finished initialising scrcpy-server even though the adb-forward
+    /// TCP port is already accepting connections.
     async fn try_connect_and_read_metadata(
         &self,
     ) -> Result<(TcpStream, TcpStream, DeviceMetadata), VmError> {
         let (video_port, control_port) = ensure_scrcpy_server(&self.device_serial).await?;
         tracing::info!("Using scrcpy-server on ports {}/{}", video_port, control_port);
 
-        // Connect video socket (short retry for slow emulator start)
-        let mut retry = 0u8;
-        let mut video_stream = loop {
-            match TcpStream::connect(format!("127.0.0.1:{}", video_port)).await {
-                Ok(s) => break s,
-                Err(e) => {
-                    retry += 1;
-                    if retry > 10 {
-                        return Err(VmError::ScrcpyError(
-                            format!("Failed to connect video socket after {} retries: {}", retry, e)
-                        ));
+        // Retry the entire connect + dummy-byte exchange.
+        // The Android-side JVM may not be ready to send the dummy byte even after
+        // the adb forward port is open, so we back off and retry on early-EOF.
+        const MAX_METADATA_ATTEMPTS: u8 = 6;
+        let mut last_err = VmError::ScrcpyError("unreachable".to_string());
+
+        for attempt in 0..MAX_METADATA_ATTEMPTS {
+            if attempt > 0 {
+                let wait_ms = 400u64 * u64::from(attempt);
+                tracing::warn!(
+                    "Dummy-byte early EOF (attempt {}/{}), waiting {}ms before retry…",
+                    attempt, MAX_METADATA_ATTEMPTS, wait_ms
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+            }
+
+            // Connect video socket (short retry for TCP-level failures only)
+            let mut tcp_retry = 0u8;
+            let mut video_stream = loop {
+                match TcpStream::connect(format!("127.0.0.1:{}", video_port)).await {
+                    Ok(s) => break s,
+                    Err(e) => {
+                        tcp_retry += 1;
+                        if tcp_retry > 10 {
+                            return Err(VmError::ScrcpyError(format!(
+                                "Failed to connect video socket after {} retries: {}",
+                                tcp_retry, e
+                            )));
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+                }
+            };
+
+            let control_stream =
+                TcpStream::connect(format!("127.0.0.1:{}", control_port))
+                    .await
+                    .map_err(|e| {
+                        VmError::ScrcpyError(format!("Failed to connect control socket: {}", e))
+                    })?;
+
+            match self.read_metadata(&mut video_stream).await {
+                Ok(metadata) => return Ok((video_stream, control_stream, metadata)),
+                Err(e) => {
+                    // Only retry on early-EOF (server not ready); propagate other errors.
+                    let msg = e.to_string();
+                    if msg.contains("early eof") || msg.contains("early EOF") {
+                        last_err = e;
+                        // continue to next attempt
+                    } else {
+                        return Err(e);
+                    }
                 }
             }
-        };
+        }
 
-        let control_stream = TcpStream::connect(format!("127.0.0.1:{}", control_port))
-            .await
-            .map_err(|e| VmError::ScrcpyError(format!("Failed to connect control socket: {}", e)))?;
-
-        // read_metadata can return early-eof if the Android-side server process died
-        // while the adb forward was still active – propagate as error so caller retries.
-        let metadata = self.read_metadata(&mut video_stream).await?;
-
-        Ok((video_stream, control_stream, metadata))
+        Err(last_err)
     }
     
     /// 处理视频和控制流
