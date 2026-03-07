@@ -489,6 +489,19 @@ impl ScrcpyProxy {
     /// 4. 4 字节 width (big-endian)
     /// 5. 4 字节 height (big-endian)
     async fn read_metadata(&self, stream: &mut TcpStream) -> Result<DeviceMetadata, VmError> {
+        // Wrap the entire handshake in a timeout so that a scrcpy-server which
+        // accepted the TCP connection but is not yet ready to send data doesn't
+        // stall the caller indefinitely.  3 s is generous; typical handshake
+        // completes in < 50 ms once the server is ready.
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(3),
+            self.read_metadata_inner(stream),
+        )
+        .await
+        .map_err(|_| VmError::ScrcpyError("early eof".to_string()))?
+    }
+
+    async fn read_metadata_inner(&self, stream: &mut TcpStream) -> Result<DeviceMetadata, VmError> {
         // 1. 读取 dummy byte (tunnel_forward=true 时发送)
         let mut dummy = [0u8; 1];
         stream.read_exact(&mut dummy).await
