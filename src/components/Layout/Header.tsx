@@ -84,21 +84,18 @@ export function Header(props: HeaderProps) {
                     ${isMacOS ? 'pl-[76px]' : 'pl-2'}`}
         data-tauri-drag-region
       >
-        {/* Menu toggle */}
-        <button
-          onClick={onToggleDrawer}
-          className={`w-7 h-7 flex items-center justify-center rounded-md transition-all shrink-0
-                      ${isDrawerOpen ? 'bg-white/[0.08] text-nb-text' : 'text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text'}`}
-          title="Toggle sidebar"
-          data-tauri-drag-region="false"
-        >
-          <Menu size={15} strokeWidth={1.8} />
-        </button>
-
-        {/* Logo + wordmark */}
-        <div className="flex items-center gap-1.5 ml-2 mr-1 shrink-0">
+        {/* Logo + menu toggle */}
+        <div className="flex items-center gap-1 shrink-0">
           <img src="/logo.png" alt="NovAIC" className="w-5 h-5 opacity-90" />
-          <span className="text-[13px] font-semibold tracking-tight text-nb-text/80">NovAIC</span>
+          <button
+            onClick={onToggleDrawer}
+            className={`w-7 h-7 flex items-center justify-center rounded-md transition-all
+                        ${isDrawerOpen ? 'bg-white/[0.08] text-nb-text' : 'text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text'}`}
+            title="Toggle sidebar"
+            data-tauri-drag-region="false"
+          >
+            <Menu size={15} strokeWidth={1.8} />
+          </button>
         </div>
 
         {/* Drag zone left */}
