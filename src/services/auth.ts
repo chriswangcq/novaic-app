@@ -1,203 +1,83 @@
 /**
- * Frontend JWT auth helper.
+ * Frontend auth helper — Clerk edition.
  *
- * Tokens are stored in localStorage and automatically refreshed before expiry.
- * nginx validates the JWT and injects X-User-ID into gateway requests.
+ * All identity and session management is handled by Clerk.
+ * This module bridges Clerk's session token to the rest of the app:
  *
- * Public API:
- *   getAccessToken()         – returns current JWT (refreshes if near-expiry)
+ *   getAccessToken()         – returns the current Clerk session JWT
  *   fetchWithAuth(url, opts) – drop-in fetch() that adds Authorization: Bearer <token>
  *   appendTokenToUrl(url)    – for EventSource / WebSocket that can't set headers
- *   login(email, password)   – returns tokens, persists to localStorage
- *   register(email, pw, name)– same
- *   logout()                 – clears localStorage tokens
- *   isAuthenticated()        – true if a non-expired token is stored
+ *   isAuthenticated()        – true if Clerk has an active session
+ *   getCurrentUser()         – basic user info from Clerk's active session
+ *   logout()                 – signs out via Clerk
+ *
+ * The Clerk JWT is a short-lived RS256 token. nginx's auth_request validates it
+ * against Clerk's JWKS endpoint and injects X-User-ID (Clerk's userId) into
+ * every proxied /api/* request.
  */
 
-import { API_CONFIG } from '../config';
+// ── Clerk global instance access ─────────────────────────────────────────────
+// Clerk exposes `window.Clerk` after ClerkProvider mounts, allowing non-hook
+// code (services, stores) to access auth state.
 
-// ── Storage Keys ────────────────────────────────────────────────────────────
-const STORAGE = {
-  ACCESS_TOKEN:  'novaic_access_token',
-  REFRESH_TOKEN: 'novaic_refresh_token',
-  USER_ID:       'novaic_user_id',
-  EMAIL:         'novaic_email',
-  DISPLAY_NAME:  'novaic_display_name',
-} as const;
-
-// ── Token Types ─────────────────────────────────────────────────────────────
-export interface AuthTokens {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
-  expires_in: number;  // seconds
-  user_id: string;
-  email: string;
-  display_name: string;
-}
-
-export interface UserInfo {
-  user_id: string;
-  email: string;
-  display_name: string;
-}
-
-// ── JWT Decode (no verify — nginx already verified) ─────────────────────────
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const [, payloadB64] = token.split('.');
-    const json = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'));
-    return JSON.parse(json);
-  } catch {
-    return null;
+declare global {
+  interface Window {
+    Clerk?: {
+      session?: {
+        getToken: (opts?: { template?: string }) => Promise<string | null>;
+        user?: {
+          id: string;
+          primaryEmailAddress?: { emailAddress: string } | null;
+          fullName?: string | null;
+          firstName?: string | null;
+        };
+      };
+      user?: {
+        id: string;
+        primaryEmailAddress?: { emailAddress: string } | null;
+        fullName?: string | null;
+        firstName?: string | null;
+      };
+      signOut: (opts?: { redirectUrl?: string }) => Promise<void>;
+    };
   }
 }
 
-function tokenExpiresAt(token: string): number {
-  const payload = decodeJwtPayload(token);
-  return typeof payload?.exp === 'number' ? payload.exp * 1000 : 0;
-}
-
-function isTokenExpired(token: string, bufferMs = 5 * 60 * 1000): boolean {
-  const exp = tokenExpiresAt(token);
-  return exp === 0 || Date.now() + bufferMs >= exp;
-}
-
-// ── Storage Helpers ──────────────────────────────────────────────────────────
-function persistTokens(tokens: AuthTokens) {
-  localStorage.setItem(STORAGE.ACCESS_TOKEN,  tokens.access_token);
-  localStorage.setItem(STORAGE.REFRESH_TOKEN, tokens.refresh_token);
-  localStorage.setItem(STORAGE.USER_ID,       tokens.user_id);
-  localStorage.setItem(STORAGE.EMAIL,         tokens.email);
-  localStorage.setItem(STORAGE.DISPLAY_NAME,  tokens.display_name);
-}
-
-function clearTokens() {
-  Object.values(STORAGE).forEach(k => localStorage.removeItem(k));
-}
-
-function getStoredToken(): string | null {
-  return localStorage.getItem(STORAGE.ACCESS_TOKEN);
-}
-
-function getStoredRefreshToken(): string | null {
-  return localStorage.getItem(STORAGE.REFRESH_TOKEN);
-}
-
-// ── User Info ────────────────────────────────────────────────────────────────
-export function getCurrentUser(): UserInfo | null {
-  const user_id = localStorage.getItem(STORAGE.USER_ID);
-  if (!user_id) return null;
-  return {
-    user_id,
-    email:        localStorage.getItem(STORAGE.EMAIL)        ?? '',
-    display_name: localStorage.getItem(STORAGE.DISPLAY_NAME) ?? '',
-  };
-}
-
-// ── Token Refresh ────────────────────────────────────────────────────────────
-let _refreshPromise: Promise<string | null> | null = null;
-
-async function refreshAccessToken(): Promise<string | null> {
-  if (_refreshPromise) return _refreshPromise;
-  _refreshPromise = (async () => {
-    try {
-      const refreshToken = getStoredRefreshToken();
-      if (!refreshToken) return null;
-
-      const res = await fetch(`${API_CONFIG.GATEWAY_URL}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-
-      if (!res.ok) {
-        clearTokens();
-        return null;
-      }
-      const data: AuthTokens = await res.json();
-      persistTokens(data);
-      return data.access_token;
-    } catch {
-      return null;
-    } finally {
-      _refreshPromise = null;
-    }
-  })();
-  return _refreshPromise;
-}
-
-// ── Public: Get Access Token (auto-refresh) ──────────────────────────────────
+// ── Public: Get Access Token ─────────────────────────────────────────────────
 export async function getAccessToken(): Promise<string | null> {
-  const token = getStoredToken();
-  if (!token) return null;
-  if (isTokenExpired(token)) {
-    return refreshAccessToken();
-  }
-  return token;
+  return window.Clerk?.session?.getToken() ?? null;
 }
 
-/** @deprecated alias kept for backward compat with appendTokenToUrl callers */
+/** @deprecated alias kept for backward compat with callers using getApiKey */
 export async function getApiKey(): Promise<string> {
   return (await getAccessToken()) ?? '';
 }
 
 // ── Public: Auth Status ───────────────────────────────────────────────────────
 export function isAuthenticated(): boolean {
-  const token = getStoredToken();
-  if (!token) return false;
-  return !isTokenExpired(token);
+  return !!window.Clerk?.session;
 }
 
-// ── Public: Login ─────────────────────────────────────────────────────────────
-export async function login(email: string, password: string): Promise<AuthTokens> {
-  const res = await fetch(`${API_CONFIG.GATEWAY_URL}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Login failed' }));
-    throw new Error(err.detail ?? 'Login failed');
-  }
-  const tokens: AuthTokens = await res.json();
-  persistTokens(tokens);
-  return tokens;
+// ── Public: User Info ─────────────────────────────────────────────────────────
+export interface UserInfo {
+  user_id: string;
+  email: string;
+  display_name: string;
 }
 
-// ── Public: Register ──────────────────────────────────────────────────────────
-export async function register(
-  email: string,
-  password: string,
-  display_name?: string,
-): Promise<AuthTokens> {
-  const res = await fetch(`${API_CONFIG.GATEWAY_URL}/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, display_name: display_name ?? '' }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
-    throw new Error(err.detail ?? 'Registration failed');
-  }
-  const tokens: AuthTokens = await res.json();
-  persistTokens(tokens);
-  return tokens;
+export function getCurrentUser(): UserInfo | null {
+  const user = window.Clerk?.user ?? window.Clerk?.session?.user;
+  if (!user) return null;
+  return {
+    user_id:      user.id,
+    email:        user.primaryEmailAddress?.emailAddress ?? '',
+    display_name: user.fullName ?? user.firstName ?? '',
+  };
 }
 
 // ── Public: Logout ────────────────────────────────────────────────────────────
 export async function logout(): Promise<void> {
-  const refreshToken = getStoredRefreshToken();
-  if (refreshToken) {
-    try {
-      await fetch(`${API_CONFIG.GATEWAY_URL}/auth/logout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-    } catch { /* best-effort */ }
-  }
-  clearTokens();
+  await window.Clerk?.signOut({ redirectUrl: '/' });
 }
 
 // ── Public: fetchWithAuth ─────────────────────────────────────────────────────

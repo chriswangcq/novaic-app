@@ -6,10 +6,9 @@ import { useAppStore } from './store';
 import { LAYOUT_CONFIG } from './config';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
-import { Loader2, AlertTriangle, RefreshCw, LogOut } from 'lucide-react';
+import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { SetupConfig } from './components/Agent/CreateAgentModal';
-import { LoginPage } from './components/Auth/LoginPage';
-import { isAuthenticated, logout, getCurrentUser } from './services/auth';
+import { useAuth, useUser, SignIn, UserButton } from '@clerk/react';
 
 // Global Error Boundary
 interface ErrorBoundaryState {
@@ -68,6 +67,9 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 }
 
 function App() {
+  const { isSignedIn, isLoaded: isAuthLoaded } = useAuth();
+  const { user } = useUser();
+
   const { 
     initialize, 
     isInitialized, 
@@ -86,26 +88,14 @@ function App() {
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
-  // Auth gate: true once a valid JWT exists in localStorage
-  const [authed, setAuthed] = useState<boolean>(isAuthenticated);
-
-  const handleAuthenticated = useCallback(() => {
-    setAuthed(true);
-  }, []);
-
-  const handleLogout = useCallback(async () => {
-    await logout();
-    setAuthed(false);
-  }, []);
-
   // Page state: 'setup' | 'workspace'
   const [currentPage, setCurrentPage] = useState<'setup' | 'workspace'>('workspace');
   const [setupConfig, setSetupConfig] = useState<SetupConfig | null>(null);
 
-  // Only start gateway connection after the user is authenticated
+  // Only start gateway connection after Clerk confirms the user is signed in
   useEffect(() => {
-    if (authed) initialize();
-  }, [authed, initialize]);
+    if (isSignedIn) initialize();
+  }, [isSignedIn, initialize]);
 
   // 连接超时：超过 35 秒未就绪则显示错误和重试
   useEffect(() => {
@@ -243,9 +233,39 @@ function App() {
     }
   }, [selectAgent]);
 
-  // ── Auth Gate ────────────────────────────────────────────────────────────
-  if (!authed) {
-    return <LoginPage onAuthenticated={handleAuthenticated} />;
+  // ── Auth Gate — show Clerk's sign-in widget until session is active ─────
+  if (!isAuthLoaded) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#0a0a0a]">
+        <Loader2 size={32} className="animate-spin text-white/40" />
+      </div>
+    );
+  }
+
+  if (!isSignedIn) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#0a0a0a]">
+        <div
+          className="absolute inset-0 opacity-[0.03] pointer-events-none"
+          style={{
+            backgroundImage: `
+              linear-gradient(to right, #ffffff 1px, transparent 1px),
+              linear-gradient(to bottom, #ffffff 1px, transparent 1px)
+            `,
+            backgroundSize: '40px 40px',
+          }}
+        />
+        <div className="relative flex flex-col items-center gap-6">
+          <div className="flex flex-col items-center gap-2 mb-2">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-white/10">
+              <span className="text-2xl font-bold text-white">N</span>
+            </div>
+            <h1 className="text-lg font-semibold text-white">NovAIC</h1>
+          </div>
+          <SignIn routing="hash" />
+        </div>
+      </div>
+    );
   }
 
   // 连接超时：显示错误和重试
@@ -335,19 +355,12 @@ function App() {
         <span className={`w-2 h-2 rounded-full mr-2 ${isInitialized ? 'bg-nb-success' : 'bg-nb-warning'}`} />
         <span>{isInitialized ? 'Connected' : 'Connecting...'}</span>
         <span className="ml-auto flex items-center gap-3">
-          {getCurrentUser()?.email && (
+          {user?.primaryEmailAddress?.emailAddress && (
             <span className="text-nb-text-muted/60 truncate max-w-[160px]">
-              {getCurrentUser()!.email}
+              {user.primaryEmailAddress.emailAddress}
             </span>
           )}
-          <button
-            onClick={handleLogout}
-            title="退出登录"
-            className="flex items-center gap-1 hover:text-nb-text transition-colors"
-          >
-            <LogOut size={11} />
-            <span>退出</span>
-          </button>
+          <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: 'w-4 h-4' } }} />
           <span className="text-nb-text-muted/40">NovAIC v0.1.0</span>
         </span>
       </footer>
