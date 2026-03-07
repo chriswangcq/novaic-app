@@ -130,6 +130,39 @@ function saveAgentId(agentId: string | null): void {
   } catch {}
 }
 
+// --- Delta sync: persist lastChatSyncTime per agent ---
+const CHAT_SYNC_KEY = 'novaic_last_chat_sync';
+const LOG_SYNC_KEY  = 'novaic_last_log_id';
+const DELTA_STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function loadChatSyncTimes(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(CHAT_SYNC_KEY) || '{}'); } catch { return {}; }
+}
+function saveChatSyncTime(agentId: string, isoTime: string): void {
+  try {
+    const all = loadChatSyncTimes();
+    all[agentId] = isoTime;
+    localStorage.setItem(CHAT_SYNC_KEY, JSON.stringify(all));
+  } catch {}
+}
+function getChatSyncTime(agentId: string): string | null {
+  return loadChatSyncTimes()[agentId] ?? null;
+}
+
+function loadLogSyncIds(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(LOG_SYNC_KEY) || '{}'); } catch { return {}; }
+}
+function saveLogSyncId(agentId: string, id: number): void {
+  try {
+    const all = loadLogSyncIds();
+    all[agentId] = id;
+    localStorage.setItem(LOG_SYNC_KEY, JSON.stringify(all));
+  } catch {}
+}
+function getLogSyncId(agentId: string): number | null {
+  return loadLogSyncIds()[agentId] ?? null;
+}
+
 const VALID_SIDEBAR_MODES: SidebarMode[] = ['expanded', 'collapsed', 'hidden'];
 const VALID_LAYOUT_MODES: LayoutMode[] = ['full', 'normal', 'mini'];
 
@@ -926,11 +959,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     try {
       // 1. 更新本地状态并持久化到 localStorage
+      // Restore persisted lastLogId for this agent (enables delta sync on next SSE reconnect)
+      const persistedLogId = getLogSyncId(agentId);
       set({ 
         currentAgentId: agentId,
         messages: [],
         logs: [],
-        lastLogId: null,
+        lastLogId: persistedLogId,
         hasMoreMessages: true,
         hasMoreLogs: true,
         logSubagentId: null,
@@ -966,6 +1001,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
             };
           });
           set({ messages, hasMoreMessages: history.has_more });
+          // 记录同步时间，用于 SSE 断线重连后的 delta 同步
+          saveChatSyncTime(agentId, new Date().toISOString());
           console.log(`[Store] Loaded ${messages.length} messages for agent ${agentId} (filtered ${history.messages.length - filteredMessages.length} SYSTEM_WAKE), has_more: ${history.has_more}`);
         }
       } catch (e) {
@@ -1154,6 +1191,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     chatEventSource.onopen = () => {
       console.log('[Store] Chat SSE connection opened');
+      // 连接建立时记录同步时间（用于下次断线重连的 delta 起点）
+      saveChatSyncTime(targetAgentId, new Date().toISOString());
     };
     
     chatEventSource.onmessage = (event) => {
@@ -1211,11 +1250,61 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     chatEventSource.onerror = (e) => {
       console.error('[Store] Chat SSE error:', e);
-      // Reconnect after delay with same agentId
-      setTimeout(() => {
-        if (get().isInitialized && get().currentAgentId) {
-          get().connectChatSSE(get().currentAgentId!);
+      setTimeout(async () => {
+        const state = get();
+        if (!state.isInitialized || !state.currentAgentId) return;
+        const reconnectAgentId = state.currentAgentId;
+
+        // Delta sync: fill the gap before reconnecting SSE
+        const lastSync = getChatSyncTime(reconnectAgentId);
+        if (lastSync) {
+          const gapMs = Date.now() - new Date(lastSync).getTime();
+          if (gapMs < DELTA_STALE_MS) {
+            try {
+              console.log(`[Store] Delta sync since ${lastSync} (gap ${Math.round(gapMs / 1000)}s)`);
+              const delta = await api.getChatHistory({
+                agent_id: reconnectAgentId,
+                updated_after: lastSync,
+                limit: 500,
+              });
+              if (delta.success && delta.messages.length > 0) {
+                const { addMessage, updateMessageStatus } = get();
+                for (const msg of delta.messages) {
+                  if (msg.type === 'STATUS_UPDATE') continue;
+                  // Upsert: update read status for existing messages, add new ones
+                  const parsed = parseMessageContent(msg.summary, msg.id);
+                  const existingMessages = get().messages;
+                  const exists = existingMessages.some((m) => m.id === msg.id);
+                  if (exists) {
+                    // Update read status if changed
+                    if (msg.type === 'USER_MESSAGE' && msg.read) {
+                      updateMessageStatus(msg.id, 'read');
+                    }
+                  } else {
+                    addMessage({
+                      id: msg.id,
+                      role: msg.type === 'USER_MESSAGE' ? 'user' : 'assistant',
+                      content: parsed.text,
+                      timestamp: new Date(msg.timestamp),
+                      attachments: parsed.attachments,
+                      status: msg.type === 'USER_MESSAGE'
+                        ? (msg.read ? 'read' : 'delivered') as MessageStatus
+                        : undefined,
+                    });
+                  }
+                }
+                console.log(`[Store] Delta sync applied ${delta.messages.length} messages`);
+              }
+              saveChatSyncTime(reconnectAgentId, new Date().toISOString());
+            } catch (err) {
+              console.warn('[Store] Delta sync failed, will do full reload on reconnect:', err);
+            }
+          } else {
+            console.log(`[Store] Sync gap too large (${Math.round(gapMs / 86400000)}d), skipping delta`);
+          }
         }
+
+        state.connectChatSSE(reconnectAgentId);
       }, SSE_CONFIG.RECONNECT_DELAY);
     };
   },
@@ -1275,6 +1364,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             merged = merged.slice(-MAX_LOGS);
           }
           
+          saveLogSyncId(targetAgentId, newMaxId);
           return { logs: merged, lastLogId: newMaxId };
         });
         
@@ -1340,6 +1430,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             }
             
             const newMaxId = Math.max(state.lastLogId ?? 0, logEntry.id ?? 0);
+            saveLogSyncId(targetAgentId, newMaxId);
             return { logs: merged, lastLogId: newMaxId };
           });
         }
@@ -1383,10 +1474,50 @@ export const useAppStore = create<AppStore>((set, get) => ({
     };
     
     logsEventSource.onerror = () => {
-      setTimeout(() => {
-        if (get().isInitialized && get().currentAgentId) {
-          get().connectLogsSSE(get().currentAgentId!);
+      setTimeout(async () => {
+        const state = get();
+        if (!state.isInitialized || !state.currentAgentId) return;
+        const reconnectAgentId = state.currentAgentId;
+
+        // Delta sync for logs: pull any entries missed during disconnection
+        const persistedLogId = getLogSyncId(reconnectAgentId) ?? state.lastLogId;
+        if (persistedLogId) {
+          try {
+            const res = await api.getLogEntries(reconnectAgentId, {
+              after_id: persistedLogId,
+              limit: 200,
+              subagent_id: state.logSubagentId ?? undefined,
+            });
+            if (res.success && res.entries.length > 0) {
+              const { logSubagentId } = get();
+              const newEntries: LogEntry[] = res.entries
+                .filter(e => logSubagentId === null || e.subagent_id === logSubagentId)
+                .map((e) => ({
+                  id: e.id, type: e.type as LogEntry['type'], timestamp: e.timestamp,
+                  data: (e.data || {}) as LogData, subagent_id: e.subagent_id,
+                  status: e.status, kind: e.kind, event_key: e.event_key,
+                  input: e.input, input_summary: e.input_summary, result: e.result,
+                  updated_at: e.updated_at,
+                }));
+              if (newEntries.length > 0) {
+                const newMaxId = Math.max(...newEntries.map(e => e.id ?? 0));
+                set((s) => {
+                  const existingMap = new Map(s.logs.map(log => [log.id, log]));
+                  for (const entry of newEntries) existingMap.set(entry.id, entry);
+                  let merged = Array.from(existingMap.values()).sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+                  if (merged.length > MAX_LOGS) merged = merged.slice(-MAX_LOGS);
+                  saveLogSyncId(reconnectAgentId, Math.max(s.lastLogId ?? 0, newMaxId));
+                  return { logs: merged, lastLogId: Math.max(s.lastLogId ?? 0, newMaxId) };
+                });
+                console.log(`[Store] Logs delta sync: ${newEntries.length} new entries`);
+              }
+            }
+          } catch (err) {
+            console.warn('[Store] Logs delta sync failed:', err);
+          }
         }
+
+        state.connectLogsSSE(reconnectAgentId);
       }, SSE_CONFIG.RECONNECT_DELAY);
     };
   },

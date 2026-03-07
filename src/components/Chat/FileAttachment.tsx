@@ -11,7 +11,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { FileText, Download, Loader2, ExternalLink, Image as ImageIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { toFileUrl } from '../../services/trs';
-import { getApiKey } from '../../services/auth';
+import { fetchWithAuth } from '../../services/auth';
 import type { Attachment } from '../../types';
 
 interface FileAttachmentProps {
@@ -76,18 +76,26 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
   const filename = attachment.name || url?.split('/').pop() || 'file';
   const fileSize = attachment.size || 0;
 
-  // 为图片 URL 添加认证 token
+  // 用 fetchWithAuth 加载图片为 blob URL（规避 <img> 无法带 Authorization header 的限制）
   useEffect(() => {
-    if (isImage && displayUrl) {
-      getApiKey().then(key => {
-        if (key) {
-          const sep = displayUrl.includes('?') ? '&' : '?';
-          setAuthUrl(`${displayUrl}${sep}token=${encodeURIComponent(key)}`);
-        } else {
-          setAuthUrl(displayUrl);
-        }
+    if (!isImage || !displayUrl) return;
+    let objectUrl = '';
+    fetchWithAuth(displayUrl)
+      .then(res => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        return res.blob();
+      })
+      .then(blob => {
+        objectUrl = URL.createObjectURL(blob);
+        setAuthUrl(objectUrl);
+      })
+      .catch(() => {
+        // fallback: try without auth (public file)
+        setAuthUrl(displayUrl);
       });
-    }
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [isImage, displayUrl]);
 
   // 下载文件到本地缓存

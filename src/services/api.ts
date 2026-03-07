@@ -594,6 +594,7 @@ export const api = {
     agent_id?: string;
     limit?: number;
     before_id?: string;
+    updated_after?: string;
     message_type?: string;
     summary_length?: number;
   }): Promise<{
@@ -602,6 +603,7 @@ export const api = {
       id: string;
       type: string;
       timestamp: string;
+      updated_at?: string;
       summary: string;
       is_truncated: boolean;
       read: boolean;
@@ -612,6 +614,7 @@ export const api = {
     if (options?.agent_id) params.set('agent_id', options.agent_id);
     if (options?.limit) params.set('limit', options.limit.toString());
     if (options?.before_id) params.set('before_id', options.before_id);
+    if (options?.updated_after) params.set('updated_after', options.updated_after);
     if (options?.message_type) params.set('message_type', options.message_type);
     if (options?.summary_length) params.set('summary_length', options.summary_length.toString());
     
