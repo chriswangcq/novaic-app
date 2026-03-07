@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use std::collections::HashMap;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex};
 use once_cell::sync::Lazy;
 
 /// 持久化的 scrcpy-server 信息
@@ -23,11 +23,16 @@ struct PersistentServer {
 }
 
 /// 服务器映射类型
-type ServerMap = HashMap<String, Arc<tokio::sync::Mutex<PersistentServer>>>;
+type ServerMap = HashMap<String, Arc<Mutex<PersistentServer>>>;
 
 /// 全局的 scrcpy-server 管理器
 /// 为每个设备维护一个持久运行的 scrcpy-server
 static SCRCPY_SERVERS: Lazy<RwLock<ServerMap>> = 
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Per-device startup lock: prevents two concurrent callers from both seeing
+/// "no cached entry" and both trying to launch a new scrcpy-server at once.
+static SCRCPY_START_LOCKS: Lazy<RwLock<HashMap<String, Arc<Mutex<()>>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// scrcpy-server 版本 (必须与服务器版本匹配)
@@ -173,7 +178,7 @@ fn allocate_port_for_device(device_serial: &str) -> u16 {
 
 /// 启动持久化的 scrcpy-server（如果还没有运行）
 pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<u16, VmError> {
-    // 检查是否已有运行的服务器
+    // Fast path: server already running
     {
         let servers = SCRCPY_SERVERS.read().await;
         if let Some(server) = servers.get(device_serial) {
@@ -182,7 +187,29 @@ pub async fn ensure_scrcpy_server(device_serial: &str) -> Result<u16, VmError> {
             return Ok(server.port);
         }
     }
-    
+
+    // Acquire a per-device startup lock to prevent concurrent callers from each
+    // launching a separate scrcpy-server for the same device (TOCTOU race).
+    let start_lock = {
+        let mut locks = SCRCPY_START_LOCKS.write().await;
+        locks
+            .entry(device_serial.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = start_lock.lock().await;
+
+    // Re-check after acquiring the lock — a concurrent caller may have started
+    // the server while we were waiting.
+    {
+        let servers = SCRCPY_SERVERS.read().await;
+        if let Some(server) = servers.get(device_serial) {
+            let server = server.lock().await;
+            tracing::info!("Reusing scrcpy-server (post-lock) for {}, scid={:08x}", device_serial, server.scid);
+            return Ok(server.port);
+        }
+    }
+
     // 需要启动新的服务器
     tracing::info!("Starting persistent scrcpy-server for {}", device_serial);
     

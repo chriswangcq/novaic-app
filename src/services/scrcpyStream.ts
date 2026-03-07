@@ -388,6 +388,17 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
   const state = streams.get(deviceSerial);
   if (!state) return;
 
+  // Guard: if a WS was already opened by a concurrent call (e.g. React Strict
+  // Mode double-effect) and is still live, don't replace it.
+  if (
+    state.ws &&
+    (state.ws.readyState === WebSocket.OPEN ||
+      state.ws.readyState === WebSocket.CONNECTING)
+  ) {
+    console.log(`[ScrcpyStream] Skipping duplicate connect for ${deviceSerial} (ws already live)`);
+    return;
+  }
+
   const ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
   state.ws = ws;
