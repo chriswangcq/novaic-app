@@ -93,32 +93,34 @@ function App() {
   const [currentPage, setCurrentPage] = useState<'setup' | 'workspace'>('workspace');
   const [setupConfig, setSetupConfig] = useState<SetupConfig | null>(null);
 
-  // Only start gateway connection after Clerk confirms the user is signed in
-  useEffect(() => {
-    if (isSignedIn) initialize();
-  }, [isSignedIn, initialize]);
-
-  // Pass Clerk JWT to the Rust CloudBridge after sign-in.
-  // Clerk dev-mode session tokens expire in 60 s, so refresh every 45 s so
-  // the token in the shared RwLock is always valid on the next WS reconnect.
+  // After Clerk sign-in: push JWT to Rust first, THEN start gateway initialization.
+  // Both the Tauri gateway commands (gateway_get/post/…) and the CloudBridge WS
+  // connection rely on the Clerk JWT stored in CloudTokenState.
+  // Clerk dev-mode tokens expire in 60 s → refresh every 45 s.
   useEffect(() => {
     if (!isSignedIn) return;
 
-    const pushToken = async () => {
+    const pushToken = async (): Promise<string | null> => {
       try {
         const token = await window.Clerk?.session?.getToken();
         if (token) {
           await invoke('update_cloud_token', { token });
+          return token;
         }
       } catch (e) {
         console.warn('[CloudBridge] Failed to push token to Rust:', e);
       }
+      return null;
     };
 
-    pushToken();
+    // Push token first, then start gateway polling
+    pushToken().then((token) => {
+      if (token) initialize();
+    });
+
     const interval = setInterval(pushToken, 45 * 1000); // refresh every 45 s
     return () => clearInterval(interval);
-  }, [isSignedIn]);
+  }, [isSignedIn, initialize]);
 
   // 连接超时：超过 35 秒未就绪则显示错误和重试
   useEffect(() => {

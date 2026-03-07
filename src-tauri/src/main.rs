@@ -98,6 +98,11 @@ fn make_gateway_client(url: &str, token: &str) -> GatewayClient {
     GatewayClient::new(url.to_string()).with_auth(token)
 }
 
+/// Read the current Clerk JWT from the shared RwLock (sync helper for commands).
+fn read_cloud_token(token: &CloudTokenState) -> String {
+    token.blocking_read().clone()
+}
+
 fn local_url(port: u16) -> String {
     format!("http://{LOOPBACK_HOST}:{port}")
 }
@@ -433,10 +438,11 @@ async fn update_cloud_token(
 async fn gateway_get(
     path: String,
     gw_url: tauri::State<'_, GatewayUrlState>,
-    api_key: tauri::State<'_, ApiKeyState>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
 ) -> Result<serde_json::Value, String> {
     let url = read_gateway_url(&gw_url);
-    make_gateway_client(&url, api_key.as_str()).get(&path).await
+    let token = read_cloud_token(&cloud_token);
+    make_gateway_client(&url, &token).get(&path).await
 }
 
 /// Gateway API POST
@@ -445,10 +451,11 @@ async fn gateway_post(
     path: String,
     body: Option<serde_json::Value>,
     gw_url: tauri::State<'_, GatewayUrlState>,
-    api_key: tauri::State<'_, ApiKeyState>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
 ) -> Result<serde_json::Value, String> {
     let url = read_gateway_url(&gw_url);
-    make_gateway_client(&url, api_key.as_str()).post(&path, body).await
+    let token = read_cloud_token(&cloud_token);
+    make_gateway_client(&url, &token).post(&path, body).await
 }
 
 /// Gateway API PATCH
@@ -457,10 +464,11 @@ async fn gateway_patch(
     path: String,
     body: Option<serde_json::Value>,
     gw_url: tauri::State<'_, GatewayUrlState>,
-    api_key: tauri::State<'_, ApiKeyState>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
 ) -> Result<serde_json::Value, String> {
     let url = read_gateway_url(&gw_url);
-    make_gateway_client(&url, api_key.as_str()).patch(&path, body).await
+    let token = read_cloud_token(&cloud_token);
+    make_gateway_client(&url, &token).patch(&path, body).await
 }
 
 /// Gateway API PUT
@@ -469,10 +477,11 @@ async fn gateway_put(
     path: String,
     body: Option<serde_json::Value>,
     gw_url: tauri::State<'_, GatewayUrlState>,
-    api_key: tauri::State<'_, ApiKeyState>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
 ) -> Result<serde_json::Value, String> {
     let url = read_gateway_url(&gw_url);
-    make_gateway_client(&url, api_key.as_str()).put(&path, body).await
+    let token = read_cloud_token(&cloud_token);
+    make_gateway_client(&url, &token).put(&path, body).await
 }
 
 /// Gateway API DELETE
@@ -480,25 +489,30 @@ async fn gateway_put(
 async fn gateway_delete(
     path: String,
     gw_url: tauri::State<'_, GatewayUrlState>,
-    api_key: tauri::State<'_, ApiKeyState>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
 ) -> Result<serde_json::Value, String> {
     let url = read_gateway_url(&gw_url);
-    make_gateway_client(&url, api_key.as_str()).delete(&path).await
+    let token = read_cloud_token(&cloud_token);
+    make_gateway_client(&url, &token).delete(&path).await
 }
 
 /// Gateway health check
 #[tauri::command]
-async fn gateway_health(gw_url: tauri::State<'_, GatewayUrlState>) -> Result<bool, String> {
-    GatewayClient::new(read_gateway_url(&gw_url)).health_check().await
+async fn gateway_health(
+    gw_url: tauri::State<'_, GatewayUrlState>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
+) -> Result<bool, String> {
+    let token = read_cloud_token(&cloud_token);
+    GatewayClient::new(read_gateway_url(&gw_url)).with_auth(&token).health_check().await
 }
 
-/// Download file to app cache directory (with API key authentication)
+/// Download file to app cache directory (with Clerk JWT authentication)
 #[tauri::command]
 async fn download_file_to_cache(
     app: AppHandle,
     url: String,
     filename: String,
-    api_key: tauri::State<'_, ApiKeyState>,
+    cloud_token: tauri::State<'_, CloudTokenState>,
 ) -> Result<serde_json::Value, String> {
     let cache_dir = app.path().app_cache_dir()
         .map_err(|e| format!("Failed to get cache dir: {}", e))?;
@@ -523,9 +537,10 @@ async fn download_file_to_cache(
         counter += 1;
     }
     
+    let token = read_cloud_token(&cloud_token);
     let client = reqwest::Client::new();
     let response = client.get(&url)
-        .header("Authorization", format!("Bearer {}", api_key.as_str()))
+        .header("Authorization", format!("Bearer {}", token))
         .send().await
         .map_err(|e| format!("Download failed: {}", e))?;
     
