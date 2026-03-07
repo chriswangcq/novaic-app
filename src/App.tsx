@@ -118,7 +118,7 @@ function App() {
       if (token) initialize();
     });
 
-    const interval = setInterval(pushToken, 45 * 1000); // refresh every 45 s
+    const interval = setInterval(pushToken, 10 * 60 * 1000); // refresh every 10 min (production JWT ~60 min TTL)
     return () => clearInterval(interval);
   }, [isSignedIn, initialize]);
 
