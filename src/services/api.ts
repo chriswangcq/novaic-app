@@ -937,6 +937,13 @@ export const api = {
 
   devices: {
     /**
+     * List all devices for the current user (across all agents)
+     */
+    listForUser: async (): Promise<{ devices: Device[] }> => {
+      return invoke('gateway_get', { path: '/api/devices' });
+    },
+
+    /**
      * List all devices for an agent
      */
     list: async (agentId: string): Promise<{ devices: Device[] }> => {

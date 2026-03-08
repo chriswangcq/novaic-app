@@ -132,9 +132,10 @@ async function connectStream(agentId: string) {
       state.wsUrl = await vmService.getVncUrl(agentId);
     }
     
-    // 先测试 WebSocket 是否可用
+    // 先测试 WebSocket 是否可用（探测失败时清除缓存，下次重试重新拉取 URL）
     const wsAvailable = await testWebSocket(state.wsUrl);
     if (!wsAvailable) {
+      state.wsUrl = null;
       throw new Error('VNC WebSocket not available');
     }
     

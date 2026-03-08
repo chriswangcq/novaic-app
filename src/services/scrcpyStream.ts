@@ -7,18 +7,19 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-/** Cached VmControl base URL (OS-assigned dynamic port, resolved via Tauri command). */
-let _vmcontrolBaseUrl: string | null = null;
-
-async function getVmcontrolWsBase(): Promise<string> {
-  if (_vmcontrolBaseUrl) return _vmcontrolBaseUrl.replace(/^http/, 'ws');
+/** 通过 Tauri 代理 URL 获取（走 QUIC P2P tunnel，与 VNC 共用同一条隧道）。 */
+async function getScrcpyProxyUrl(deviceSerial: string): Promise<string> {
   try {
-    const url = await invoke<string>('get_vmcontrol_url');
-    _vmcontrolBaseUrl = url;
-    return url.replace(/^http/, 'ws');
-  } catch {
-    // fallback won't connect but avoids a crash
-    return 'ws://127.0.0.1:19996';
+    return await invoke<string>('get_scrcpy_proxy_url', { deviceSerial });
+  } catch (e) {
+    console.warn('[ScrcpyStream] get_scrcpy_proxy_url failed, falling back to direct VmControl:', e);
+    // fallback：直连 VmControl（仅在代理未就绪时使用）
+    try {
+      const url = await invoke<string>('get_vmcontrol_url');
+      return `${url.replace(/^http/, 'ws')}/api/android/scrcpy?device=${deviceSerial}`;
+    } catch {
+      return `ws://127.0.0.1:19996/api/android/scrcpy?device=${deviceSerial}`;
+    }
   }
 }
 
@@ -377,9 +378,8 @@ function connectStream(deviceSerial: string) {
   state.hasDecodedFirstKeyFrame = false;
   state.pendingFrames = [];
 
-  // 通过 Tauri command 获取动态端口，再建连接
-  void getVmcontrolWsBase().then(wsBase => {
-    const wsUrl = `${wsBase}/api/android/scrcpy?device=${deviceSerial}`;
+  // 通过 Tauri proxy command 获取 URL（走 QUIC P2P tunnel）
+  void getScrcpyProxyUrl(deviceSerial).then(wsUrl => {
     _doConnectStream(deviceSerial, wsUrl);
   });
 }

@@ -8,7 +8,8 @@ mod http_client;
 mod gateway_client;
 mod config;
 mod split_runtime;
-mod cloud_connection;
+mod p2p_commands;
+mod vnc_proxy;
 
 use gateway_client::GatewayClient;
 
@@ -16,7 +17,6 @@ use vm::setup::{check_environment, check_cloud_image, download_cloud_image};
 use vm::deploy::deploy_agent;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use std::time::Duration;
 use std::path::PathBuf;
@@ -241,14 +241,17 @@ impl VmControlEmbedded {
         }
     }
 
-    /// Start the embedded server. Returns a `Receiver<u16>` that resolves to
-    /// the actual port after the OS assigns it (port 0 → OS picks a free port).
-    fn start(&mut self, data_dir: PathBuf) -> tokio::sync::oneshot::Receiver<u16> {
+    /// Start the embedded server (with optional Cloud Bridge).
+    /// Returns a `Receiver<u16>` that resolves to the OS-assigned port.
+    fn start(
+        &mut self,
+        data_dir: PathBuf,
+        cloud_config: Option<vmcontrol::CloudBridgeConfig>,
+    ) -> tokio::sync::oneshot::Receiver<u16> {
         let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
 
         if self.shutdown_tx.is_some() {
             println!("[VmControl] Already running (embedded)");
-            // Send the current port so caller doesn't hang
             let current_port = self.port;
             let _ = port_tx.send(current_port);
             return port_rx;
@@ -263,9 +266,10 @@ impl VmControlEmbedded {
 
         let handle = tauri::async_runtime::spawn(async move {
             if let Err(e) = vmcontrol::start_embedded_server(
-                0,   // port 0 → OS picks a free port
+                0,
                 host,
                 Some(data_dir),
+                cloud_config,
                 Some(port_tx),
                 shutdown_rx,
             )
@@ -310,57 +314,14 @@ impl Drop for VmControlEmbedded {
 
 type VmControlState = Arc<Mutex<VmControlEmbedded>>;
 
-// ─── Cloud Bridge ─────────────────────────────────────────────────────────────
-
 /// Shared auth token — updated by the frontend via `update_cloud_token` command.
 /// The CloudBridge reconnect loop reads this fresh before every WS connect attempt
 /// so short-lived Clerk session tokens (60 s in dev) are always current.
 type CloudTokenState = Arc<tokio::sync::RwLock<String>>;
 
-struct CloudBridgeState {
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-}
-
-impl CloudBridgeState {
-    fn new() -> Self {
-        Self { shutdown_tx: None }
-    }
-
-    fn start(
-        &mut self,
-        gateway_url: String,
-        vmcontrol_url: String,
-        token: CloudTokenState,
-    ) {
-        if self.shutdown_tx.is_some() {
-            println!("[CloudBridge] Already running");
-            return;
-        }
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        self.shutdown_tx = Some(tx);
-        tauri::async_runtime::spawn(async move {
-            cloud_connection::start_cloud_connection(gateway_url, vmcontrol_url, token, rx).await;
-        });
-        println!("[CloudBridge] Started");
-    }
-
-    fn stop(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-            println!("[CloudBridge] Stopped");
-        }
-    }
-}
-
-impl Drop for CloudBridgeState {
-    fn drop(&mut self) { self.stop(); }
-}
-
-type CloudBridgeHandle = Arc<Mutex<CloudBridgeState>>;
-
-/// Startup task cancellation token: set to true in RunEvent::Exit before the
-/// startup task reaches CloudBridge start, preventing a race condition on quick exit.
-type StartupCancelToken = Arc<AtomicBool>;
+/// 登录通知：前端首次调用 update_cloud_token 时触发，
+/// CloudBridge 在收到通知前不发起 WS 连接（避免空 token 无意义重试）。
+type LoginNotifyState = Arc<tokio::sync::Notify>;
 
 
 // ─── Tauri commands ───────────────────────────────────────────────────────────
@@ -380,6 +341,52 @@ async fn get_vmcontrol_url(vmcontrol: tauri::State<'_, VmControlState>) -> Resul
         return Err("VmControl is not running".to_string());
     }
     Ok(vc.base_url())
+}
+
+/// 返回统一 VNC 代理的 WebSocket URL。
+///
+/// URL 格式：`ws://127.0.0.1:{proxy_port}/vnc/{vmcontrol_device_id}/{agent_id}`
+///
+/// - `vmcontrol_device_id`：本机 VmControl 的 Ed25519 device_id（代理自动填入）
+/// - `agent_id`：前端传入的 VM/agent 数据库 ID
+///
+/// 代理内部：device_id == 本机 → QUIC loopback；device_id != 本机 → Gateway P2P（未来）
+#[tauri::command]
+async fn get_vnc_proxy_url(
+    proxy: tauri::State<'_, vnc_proxy::VncProxyState>,
+    // 前端传 { deviceId }，Tauri 按字段名自动绑定（camelCase → snake_case）
+    #[allow(non_snake_case)]
+    deviceId: String,
+) -> Result<String, String> {
+    let agent_id = deviceId;
+    let p = proxy.lock().await;
+    if p.port == 0 {
+        return Err("VNC proxy not started yet".to_string());
+    }
+    // 读取本机 vmcontrol_device_id（P2P 启动后写入）
+    let device_id = p.local_vmcontrol.read().await
+        .as_ref()
+        .map(|info| info.device_id.clone())
+        .unwrap_or_else(|| "local".to_string()); // P2P 未就绪时用占位符，不影响本机连接建立
+    Ok(p.ws_url(&device_id, &agent_id))
+}
+
+/// 返回 scrcpy 流代理 WS URL（经由 QUIC P2P tunnel，与 VNC 共用同一条隧道连接）
+#[tauri::command]
+async fn get_scrcpy_proxy_url(
+    proxy: tauri::State<'_, vnc_proxy::VncProxyState>,
+    #[allow(non_snake_case)]
+    deviceSerial: String,
+) -> Result<String, String> {
+    let p = proxy.lock().await;
+    if p.port == 0 {
+        return Err("Scrcpy proxy not started yet".to_string());
+    }
+    let device_id = p.local_vmcontrol.read().await
+        .as_ref()
+        .map(|info| info.device_id.clone())
+        .unwrap_or_else(|| "local".to_string());
+    Ok(p.scrcpy_ws_url(&device_id, &deviceSerial))
 }
 
 /// Persist a new gateway URL (e.g. switching between local and cloud).
@@ -419,13 +426,17 @@ async fn get_api_key(api_key: tauri::State<'_, ApiKeyState>) -> Result<String, S
 /// Called by the frontend after Clerk sign-in (or token refresh) to supply a
 /// fresh JWT to the CloudBridge. The bridge reads this token before every
 /// reconnect attempt, so no restart is needed — just update the shared value.
+/// Also triggers the login_notify signal so CloudBridge starts connecting immediately.
 #[tauri::command]
 async fn update_cloud_token(
     token: String,
     cloud_token: tauri::State<'_, CloudTokenState>,
+    login_notify: tauri::State<'_, LoginNotifyState>,
 ) -> Result<(), String> {
     println!("[CloudBridge] Auth token updated (len={})", token.len());
     *cloud_token.write().await = token;
+    // 通知 CloudBridge：token 已就绪，可以开始连接 Gateway
+    login_notify.notify_one();
     Ok(())
 }
 
@@ -748,29 +759,68 @@ fn main() {
             std::env::set_var("NOVAIC_GATEWAY_URL", read_gateway_url(&gw_url));
             std::env::set_var("NOVAIC_API_KEY", api_key.as_str());
 
-            // Managed state: VmControl + CloudBridge + shared auth token
+            // Managed state: VmControl + shared auth token
+            // Cloud Bridge 已合并进 VmControl，不再单独管理。
             let vmcontrol = Arc::new(Mutex::new(VmControlEmbedded::new()));
             app.manage(vmcontrol.clone());
 
+            // P2P 发现状态（Phase 2）
+            let discovered_devices: p2p_commands::DiscoveredDevices =
+                Arc::new(Mutex::new(std::collections::HashMap::new()));
+            app.manage(discovered_devices);
+            let discovery_shutdown: p2p_commands::DiscoveryShutdown =
+                Arc::new(Mutex::new(None));
+            app.manage(discovery_shutdown);
+
             // Shared token: frontend writes via update_cloud_token(),
-            // CloudBridge reads before each WS connect attempt.
+            // CloudBridge (inside VmControl) reads before each WS connect attempt.
             let cloud_token: CloudTokenState = Arc::new(tokio::sync::RwLock::new(String::new()));
             app.manage(cloud_token.clone());
 
-            let cloud_bridge = Arc::new(Mutex::new(CloudBridgeState::new()));
-            app.manage(cloud_bridge.clone());
+            // Login notify: 前端首次调用 update_cloud_token 时触发，
+            // CloudBridge 在此之前不发起 WS 连接。
+            let login_notify: LoginNotifyState = Arc::new(tokio::sync::Notify::new());
+            app.manage(login_notify.clone());
 
-            // Cancel token: prevents CloudBridge from starting if app exits before startup completes
-            let startup_cancelled: StartupCancelToken = Arc::new(AtomicBool::new(false));
-            app.manage(startup_cancelled.clone());
-            let startup_cancelled_for_task = startup_cancelled.clone();
+            // 统一 VNC 代理（OS 动态端口）
+            // 本地：QUIC loopback 127.0.0.1:19998；远端：Gateway locate + QUIC P2P
+            let vnc_proxy_state: vnc_proxy::VncProxyState =
+                Arc::new(Mutex::new(vnc_proxy::VncProxyServer::new(
+                    gw_url.clone(),
+                    cloud_token.clone(),
+                )));
+            app.manage(vnc_proxy_state.clone());
+            {
+                let port_rx = {
+                    let mut proxy = vnc_proxy_state.blocking_lock();
+                    proxy.start()
+                };
+                let proxy_clone = vnc_proxy_state.clone();
+                tauri::async_runtime::spawn(async move {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        port_rx,
+                    ).await {
+                        Ok(Ok(port)) => {
+                            proxy_clone.lock().await.port = port;
+                            tracing::info!("[VncProxy] Ready on port {}", port);
+                        }
+                        _ => tracing::warn!("[VncProxy] Failed to get assigned port"),
+                    }
+                });
+            }
+
+            // 加载（或生成）持久设备 ID
+            let device_id = vmcontrol::load_or_generate_device_id(&data_dir);
+            println!("[VmControl] Device ID: {}", device_id);
 
             let data_dir_for_task = data_dir.clone();
             let vmcontrol_for_task = vmcontrol.clone();
-            let cloud_bridge_for_task = cloud_bridge.clone();
             let cloud_token_for_task = cloud_token.clone();
             let gw_url_for_task = gw_url.clone();
-            
+            let login_notify_for_task = login_notify.clone();
+            let vnc_proxy_state = vnc_proxy_state.clone();
+
             tauri::async_runtime::spawn(async move {
                 let startup_begin = std::time::Instant::now();
 
@@ -778,28 +828,30 @@ fn main() {
                 append_startup_diagnostic(&data_dir_for_task, "cleanup-duration", "ok",
                     format!("{:?}", startup_begin.elapsed()));
 
-                // Start embedded VmControl (port 0 → OS assigns a free port, no conflicts)
+                // Cloud Bridge config：gateway_url + cloud_token + device_id + login_notify
+                let cloud_config = vmcontrol::CloudBridgeConfig {
+                    gateway_url: gw_url_for_task.clone(),
+                    cloud_token: cloud_token_for_task,
+                    device_id: vmcontrol::load_or_generate_device_id(&data_dir_for_task),
+                    login_notify: login_notify_for_task,
+                };
+
+                // Start embedded VmControl WITH Cloud Bridge (port 0 → OS assigns a free port)
                 let port_rx = {
                     let mut vc = vmcontrol_for_task.lock().await;
-                    vc.start(data_dir_for_task.clone())
+                    vc.start(data_dir_for_task.clone(), Some(cloud_config))
                 };
 
                 append_startup_diagnostic(&data_dir_for_task, "vmcontrol", "started",
-                    "vmcontrol embedded server spawned (awaiting OS port assignment)");
+                    "vmcontrol + cloud bridge spawned (awaiting OS port assignment)");
 
                 // Wait for VmControl to bind and report its actual port (up to 10s)
-                let vmcontrol_url = match tokio::time::timeout(
-                    Duration::from_secs(10),
-                    port_rx,
-                ).await {
+                match tokio::time::timeout(Duration::from_secs(10), port_rx).await {
                     Ok(Ok(actual_port)) => {
-                        // Store the actual port back in VmControlEmbedded for base_url()
                         vmcontrol_for_task.lock().await.port = actual_port;
-                        let url = local_url(actual_port);
                         append_startup_diagnostic(&data_dir_for_task, "vmcontrol-port", "ok",
                             format!("OS assigned port {}", actual_port));
                         println!("[VmControl] OS assigned port {}", actual_port);
-                        url
                     }
                     Ok(Err(_)) | Err(_) => {
                         append_startup_diagnostic(&data_dir_for_task, "vmcontrol-port", "error",
@@ -809,18 +861,21 @@ fn main() {
                     }
                 };
 
-                // Health-check VmControl on its actual port
-                const HEALTH_CHECK_INTERVAL_MS: u64 = 250;
+                // Health-check VmControl
+                let vmcontrol_url = vmcontrol_for_task.lock().await.base_url();
+
+                // 注入 VmControl URL 到 VNC/Scrcpy 代理（供本地 scrcpy 直连）
+                *vnc_proxy_state.lock().await.vmcontrol_url.write().await = vmcontrol_url.clone();
+                tracing::info!("[VncProxy] VmControl URL set to {}", vmcontrol_url);
                 let client = reqwest::Client::builder()
                     .connect_timeout(Duration::from_millis(500))
                     .timeout(Duration::from_secs(2))
                     .build()
                     .unwrap_or_default();
 
-                let vc_health_url = format!("{}/health", vmcontrol_url);
                 let phase_start = std::time::Instant::now();
                 let vc_ready = wait_service_ready(
-                    &client, &vc_health_url, "VmControl", 30, HEALTH_CHECK_INTERVAL_MS,
+                    &client, &format!("{}/health", vmcontrol_url), "VmControl", 30, 250,
                 ).await;
 
                 if vc_ready {
@@ -832,26 +887,31 @@ fn main() {
                     eprintln!("[VmControl] Health check failed — VM/Android features may be unavailable");
                 }
 
+                // 向 VNC 代理注入本地 VmControl 的 P2P 身份（device_id + cert）
+                // 与 VmControl 内部 setup_p2p_server 使用同一份 keypair，操作幂等。
+                match p2p::crypto::generate_server_tls(
+                    &p2p::device_id::DeviceIdentity::load_or_generate(&data_dir_for_task)
+                        .signing_key
+                        .to_bytes()
+                ) {
+                    Ok(tls_config) => {
+                        let device_id =
+                            p2p::device_id::DeviceIdentity::load_or_generate(&data_dir_for_task).id;
+                        *vnc_proxy_state.lock().await.local_vmcontrol.write().await =
+                            Some(vnc_proxy::LocalVmControlInfo {
+                                device_id: device_id.clone(),
+                                cert_der: tls_config.cert_der,
+                            });
+                        tracing::info!("[VncProxy] Local VmControl P2P info registered (device={}...)", &device_id[..8]);
+                    }
+                    Err(e) => {
+                        tracing::warn!("[VncProxy] Failed to register local P2P info: {}", e);
+                    }
+                }
+
                 append_startup_diagnostic(&data_dir_for_task, "all-services-ready", "ok",
                     format!("startup complete in {:?}", startup_begin.elapsed()));
-
-                // Check cancel token before starting CloudBridge
-                if startup_cancelled_for_task.load(Ordering::Relaxed) {
-                    println!("[Startup] App already exiting, skipping CloudBridge start");
-                    return;
-                }
-
-                // Start Cloud Bridge. The shared `cloud_token` starts empty; the
-                // frontend calls update_cloud_token() after Clerk sign-in and every
-                // 45 s thereafter. The bridge reads the token fresh before each
-                // reconnect, so short-lived Clerk JWTs (60 s) are always current.
-                {
-                    let mut cb = cloud_bridge_for_task.lock().await;
-                    let gateway_url = read_gateway_url(&gw_url_for_task);
-                    cb.start(gateway_url, vmcontrol_url, cloud_token_for_task);
-                    append_startup_diagnostic(&data_dir_for_task, "cloud-bridge", "started",
-                        "cloud bridge initialised (waiting for Clerk JWT from frontend)");
-                }
+                // Cloud Bridge 已在 VmControl 内部自动启动，无需额外操作
             });
             
             Ok(())
@@ -876,8 +936,11 @@ fn main() {
             get_gateway_url,
             set_gateway_url,
             get_gateway_status,
-            // VmControl URL (OS-assigned dynamic port)
+            // VmControl URL (OS-assigned dynamic port, internal use)
             get_vmcontrol_url,
+            // Unified VNC proxy URL (OS-assigned dynamic port, routes local↔P2P)
+            get_vnc_proxy_url,
+            get_scrcpy_proxy_url,
             // Auth
             get_api_key,
             update_cloud_token,
@@ -893,6 +956,10 @@ fn main() {
             download_file_to_cache,
             open_file,
             show_in_folder,
+            // P2P LAN discovery (Phase 2)
+            p2p_commands::start_discovery,
+            p2p_commands::stop_discovery,
+            p2p_commands::list_discovered_devices,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -906,20 +973,8 @@ fn main() {
                         let _ = fs::remove_file(data_dir.join("app.pid"));
                     }
                     
-                    // Set cancel token first, preventing startup task from starting CloudBridge
-                    if let Some(token) = app_handle.try_state::<StartupCancelToken>() {
-                        token.inner().store(true, Ordering::Relaxed);
-                    }
-
-                    // Stop Cloud Bridge (disconnect WebSocket before VmControl goes down)
-                    // 使用 try_lock 避免在主线程 Tokio 上下文中嵌套 block_on（会 panic）
-                    if let Some(cb) = app_handle.try_state::<CloudBridgeHandle>() {
-                        if let Ok(mut guard) = cb.inner().try_lock() {
-                            guard.stop();
-                        }
-                    }
-
                     // Send graceful shutdown to all VMs and Android emulators via VmControl
+                    // Cloud Bridge 由 VmControl 内部管理，随 VmControl 一起停止，无需单独处理
                     let base_url = app_handle.try_state::<VmControlState>()
                         .and_then(|vc| vc.inner().try_lock().ok())
                         .and_then(|guard| guard.is_running().then(|| guard.base_url()));

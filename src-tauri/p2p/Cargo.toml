@@ -1,0 +1,46 @@
+[package]
+name = "p2p"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# mDNS 服务发现（纯 Rust 实现，无系统依赖）
+mdns-sd = "0.11"
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# 序列化（Tauri emit 需要）
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Ed25519 密钥对（Phase 2 设备 ID，Phase 3 复用于加密握手）
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+
+# Phase 3: QUIC 传输（rustls feature 提供 QuicServerConfig/QuicClientConfig 包装层）
+quinn = { version = "0.11", features = ["rustls"] }
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+
+# Phase 3: TLS 自签名证书（绑定 Ed25519 设备密钥）
+rcgen = "0.13"
+# 固定证书有效期（确定性证书生成）
+time = { version = "0.3", features = ["parsing"] }
+
+# Phase 3: HTTP 客户端（Rendezvous 心跳，与 vmcontrol 同版本避免冲突）
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+
+# Phase 3: 工具
+futures-util = "0.3"
+bytes = "1"
+base64 = "0.22"
+anyhow = "1"
+
+# 日志
+tracing = "0.1"
+
+# 工具
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
+thiserror = "1"

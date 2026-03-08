@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // 用 ? 传播错误（端口占用、地址解析失败等），进程以非 0 退出码退出
-    vmcontrol::start_embedded_server(args.port, args.host, args.data_dir, None, shutdown_rx).await?;
+    vmcontrol::start_embedded_server(args.port, args.host, args.data_dir, None, None, shutdown_rx).await?;
 
     Ok(())
 }

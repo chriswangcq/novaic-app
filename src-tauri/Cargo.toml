@@ -35,6 +35,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 # VmControl 内嵌库（HTTP Server + VM/Android 管理）
 vmcontrol = { path = "vmcontrol" }
+# axum WS（VNC proxy 动态端口服务）
+axum = { version = "0.7", features = ["ws"] }
+# QUIC（VNC proxy P2P tunnel，与 p2p crate 同版本）
+quinn = { version = "0.11", features = ["rustls"] }
+# P2P 层：mDNS 广播 + LAN 发现（Phase 2）
+p2p = { path = "p2p" }
 # rustls 0.23 (used by tokio-tungstenite 0.24) requires an explicit crypto provider.
 # "ring" gives us a stable, well-tested backend; install_default() is called in main().
 rustls = { version = "0.23", features = ["ring"] }

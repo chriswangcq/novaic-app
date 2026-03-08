@@ -170,25 +170,26 @@ class VmService {
   }
 
   /**
-   * 获取 VNC WebSocket URL（动态端口，通过 Tauri command 获取）
+   * 获取 VNC WebSocket URL（统一代理，OS 动态端口）。
+   *
+   * 前端始终通过 Tauri VNC 代理连接，代理内部自动路由：
+   *   本地设备 → Unix socket
+   *   远程设备 → QUIC P2P tunnel（Phase 3）
    */
-  async getVncUrl(agentId: string): Promise<string> {
+  async getVncUrl(deviceId: string): Promise<string> {
     try {
+      const url = await invoke<string>('get_vnc_proxy_url', { deviceId });
+      console.log(`[VM Service] VNC proxy URL: ${url}`);
+      return url;
+    } catch (error) {
+      console.warn('[VM Service] VNC proxy not ready, falling back to direct vmcontrol:', error);
+      // 降级：直接连 VmControl（proxy 还未就绪时的临时兜底）
       const baseUrl = await this.getVmcontrolUrl();
       if (baseUrl) {
-        const wsBase = baseUrl.replace(/^http/, 'ws');
-        const url = `${wsBase}/api/vms/${agentId}/vnc`;
-        console.log(`[VM Service] VNC URL: ${url}`);
-        return url;
+        return `${baseUrl.replace(/^http/, 'ws')}/api/vms/${deviceId}/vnc`;
       }
-    } catch (error) {
-      console.warn('[VM Service] vmcontrol not available, falling back:', error);
+      return `ws://${LOCAL_ENDPOINTS.WS_HOST}:${DEFAULT_PORTS.WEBSOCKET}/websockify`;
     }
-
-    // 回退：websockify
-    const websockifyUrl = `ws://${LOCAL_ENDPOINTS.WS_HOST}:${DEFAULT_PORTS.WEBSOCKET}/websockify`;
-    console.log(`[VM Service] Falling back to websockify: ${websockifyUrl}`);
-    return websockifyUrl;
   }
 
   /**

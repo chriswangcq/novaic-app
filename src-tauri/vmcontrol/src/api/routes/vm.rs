@@ -95,11 +95,16 @@ fn discover_running_vms() -> Vec<(String, PathBuf)> {
     vms
 }
 
-/// Check if a specific VM is running by verifying QMP socket exists
-/// Note: We don't try to connect because QMP only allows one client at a time
+/// Check if a specific VM is running by verifying QMP socket exists AND is live.
+///
+/// 通过非阻塞连接探测 socket 是否有进程在监听：
+/// - ECONNREFUSED → stale socket（QEMU 已死），删除文件并返回 None
+/// - 连接成功或 EWOULDBLOCK/EAGAIN → QEMU 还活着
 fn is_vm_running_sync(agent_id: &str) -> Option<PathBuf> {
+    use std::os::unix::net::UnixStream as StdUnix;
+
     let qmp_socket = PathBuf::from(format!("{}/{}{}{}", SOCKET_DIR, QMP_SOCKET_PREFIX, agent_id, QMP_SOCKET_SUFFIX));
-    
+
     if !qmp_socket.exists() {
         tracing::debug!("[is_vm_running] Socket not found: {}", qmp_socket.display());
         return None;
@@ -107,18 +112,42 @@ fn is_vm_running_sync(agent_id: &str) -> Option<PathBuf> {
 
     // Check if the socket file is a valid socket (not a stale regular file)
     match std::fs::metadata(&qmp_socket) {
-        Ok(meta) => {
-            if meta.file_type().is_socket() {
-                tracing::debug!("[is_vm_running] VM {} is running (socket exists)", agent_id);
-                Some(qmp_socket)
-            } else {
-                tracing::warn!("[is_vm_running] {} exists but is not a socket", qmp_socket.display());
-                None
-            }
+        Ok(meta) if !meta.file_type().is_socket() => {
+            tracing::warn!("[is_vm_running] {} exists but is not a socket", qmp_socket.display());
+            return None;
         }
         Err(e) => {
             tracing::warn!("[is_vm_running] Cannot stat {}: {}", qmp_socket.display(), e);
+            return None;
+        }
+        _ => {}
+    }
+
+    // Liveness check: try a non-blocking connect.
+    // ECONNREFUSED → no listener (stale); success or WouldBlock → listener present.
+    match StdUnix::connect(&qmp_socket) {
+        Ok(_) => {
+            // Connected immediately — QEMU is listening
+            tracing::debug!("[is_vm_running] VM {} live (connect succeeded)", agent_id);
+            Some(qmp_socket)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            tracing::warn!(
+                "[is_vm_running] Stale socket for VM {} — removing ({})",
+                agent_id, e
+            );
+            let _ = std::fs::remove_file(&qmp_socket);
             None
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+            || e.raw_os_error() == Some(11) /* EAGAIN */ =>
+        {
+            // Socket exists and has a listener but is busy — treat as live
+            Some(qmp_socket)
+        }
+        Err(_) => {
+            // Other errors (permission etc.) — assume live to avoid false negatives
+            Some(qmp_socket)
         }
     }
 }
@@ -659,16 +688,29 @@ pub async fn stop_vm(
         tracing::info!("[stop_vm] Sent QMP system_powerdown to VM {}", id);
     }
 
-    // Step 2: Get PID from cache (if available)
+    // Step 2: Get PID from cache, or fall back to pgrep by VM name
     let pid = {
         let processes = state.processes.read().await;
         processes.get(&id).copied()
     };
+    let pid = pid.or_else(|| {
+        // App 重启后 in-memory cache 为空，通过进程名找到残留 QEMU
+        let vm_name = format!("novaic-vm-{}", id);
+        let out = std::process::Command::new("pgrep")
+            .args(["-f", &vm_name])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        stdout.lines().next()?.trim().parse::<u32>().ok().map(|p| {
+            tracing::info!("[stop_vm] Found orphaned QEMU pid={} via pgrep for VM {}", p, id);
+            p
+        })
+    });
 
     if let Some(pid) = pid {
-        // Wait up to 10 seconds for graceful exit
+        // 先等 QMP graceful exit（最多 5s），避免数据丢失
         let mut graceful_exit = false;
-        for _ in 0..10 {
+        for _ in 0..5 {
             sleep(Duration::from_secs(1)).await;
             let alive = std::process::Command::new("kill")
                 .args(["-0", &pid.to_string()])
@@ -682,11 +724,11 @@ pub async fn stop_vm(
         }
 
         if !graceful_exit {
-            tracing::info!("[stop_vm] VM {} still alive after 10s, sending SIGTERM", id);
+            tracing::info!("[stop_vm] VM {} still alive after 5s, sending SIGTERM", id);
             let _ = std::process::Command::new("kill")
                 .args(["-15", &pid.to_string()])
                 .output();
-            sleep(Duration::from_secs(3)).await;
+            sleep(Duration::from_secs(2)).await;
 
             let still_alive = std::process::Command::new("kill")
                 .args(["-0", &pid.to_string()])
@@ -701,6 +743,8 @@ pub async fn stop_vm(
                     .output();
             }
         }
+    } else {
+        tracing::warn!("[stop_vm] No PID found for VM {} (neither cache nor pgrep)", id);
     }
 
     // Step 3: Clean up PID cache

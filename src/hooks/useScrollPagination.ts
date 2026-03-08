@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useLayoutEffect } from 'react';
 import { Virtualizer } from '@tanstack/react-virtual';
 
 interface UseScrollPaginationOptions {
@@ -7,70 +7,69 @@ interface UseScrollPaginationOptions {
   hasMore: boolean;
   isLoading: boolean;
   onLoadMore: () => void;
-  scrollThreshold?: number;  // 距离顶部多少 px 触发加载
+  scrollThreshold?: number;
 }
 
 interface UseScrollPaginationReturn {
   handleScroll: (e: React.UIEvent<HTMLDivElement>) => void;
-  firstVisibleIndexRef: React.MutableRefObject<number | null>;
 }
 
 export function useScrollPagination(options: UseScrollPaginationOptions): UseScrollPaginationReturn {
-  const { 
-    itemsLength, 
-    virtualizer, 
-    hasMore, 
-    isLoading, 
-    onLoadMore, 
-    scrollThreshold = 100 
-  } = options;
-  
-  const firstVisibleIndexRef = useRef<number | null>(null);
-  const prevItemsLengthRef = useRef(itemsLength);
-  
-  // 处理滚动事件，检测是否需要加载更多
+  const { itemsLength, virtualizer, hasMore, isLoading, onLoadMore, scrollThreshold = 100 } = options;
+
+  /**
+   * 翻页触发标记。
+   * 在 handleScroll 里置 true；在 useLayoutEffect 补偿完成后清 false。
+   * 用 ref 而非 state 是为了不触发额外渲染，且在 useLayoutEffect 里同步可读。
+   */
+  const isPendingCompensationRef = useRef(false);
+
+  /**
+   * 上一次 render 时的 virtualizer 总高度。
+   * 只在 useLayoutEffect 里读写，始终与最新 DOM 高度同步。
+   */
+  const prevTotalSizeRef = useRef(0);
+
+  // ── 滚动检测 ─────────────────────────────────────────────────────────────
+
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop } = e.currentTarget;
-    
-    // 滚动到顶部附近且有更多数据且未在加载中
     if (scrollTop < scrollThreshold && hasMore && !isLoading) {
-      // 只在触发加载时保存第一个可见项索引
-      const items = virtualizer.getVirtualItems();
-      if (items.length > 0) {
-        firstVisibleIndexRef.current = items[0].index;
-        prevItemsLengthRef.current = itemsLength;
-      }
+      isPendingCompensationRef.current = true;
       onLoadMore();
     }
-  }, [virtualizer, hasMore, isLoading, onLoadMore, scrollThreshold, itemsLength]);
-  
-  // 加载完成后恢复滚动位置
-  useEffect(() => {
-    // 只有在刚完成加载（从 true 变为 false）时才恢复位置
-    // 避免在其他情况下（比如新增日志）误触发滚动
-    if (!isLoading && firstVisibleIndexRef.current !== null && itemsLength > prevItemsLengthRef.current) {
-      const addedCount = itemsLength - prevItemsLengthRef.current;
-      const newIndex = firstVisibleIndexRef.current + addedCount;
-      
-      // 检查是否是合理的恢复场景（新增数量应该等于预期的分页大小附近）
-      // 如果新增数量太小（比如只增加 1-2 条），可能是新日志而非翻页
-      const isLikelyPagination = addedCount >= 5; // 翻页通常加载 20+ 条，新日志通常 1-3 条
-      
-      if (isLikelyPagination) {
-        requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(newIndex, { align: 'start', behavior: 'auto' });
-        });
+  }, [hasMore, isLoading, onLoadMore, scrollThreshold]);
+
+  // ── 同步滚动位置补偿（核心） ────────────────────────────────────────────
+  //
+  // 在 DOM 更新后、浏览器绘制前执行（useLayoutEffect）。
+  // 当 prependMessages 导致 totalSize 增大时，立刻把 scrollTop 加上相同的 delta，
+  // 视口内容对用户来说纹丝不动。
+  //
+  // 依赖 [itemsLength, isLoading]：
+  //   - itemsLength 变化 → 数据到来，可能需要补偿
+  //   - isLoading 变化   → 防止在 isLoading=true 时（SSE 新消息）误补偿
+
+  useLayoutEffect(() => {
+    const scrollEl = virtualizer.scrollElement;
+    const curr = virtualizer.getTotalSize();
+
+    if (
+      scrollEl &&
+      isPendingCompensationRef.current &&
+      !isLoading &&             // 确保是 loadMore 完成，而不是 SSE 新消息
+      prevTotalSizeRef.current > 0  // 跳过初次渲染
+    ) {
+      const delta = curr - prevTotalSizeRef.current;
+      if (delta > 0) {
+        scrollEl.scrollTop += delta;
       }
-      
-      // 恢复后重置为 null
-      firstVisibleIndexRef.current = null;
+      isPendingCompensationRef.current = false;
     }
-    
-    // 更新 prevItemsLengthRef（如果没有加载，也要更新）
-    if (!isLoading) {
-      prevItemsLengthRef.current = itemsLength;
-    }
-  }, [itemsLength, virtualizer, isLoading]);
-  
-  return { handleScroll, firstVisibleIndexRef };
+
+    prevTotalSizeRef.current = curr;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsLength, isLoading]);
+
+  return { handleScroll };
 }

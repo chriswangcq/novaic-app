@@ -9,8 +9,10 @@ import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { SetupConfig } from './components/Agent/CreateAgentModal';
-import { login, register, logout, getAccessToken, getCurrentUser, type UserInfo } from './services/auth';
+import { logout, getAccessToken, getCurrentUser, type UserInfo } from './services/auth';
 import { invoke } from '@tauri-apps/api/core';
+import { AuthPage } from './components/Auth/AuthPage';
+import { getDb } from './db';
 
 // Global Error Boundary
 interface ErrorBoundaryState {
@@ -68,123 +70,18 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
   }
 }
 
-interface AuthScreenProps {
-  onAuth: (user: UserInfo) => void;
-}
-
-function AuthScreen({ onAuth }: AuthScreenProps) {
-  const [mode, setMode] = useState<'signIn' | 'signUp'>('signIn');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      const user = mode === 'signIn'
-        ? await login(email, password)
-        : await register(email, password, displayName);
-      onAuth(user);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="h-screen flex items-center justify-center bg-[#0a0a0a]">
-      <div
-        className="absolute inset-0 opacity-[0.03] pointer-events-none"
-        style={{
-          backgroundImage: `
-            linear-gradient(to right, #ffffff 1px, transparent 1px),
-            linear-gradient(to bottom, #ffffff 1px, transparent 1px)
-          `,
-          backgroundSize: '40px 40px',
-        }}
-      />
-      <div className="relative flex flex-col items-center gap-6 w-80">
-        {/* Logo */}
-        <div className="flex flex-col items-center gap-2">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-white/10">
-            <span className="text-2xl font-bold text-white">N</span>
-          </div>
-          <h1 className="text-lg font-semibold text-white">NovAIC</h1>
-        </div>
-
-        {/* Card */}
-        <form
-          onSubmit={handleSubmit}
-          className="w-full bg-white/5 border border-white/10 rounded-2xl p-6 flex flex-col gap-4"
-        >
-          <h2 className="text-white font-medium text-center">
-            {mode === 'signIn' ? '登录' : '注册'}
-          </h2>
-
-          {mode === 'signUp' && (
-            <input
-              type="text"
-              placeholder="昵称（可选）"
-              value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm outline-none focus:border-white/30"
-            />
-          )}
-
-          <input
-            type="email"
-            placeholder="邮箱"
-            required
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm outline-none focus:border-white/30"
-          />
-
-          <input
-            type="password"
-            placeholder="密码（至少 8 位）"
-            required
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm outline-none focus:border-white/30"
-          />
-
-          {error && (
-            <p className="text-red-400 text-xs text-center">{error}</p>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-white text-black font-medium rounded-lg py-2 text-sm hover:bg-white/90 disabled:opacity-50 transition-colors"
-          >
-            {loading ? '请稍候…' : mode === 'signIn' ? '登录' : '注册'}
-          </button>
-        </form>
-
-        <p className="text-white/40 text-sm">
-          {mode === 'signIn' ? '没有账号？' : '已有账号？'}{' '}
-          <button
-            type="button"
-            className="text-white/70 underline hover:text-white transition-colors"
-            onClick={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setError(''); }}
-          >
-            {mode === 'signIn' ? '注册' : '登录'}
-          </button>
-        </p>
-      </div>
-    </div>
-  );
-}
 
 function App() {
   const [isSignedIn, setIsSignedIn] = useState(() => getCurrentUser() !== null);
   const [currentUserInfo, setCurrentUserInfo] = useState<UserInfo | null>(() => getCurrentUser());
+
+  // 应用启动时，若已登录则预热当前用户的 IndexedDB
+  useEffect(() => {
+    const user = getCurrentUser();
+    if (user) {
+      getDb(user.user_id).catch(() => {});
+    }
+  }, []);
 
   const isInitialized = useAppStore(s => s.isInitialized);
   const settingsOpen = useAppStore(s => s.settingsOpen);
@@ -383,8 +280,10 @@ function App() {
 
   if (!isSignedIn) {
     return (
-      <AuthScreen
-        onAuth={(user) => {
+      <AuthPage
+        onAuth={async (user) => {
+          // 打开该用户的 IndexedDB（useAuth hook 中已调用，此处作为保障）
+          await getDb(user.user_id).catch(() => {});
           setCurrentUserInfo(user);
           setIsSignedIn(true);
         }}
@@ -485,7 +384,13 @@ function App() {
             </span>
           )}
           <button
-            onClick={async () => { await logout(); setIsSignedIn(false); setCurrentUserInfo(null); }}
+            onClick={async () => {
+              await logout();
+              // 清空 Rust 端 token
+              invoke('update_cloud_token', { token: '' }).catch(() => {});
+              setIsSignedIn(false);
+              setCurrentUserInfo(null);
+            }}
             className="text-nb-text-muted/60 hover:text-nb-text-muted transition-colors text-xs"
             title="退出登录"
           >
