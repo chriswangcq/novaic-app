@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { Settings, Menu, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { CreateAgentModal } from '../Agent/CreateAgentModal';
 import { useAppStore } from '../../store';
 import { useVNCConnection } from '../Visual/useVNCConnection';
@@ -65,6 +66,13 @@ export function Header(props: HeaderProps) {
   const [connectionState] = useVNCConnection(currentAgentId, setVncConnected);
   const { status } = connectionState;
 
+  const handleDragStart = (e: React.MouseEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, select, a, [role="button"]')) return;
+    getCurrentWindow().startDragging().catch(() => {});
+  };
+
   const statusKey = (() => {
     if (!currentAgent) return 'stopped';
     if (!currentAgent.setup_complete) {
@@ -79,15 +87,13 @@ export function Header(props: HeaderProps) {
   return (
     <>
       <header
-        className={`relative h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
+        className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
                     flex items-center pr-2 no-select shrink-0
                     ${isMacOS ? 'pl-[76px]' : 'pl-2'}`}
+        onMouseDown={handleDragStart}
       >
-        {/* Full-width drag region sits behind all content */}
-        <div className="absolute inset-0" data-tauri-drag-region />
-
         {/* Logo + menu toggle */}
-        <div className="relative z-10 flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
           <img src="/logo.png" alt="NovAIC" className="w-5 h-5 opacity-90" />
           <button
             onClick={onToggleDrawer}
@@ -104,7 +110,7 @@ export function Header(props: HeaderProps) {
 
         {/* Center — agent selector + status */}
         {currentAgent ? (
-          <div className="relative z-10 flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1 shrink-0">
             {/* Prev */}
             <button
               onClick={handlePrevAgent}
@@ -175,7 +181,7 @@ export function Header(props: HeaderProps) {
             </button>
           </div>
         ) : (
-          <span className="relative z-10 text-[12px] text-nb-text-secondary/50 shrink-0">
+          <span className="text-[12px] text-nb-text-secondary/50 shrink-0">
             No agent selected
           </span>
         )}
@@ -186,7 +192,7 @@ export function Header(props: HeaderProps) {
         {/* Settings */}
         <button
           onClick={onOpenSettings}
-          className="relative z-10 w-7 h-7 flex items-center justify-center rounded-md
+          className="w-7 h-7 flex items-center justify-center rounded-md
                      text-nb-text-muted hover:text-nb-text hover:bg-white/[0.06] transition-all shrink-0"
           title="Settings"
         >
