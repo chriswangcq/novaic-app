@@ -709,8 +709,16 @@ pub async fn stop_vm(
         processes.remove(&id);
     }
 
-    // Clean up socket file
+    // Clean up all socket files for this VM
     std::fs::remove_file(&qmp_socket_path).ok();
+    let vnc_socket_path = format!("{}/novaic-vnc-{}.sock", SOCKET_DIR, id);
+    if std::fs::remove_file(&vnc_socket_path).is_ok() {
+        tracing::info!("[stop_vm] Removed VNC socket: {}", vnc_socket_path);
+    }
+    let ga_socket_path = format!("{}/novaic-ga-{}.sock", SOCKET_DIR, id);
+    std::fs::remove_file(&ga_socket_path).ok();
+    let mcp_socket_path = format!("{}/novaic-mcp-{}.sock", SOCKET_DIR, id);
+    std::fs::remove_file(&mcp_socket_path).ok();
 
     tracing::info!("[stop_vm] VM {} stopped and cleaned up", id);
     Ok(Json(serde_json::json!({

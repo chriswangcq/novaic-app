@@ -12,7 +12,13 @@ import { api } from '../services';
 import * as setup from '../services/setup';
 import { vmService } from '../services/vm';
 import type { AICAgent, CreateAgentRequest } from '../services/api';
-import { appendTokenToUrl } from '../services/auth';
+import { appendTokenToUrl, getCurrentUser } from '../services/auth';
+
+/** Returns a user-scoped localStorage key to prevent cross-user pollution on shared machines. */
+function userKey(base: string): string {
+  const uid = getCurrentUser()?.user_id ?? 'anonymous';
+  return `${base}__${uid}`;
+}
 import { 
   Message, 
   LogEntry,
@@ -42,7 +48,7 @@ const LAYOUT_PERSISTENCE_VERSION = 2;
 
 function loadStoredAgentId(): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEYS.SELECTED_AGENT);
+    return localStorage.getItem(userKey(STORAGE_KEYS.SELECTED_AGENT));
   } catch {
     return null;
   }
@@ -122,10 +128,11 @@ function parseMessageContent(
 
 function saveAgentId(agentId: string | null): void {
   try {
+    const k = userKey(STORAGE_KEYS.SELECTED_AGENT);
     if (agentId) {
-      localStorage.setItem(STORAGE_KEYS.SELECTED_AGENT, agentId);
+      localStorage.setItem(k, agentId);
     } else {
-      localStorage.removeItem(STORAGE_KEYS.SELECTED_AGENT);
+      localStorage.removeItem(k);
     }
   } catch {}
 }
@@ -136,13 +143,13 @@ const LOG_SYNC_KEY  = 'novaic_last_log_id';
 const DELTA_STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function loadChatSyncTimes(): Record<string, string> {
-  try { return JSON.parse(localStorage.getItem(CHAT_SYNC_KEY) || '{}'); } catch { return {}; }
+  try { return JSON.parse(localStorage.getItem(userKey(CHAT_SYNC_KEY)) || '{}'); } catch { return {}; }
 }
 function saveChatSyncTime(agentId: string, isoTime: string): void {
   try {
     const all = loadChatSyncTimes();
     all[agentId] = isoTime;
-    localStorage.setItem(CHAT_SYNC_KEY, JSON.stringify(all));
+    localStorage.setItem(userKey(CHAT_SYNC_KEY), JSON.stringify(all));
   } catch {}
 }
 function getChatSyncTime(agentId: string): string | null {
@@ -150,13 +157,13 @@ function getChatSyncTime(agentId: string): string | null {
 }
 
 function loadLogSyncIds(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(LOG_SYNC_KEY) || '{}'); } catch { return {}; }
+  try { return JSON.parse(localStorage.getItem(userKey(LOG_SYNC_KEY)) || '{}'); } catch { return {}; }
 }
 function saveLogSyncId(agentId: string, id: number): void {
   try {
     const all = loadLogSyncIds();
     all[agentId] = id;
-    localStorage.setItem(LOG_SYNC_KEY, JSON.stringify(all));
+    localStorage.setItem(userKey(LOG_SYNC_KEY), JSON.stringify(all));
   } catch {}
 }
 function getLogSyncId(agentId: string): number | null {
@@ -174,7 +181,7 @@ function safeNumber(value: unknown, fallback: number): number {
 // Load layout settings v2 from localStorage (novaic-layout-v2)
 function loadLayoutSettings(): LayoutPersistence {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.LAYOUT_V2);
+    const saved = localStorage.getItem(userKey(STORAGE_KEYS.LAYOUT_V2));
     if (saved) {
       const parsed = JSON.parse(saved) as Partial<LayoutPersistence>;
       if (parsed.version !== LAYOUT_PERSISTENCE_VERSION) {
@@ -262,7 +269,7 @@ let saveLayoutDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 function writeLayoutToStorage(settings: LayoutPersistence): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.LAYOUT_V2, JSON.stringify(settings));
+    localStorage.setItem(userKey(STORAGE_KEYS.LAYOUT_V2), JSON.stringify(settings));
   } catch (e) {
     console.warn('[Store] Failed to save layout settings:', e);
   }
@@ -395,7 +402,7 @@ const initialLayoutV2 = loadLayoutSettings();
 
 function loadSelectedModel(): string {
   try {
-    return localStorage.getItem(STORAGE_KEYS.SELECTED_MODEL) || '';
+    return localStorage.getItem(userKey(STORAGE_KEYS.SELECTED_MODEL)) || '';
   } catch {
     return '';
   }
@@ -822,7 +829,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     
     // 保存到 localStorage（作为 fallback）
     try {
-      localStorage.setItem(STORAGE_KEYS.SELECTED_MODEL, model);
+      localStorage.setItem(userKey(STORAGE_KEYS.SELECTED_MODEL), model);
     } catch {}
     
     // 同步保存到当前 agent（如果有）
@@ -1020,7 +1027,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           // 构造 composite ID: api_key_id:model_id
           const compositeId = `${modelConfig.model.api_key_id}:${modelConfig.model_id}`;
           set({ selectedModel: compositeId });
-          localStorage.setItem(STORAGE_KEYS.SELECTED_MODEL, compositeId);
+          localStorage.setItem(userKey(STORAGE_KEYS.SELECTED_MODEL), compositeId);
           console.log('[Store] Loaded model for agent:', agentId, compositeId);
         }
       } catch (e) {
