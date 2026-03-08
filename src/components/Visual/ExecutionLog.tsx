@@ -4,7 +4,11 @@ import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { LogEntry } from '../../types';
 import { CheckCircle, Terminal, Loader2, Brain, XCircle, ChevronDown, ChevronRight, Sparkles, Maximize2, X, Copy, Check, Wrench, Image as ImageIcon } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAppStore } from '../../application/store';
+import { useModels } from '../hooks/useModels';
+import { useLogs } from '../hooks/useLogs';
+import { useAgent } from '../hooks/useAgent';
+import { useLayout } from '../hooks/useLayout';
 import { LogCapsule } from './LogCapsule';
 import { SmartValue } from './SmartValue';
 import { formatTime } from '../../utils/time';
@@ -367,7 +371,7 @@ interface LLMInputModalProps {
 }
 
 function LLMInputModal({ isOpen, onClose, messages, model, tools, provider }: LLMInputModalProps) {
-  const { availableModels, apiKeys } = useAppStore();
+  const { availableModels, apiKeys } = useModels();
   const [copied, setCopied] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'view' | 'edit' | 'response'>('view');
   
@@ -1044,7 +1048,7 @@ export interface LogCardProps {
 export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProps) {
   const [showLLMModal, setShowLLMModal] = useState(false);
   const [isLoadingInput, setIsLoadingInput] = useState(false);
-  const store = useAppStore();
+  const { fetchLogInput } = useLogs();
 
   // 提取数据
   const getInputData = (): unknown => {
@@ -1115,7 +1119,7 @@ export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProp
     if (log.id && !hasFullInput && !isLoadingInput) {
       setIsLoadingInput(true);
       try {
-        const input = await store.fetchLogInput(log.id);
+        const input = await fetchLogInput(log.id);
         if (input) {
           setShowLLMModal(true);  // 加载成功后直接打开弹窗
         }
@@ -1389,18 +1393,17 @@ export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProp
 // ==================== 主组件 ====================
 
 export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
-  const { 
-    currentAgentId, 
-    logSubagentId, 
-    logSubagents, 
-    setLogSubagentId,
+  const { currentAgentId } = useAgent();
+  const {
+    logSubagentId,
+    logSubagents,
+    hasMore: hasMoreLogs,
+    isLoadingMore: isLoadingMoreLogs,
+    loadMore: loadMoreLogs,
+    filterBySubagent: setLogSubagentId,
     appendSubagentLogs,
-    hasMoreLogs,
-    isLoadingMoreLogs,
-    loadMoreLogs,
-    expandedCapsules,
-    setExpandedCapsules,
-  } = useAppStore();
+  } = useLogs();
+  const { expandedCapsules, setExpandedCapsules } = useLayout();
   
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
   const [isReady, setIsReady] = useState(false);

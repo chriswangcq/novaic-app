@@ -502,6 +502,37 @@ async fn gateway_health(
     GatewayClient::new(read_gateway_url(&gw_url)).with_auth(&token).health_check().await
 }
 
+/// Fetch remote URL with JWT authentication and return raw bytes.
+/// Used by FileAttachment to load images through Rust (avoids browser-level network requests).
+#[tauri::command]
+async fn fetch_authenticated_bytes(
+    url: String,
+    cloud_token: tauri::State<'_, CloudTokenState>,
+) -> Result<Vec<u8>, String> {
+    let token = cloud_token.read().await.clone();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("Client build failed: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Fetch failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+
+    response
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Failed to read bytes: {}", e))
+}
+
 /// Download file to app cache directory (with Clerk JWT authentication)
 #[tauri::command]
 async fn download_file_to_cache(
@@ -858,6 +889,7 @@ fn main() {
             gateway_delete,
             gateway_health,
             // File operations
+            fetch_authenticated_bytes,
             download_file_to_cache,
             open_file,
             show_in_folder,

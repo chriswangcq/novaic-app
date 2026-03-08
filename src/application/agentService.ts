@@ -1,0 +1,172 @@
+/**
+ * app/agentService.ts — Agent CRUD + initialization + setup flow.
+ */
+
+import { useAppStore } from './store';
+import { gateway } from '../gateway/client';
+import * as prefsRepo from '../db/prefsRepo';
+import * as setup from '../services/setup';
+import { vmService } from '../services/vm';
+import type { SyncService } from './syncService';
+import type { ModelService } from './modelService';
+import type { CreateAgentRequest, AICAgent } from '../services/api';
+import type { SetupProgressInfo } from '../types';
+import { VM_CONFIG } from '../config';
+
+export class AgentService {
+  constructor(
+    private userId: string,
+    private syncService: SyncService,
+    private modelService: ModelService,
+  ) {}
+
+  // ── Bootstrap (app startup) ───────────────────────────────────────────────
+
+  async initialize(): Promise<void> {
+    try {
+      await this.loadAgents();
+      await this.modelService.loadConfig();
+
+      const { currentAgentId } = useAppStore.getState();
+      if (currentAgentId) {
+        await this.syncService.switchAgent(currentAgentId);
+        await this.modelService.loadForAgent(currentAgentId);
+      }
+
+      useAppStore.getState().patchState({ isInitialized: true });
+    } catch (e) {
+      console.error('[AgentService] initialize failed:', e);
+      useAppStore.getState().patchState({ settingsOpen: true });
+    }
+  }
+
+  // ── Load agents list ──────────────────────────────────────────────────────
+
+  async loadAgents(): Promise<void> {
+    try {
+      const response = await gateway.listAgents();
+      const { agents: current, currentAgentId, isInitialized } = useAppStore.getState();
+
+      const changed =
+        current.length !== response.agents.length ||
+        current.some((a, i) => {
+          const n = response.agents[i];
+          if (!n || a.id !== n.id || a.name !== n.name || a.created_at !== n.created_at) return true;
+          return a.android?.device_serial !== n.android?.device_serial ||
+                 a.android?.avd_name !== n.android?.avd_name;
+        });
+
+      if (changed) useAppStore.getState().setAgents(response.agents);
+
+      if (!response.agents.length) {
+        useAppStore.getState().patchState({
+          currentAgentId: null, messages: [], logs: [], lastLogId: null,
+          hasMoreMessages: true, hasMoreLogs: true, logSubagentId: null, logSubagents: [],
+        });
+        await prefsRepo.setSelectedAgent(this.userId, null);
+        this.syncService.disconnect();
+        return;
+      }
+
+      const exists = response.agents.some(a => a.id === currentAgentId);
+      if (!currentAgentId || !exists) {
+        const stored = await prefsRepo.getSelectedAgent(this.userId);
+        const storedExists = stored && response.agents.some(a => a.id === stored);
+        const target = storedExists ? stored! : response.agents[0].id;
+
+        if (isInitialized) {
+          await this.selectAgent(target);
+        } else {
+          useAppStore.getState().setCurrentAgentId(target);
+          await prefsRepo.setSelectedAgent(this.userId, target);
+        }
+      }
+    } catch (e) {
+      console.error('[AgentService] loadAgents:', e);
+    }
+  }
+
+  // ── Select agent ──────────────────────────────────────────────────────────
+
+  async selectAgent(agentId: string): Promise<void> {
+    const { currentAgentId } = useAppStore.getState();
+    if (currentAgentId === agentId) return;
+
+    useAppStore.getState().setCurrentAgentId(agentId);
+    await prefsRepo.setSelectedAgent(this.userId, agentId);
+
+    await this.syncService.switchAgent(agentId);
+    await this.modelService.loadForAgent(agentId);
+  }
+
+  // ── CRUD ──────────────────────────────────────────────────────────────────
+
+  async create(data: CreateAgentRequest, modelId?: string): Promise<AICAgent> {
+    const agent = await gateway.createAgent(data);
+    if (modelId) {
+      await gateway.setAgentModel(agent.id, modelId).catch(e =>
+        console.warn('[AgentService] setAgentModel failed (non-fatal):', e)
+      );
+    }
+    await this.loadAgents();
+    return agent;
+  }
+
+  async setAgentModel(agentId: string, modelId: string): Promise<void> {
+    await gateway.setAgentModel(agentId, modelId);
+  }
+
+  async delete(agentId: string): Promise<void> {
+    await gateway.deleteAgent(agentId);
+    await this.loadAgents();
+  }
+
+  async updateVmConfig(agentId: string, vmConfig: {
+    backend: string;
+    os_type: string;
+    os_version: string;
+    memory: string;
+    cpus: number;
+    source_image: string;
+  }): Promise<AICAgent> {
+    return gateway.updateAgent(agentId, { vm_config: vmConfig });
+  }
+
+  // ── Setup flow (VM provisioning) ──────────────────────────────────────────
+
+  async setupAgent(agentId: string, config: { sourceImage: string; useCnMirrors: boolean }): Promise<void> {
+    const { agents, updateSetupProgress: _upd, setAgentSetupComplete: _set } = useAppStore.getState() as any;
+    const patchAgent = useAppStore.getState().patchAgent;
+    const agent = agents.find((a: AICAgent) => a.id === agentId);
+    if (!agent) throw new Error('Agent not found');
+
+    const updateProgress = (p: SetupProgressInfo | undefined) => patchAgent(agentId, { setup_progress: p });
+    const setComplete    = (v: boolean) => patchAgent(agentId, { setup_complete: v, setup_progress: undefined });
+
+    try {
+      let sshPubkey = await setup.getSshPubkey();
+      if (!sshPubkey) sshPubkey = await setup.generateSshKey();
+
+      updateProgress({ stage: 'Creating VM', progress: 0, message: 'Creating virtual machine disk...' });
+
+      await setup.setupVm(
+        { agentId, sourceImage: config.sourceImage, diskSize: '40G', sshPubkey, useCnMirrors: config.useCnMirrors },
+        (p) => updateProgress(p),
+      );
+
+      updateProgress({ stage: 'Starting VM', progress: 90, message: 'Starting virtual machine...' });
+      await vmService.start(agentId);
+      await new Promise(r => setTimeout(r, VM_CONFIG.START_WAIT_DELAY));
+      await this.loadAgents();
+      await gateway.updateAgent(agentId, { setup_complete: true });
+      setComplete(true);
+    } catch (error) {
+      updateProgress({
+        stage: 'Error', progress: 0,
+        message: error instanceof Error ? error.message : String(error),
+        error:   error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+}

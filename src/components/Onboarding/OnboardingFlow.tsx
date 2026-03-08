@@ -13,7 +13,7 @@
 import { useState, useEffect } from 'react';
 import { Settings, CheckCircle, AlertCircle } from 'lucide-react';
 import { SetupProgress } from './SetupProgress';
-import { api } from '../../services';
+import { useAgent } from '../hooks/useAgent';
 import * as setup from '../../services/setup';
 import { vmService } from '../../services/vm';
 
@@ -48,6 +48,8 @@ const MEMORY_OPTIONS = [
 const CPU_OPTIONS = [2, 4, 6, 8];
 
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
+  const { create: createAgentViaService, updateVmConfig } = useAgent();
+
   // Step state
   const [step, setStep] = useState<SetupStep>('welcome');
   const [error, setError] = useState<string | null>(null);
@@ -123,21 +125,17 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
         sshPubkey = await setup.generateSshKey();
       }
 
-      // Create agent via API
-      let agent = await api.createAgent({
-        name: agentName,
-      });
+      // Create agent via service layer
+      let agent = await createAgentViaService({ name: agentName });
 
-      // Add VM configuration
-      agent = await api.updateAgent(agent.id, {
-        vm_config: {
-          backend: 'qemu',
-          os_type: osType,
-          os_version: osVersion,
-          memory,
-          cpus,
-          source_image: sourceImage,
-        },
+      // Add VM configuration via service layer
+      agent = await updateVmConfig(agent.id, {
+        backend: 'qemu',
+        os_type: osType,
+        os_version: osVersion,
+        memory,
+        cpus,
+        source_image: sourceImage,
       });
 
       setCreatedAgentId(agent.id);

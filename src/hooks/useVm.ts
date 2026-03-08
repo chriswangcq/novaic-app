@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { vmService, VmStatus } from '../services/vm';
-import { useAppStore } from '../store';
+import { useAppStore } from '../application/store';
 import { POLL_CONFIG, VM_CONFIG, DEFAULT_PORTS, LOCAL_ENDPOINTS } from '../config';
 
 interface UseVmReturn {

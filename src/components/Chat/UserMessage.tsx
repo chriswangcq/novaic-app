@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Message, MessageStatus } from '../../types';
 import { Check, CheckCheck, Clock, AlertCircle, ChevronDown } from 'lucide-react';
 import { Markdown } from './Markdown';
-import { useAppStore } from '../../store';
+import { useMessages } from '../hooks/useMessages';
 import { FileAttachmentList } from './FileAttachment';
 
 interface UserMessageProps {
@@ -24,10 +24,10 @@ export function UserMessage({ message, showHeader = true, showStatus = true }: U
   const status = message.status || 'delivered';
   const statusInfo = statusConfig[status];
   const StatusIcon = statusInfo.icon;
-  const expandMessage = useAppStore((state) => state.expandMessage);
+  const { expand } = useMessages();
   
   const handleExpand = () => {
-    expandMessage(message.id);
+    expand(message.id);
   };
 
   // 是否强制显示状态（发送中、错误、或者是组内最后一条）

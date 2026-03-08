@@ -11,8 +11,11 @@ import { useState, useCallback, useEffect } from 'react';
 import { FileText, Download, Loader2, ExternalLink, Image as ImageIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { toFileUrl } from '../../services/trs';
-import { fetchWithAuth } from '../../services/auth';
+import { getCurrentUser } from '../../services/auth';
+import { getCachedFile, setCachedFile } from '../../db/fileRepo';
+import { useAuthenticatedImage } from '../hooks/useAuthenticatedImage';
 import type { Attachment } from '../../types';
+
 
 interface FileAttachmentProps {
   attachment: Attachment;
@@ -68,35 +71,35 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
   const [downloadState, setDownloadState] = useState<DownloadState>('idle');
   const [localPath, setLocalPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [authUrl, setAuthUrl] = useState<string>('');
 
   const url = attachment.url ?? attachment.path;
   const isImage = (attachment.mime_type ?? attachment.type ?? '').startsWith('image/');
   const displayUrl = url ? toFileUrl(url) : '';
   const filename = attachment.name || url?.split('/').pop() || 'file';
   const fileSize = attachment.size || 0;
+  const mimeType = attachment.mime_type ?? attachment.type ?? 'image/*';
 
-  // 用 fetchWithAuth 加载图片为 blob URL（规避 <img> 无法带 Authorization header 的限制）
+  // 图片加载：IndexedDB 缓存 → Rust 认证请求（去重），attachment.id 作为缓存键
+  const authUrl = useAuthenticatedImage(
+    isImage ? displayUrl : '',
+    isImage ? attachment.id : undefined,
+    mimeType,
+  );
+
+  // Restore download state from cache for non-image files
   useEffect(() => {
-    if (!isImage || !displayUrl) return;
-    let objectUrl = '';
-    fetchWithAuth(displayUrl)
-      .then(res => {
-        if (!res.ok) throw new Error(`${res.status}`);
-        return res.blob();
+    if (isImage) return;
+    const userId = getCurrentUser()?.user_id ?? 'anonymous';
+    getCachedFile(userId, attachment.id)
+      .then(cached => {
+        if (cached?.local_path) {
+          setLocalPath(cached.local_path);
+          setDownloadState('downloaded');
+        }
       })
-      .then(blob => {
-        objectUrl = URL.createObjectURL(blob);
-        setAuthUrl(objectUrl);
-      })
-      .catch(() => {
-        // fallback: try without auth (public file)
-        setAuthUrl(displayUrl);
-      });
-    return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [isImage, displayUrl]);
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isImage, attachment.id]);
 
   // 下载文件到本地缓存
   const handleDownload = useCallback(async () => {
@@ -115,6 +118,15 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
       if (result.success && result.path) {
         setLocalPath(result.path);
         setDownloadState('downloaded');
+        const userId = getCurrentUser()?.user_id ?? 'anonymous';
+        setCachedFile(userId, {
+          id: attachment.id,
+          filename,
+          mime_type: attachment.mime_type ?? attachment.type ?? '',
+          file_size: fileSize,
+          cached_at: Date.now(),
+          local_path: result.path,
+        }).catch(() => {});
       } else {
         throw new Error(result.error || '下载失败');
       }
@@ -123,7 +135,7 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
       setError(err instanceof Error ? err.message : '下载失败');
       setDownloadState('error');
     }
-  }, [displayUrl, filename]);
+  }, [displayUrl, filename, attachment.id, attachment.mime_type, attachment.type, fileSize]);
 
   // 打开已下载的文件
   const handleOpen = useCallback(async () => {
@@ -167,6 +179,15 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
       if (result.success && result.path) {
         setLocalPath(result.path);
         setDownloadState('downloaded');
+        const userId = getCurrentUser()?.user_id ?? 'anonymous';
+        setCachedFile(userId, {
+          id: attachment.id,
+          filename,
+          mime_type: attachment.mime_type ?? attachment.type ?? '',
+          file_size: fileSize,
+          cached_at: Date.now(),
+          local_path: result.path,
+        }).catch(() => {});
         // 下载完成后自动用系统应用打开
         await invoke('open_file', { path: result.path });
       } else {
@@ -176,7 +197,7 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
       console.error('Download and open failed:', err);
       setDownloadState('error');
     }
-  }, [displayUrl, filename, localPath]);
+  }, [displayUrl, filename, localPath, attachment.id, attachment.mime_type, attachment.type, fileSize]);
 
   // 图片类型：显示缩略图，点击下载后用系统应用打开
   if (isImage && displayUrl) {

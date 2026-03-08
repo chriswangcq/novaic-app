@@ -10,6 +10,21 @@ import {
 } from '../../utils/logFormatters';
 import { UI_CONFIG } from '../../config';
 import { getTrsFull, toFileUrl, normalizedToContent, type TrsContentItem } from '../../services/trs';
+import { useAuthenticatedImage } from '../hooks/useAuthenticatedImage';
+
+/** 单张工具结果图片：走 Rust 认证请求 + IndexedDB 缓存 */
+function TrsImage({ url }: { url: string }) {
+  const fullUrl = toFileUrl(url);
+  const authUrl = useAuthenticatedImage(fullUrl);
+  if (!authUrl) return <div className="text-[11px] text-nb-text-muted">加载中...</div>;
+  return (
+    <img
+      src={authUrl}
+      alt="Tool result"
+      className="max-w-full max-h-48 rounded border border-nb-border object-contain"
+    />
+  );
+}
 
 function TrsResultRenderer({ items }: { items: TrsContentItem[] }) {
   if (!items?.length) return null;
@@ -24,15 +39,7 @@ function TrsResultRenderer({ items }: { items: TrsContentItem[] }) {
           );
         }
         if (item.type === 'image' && item.url) {
-          const src = toFileUrl(item.url);
-          return (
-            <img
-              key={i}
-              src={src}
-              alt="Tool result"
-              className="max-w-full max-h-48 rounded border border-nb-border object-contain"
-            />
-          );
+          return <TrsImage key={i} url={item.url} />;
         }
         if (item.type === 'resource' && item.url) {
           return (

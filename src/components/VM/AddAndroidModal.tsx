@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { X, Loader2, Smartphone, Check, AlertCircle, RefreshCw } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAgent } from '../hooks/useAgent';
 import { api } from '../../services';
 
 // Types for Android API responses (internal use for listing connected devices)
@@ -58,7 +58,7 @@ const CPU_OPTIONS = [
 ];
 
 export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalProps) {
-  const { currentAgentId, loadAgents } = useAppStore();
+  const { currentAgentId, loadAgents } = useAgent();
   
   // Mode selection
   const [mode, setMode] = useState<ManagementMode>('managed');

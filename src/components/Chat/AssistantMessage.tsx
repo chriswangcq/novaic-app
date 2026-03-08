@@ -2,7 +2,7 @@ import { Component, ReactNode, ErrorInfo, useState } from 'react';
 import { Message } from '../../types';
 import { Markdown } from './Markdown';
 import { Sparkles, AlertTriangle, ChevronDown } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useMessages } from '../hooks/useMessages';
 import { formatTime } from '../../utils/time';
 import { FileAttachmentList } from './FileAttachment';
 
@@ -75,10 +75,10 @@ function AssistantMessageInner({ message, showHeader = true }: AssistantMessageP
   const [isHovered, setIsHovered] = useState(false);
   const events = message.events || [];
   const isStreaming = message.isStreaming;
-  const expandMessage = useAppStore((state) => state.expandMessage);
+  const { expand } = useMessages();
   
   const handleExpand = () => {
-    expandMessage(message.id);
+    expand(message.id);
   };
 
   // 格式化时间（使用统一的时间工具）

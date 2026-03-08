@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Terminal, Loader2, CheckCircle, XCircle, Brain, X, Maximize2 } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useLogs } from '../hooks/useLogs';
+import { useAgent } from '../hooks/useAgent';
 import { ExecutionLog } from './ExecutionLog';
 import { LogEntry } from '../../types';
 import { getTrsPreview } from '../../services/trs';
@@ -154,7 +155,7 @@ function LogPreviewItem({ log }: { log: LogEntry }) {
 
 // 全屏日志模态框
 function FullLogModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { logs } = useAppStore();
+  const { logs } = useLogs();
   
   if (!isOpen) return null;
   
@@ -197,7 +198,8 @@ function FullLogModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => voi
 }
 
 export function CollapsibleExecutionLog({ className = '', isExpanded = false }: CollapsibleExecutionLogProps) {
-  const { logs, currentAgentId, logSubagents } = useAppStore();
+  const { logs, logSubagents } = useLogs();
+  const { currentAgentId } = useAgent();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('main');
   const [userPickedTab, setUserPickedTab] = useState(false);

@@ -2,7 +2,8 @@ import { useEffect, useCallback, useState, Component, ReactNode, ErrorInfo } fro
 import { Header } from './components/Layout/Header';
 import { AgentDrawer } from './components/Layout/AgentDrawer';
 import { LayoutContainer } from './components/Layout/LayoutContainer';
-import { useAppStore } from './store';
+import { useAppStore } from './application/store';
+import { getAgentService, getSyncService, getLayoutService } from './application';
 import { LAYOUT_CONFIG } from './config';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
@@ -185,21 +186,12 @@ function App() {
   const [isSignedIn, setIsSignedIn] = useState(() => getCurrentUser() !== null);
   const [currentUserInfo, setCurrentUserInfo] = useState<UserInfo | null>(() => getCurrentUser());
 
-  const { 
-    initialize, 
-    isInitialized, 
-    settingsOpen,
-    setSettingsOpen,
-    loadAgents,
-    selectAgent,
-    agents,
-    currentAgentId,
-    setCreateAgentModalOpen,
-    drawerWidth,
-    setDrawerWidth,
-    drawerOpen,
-    setDrawerOpen,
-  } = useAppStore();
+  const isInitialized = useAppStore(s => s.isInitialized);
+  const settingsOpen = useAppStore(s => s.settingsOpen);
+  const agents = useAppStore(s => s.agents);
+  const currentAgentId = useAppStore(s => s.currentAgentId);
+  const drawerWidth = useAppStore(s => s.drawerWidth);
+  const drawerOpen = useAppStore(s => s.drawerOpen);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
@@ -233,12 +225,12 @@ function App() {
     let fallbackInterval: ReturnType<typeof setInterval> | null = null;
     pushToken().then((token) => {
       if (token) {
-        initialize();
+        getAgentService().initialize();
       } else {
         fallbackInterval = setInterval(async () => {
           const t = await pushToken();
           if (t) {
-            initialize();
+            getAgentService().initialize();
             if (fallbackInterval) clearInterval(fallbackInterval);
             fallbackInterval = null;
           }
@@ -252,7 +244,7 @@ function App() {
       clearInterval(interval);
       if (fallbackInterval) clearInterval(fallbackInterval);
     };
-  }, [isSignedIn, initialize]);
+  }, [isSignedIn]);
 
   // 连接超时：超过 35 秒未就绪则显示错误和重试
   useEffect(() => {
@@ -274,7 +266,7 @@ function App() {
     const checkAgents = async () => {
       setIsLoadingAgents(true);
       try {
-        await loadAgents();
+        await getAgentService().loadAgents();
         
         const storeState = useAppStore.getState();
         const { agents: loadedAgents, currentAgentId: restoredAgentId } = storeState;
@@ -282,9 +274,8 @@ function App() {
         if (loadedAgents.length === 0) {
           // 清空所有状态和 localStorage
           console.log('[App] No agents found, clearing state');
-          const { disconnectSSE } = useAppStore.getState();
-          disconnectSSE();
-          useAppStore.setState({ 
+          getSyncService().disconnect();
+          useAppStore.getState().patchState({ 
             currentAgentId: null,
             messages: [],
             logs: [],
@@ -318,7 +309,7 @@ function App() {
         
         // Select the target agent (will be skipped if already selected)
         if (targetAgent && targetAgent.id !== restoredAgentId) {
-          await selectAgent(targetAgent.id);
+          await getAgentService().selectAgent(targetAgent.id);
         }
         
         // 不再自动进入 setup 页面
@@ -335,12 +326,12 @@ function App() {
     if (isInitialized) {
       checkAgents();
     }
-  }, [isInitialized, loadAgents, selectAgent]);
+  }, [isInitialized]);
 
   // Handle agent selection from drawer
   const handleSelectAgent = useCallback(async (agentId: string, needsSetup: boolean) => {
     console.log('[App] Selecting agent:', agentId, 'needsSetup:', needsSetup);
-    await selectAgent(agentId);
+    await getAgentService().selectAgent(agentId);
     
     if (needsSetup) {
       const agent = useAppStore.getState().agents.find(a => a.id === agentId);
@@ -356,7 +347,7 @@ function App() {
       setSetupConfig(null);
       setCurrentPage('workspace');
     }
-  }, [selectAgent]);
+  }, []);
 
   // Setup complete - enter workspace
   const handleSetupComplete = useCallback(() => {
@@ -383,12 +374,12 @@ function App() {
     
     if (newAgent) {
       console.log('[App] Agent created:', newAgent.id);
-      await selectAgent(newAgent.id);
+      await getAgentService().selectAgent(newAgent.id);
       // 不自动进入 setup，保持在 workspace 页面
       // 用户可以在右侧 DeviceSidebar 点击"+ Linux VM"来创建 VM
       setCurrentPage('workspace');
     }
-  }, [selectAgent]);
+  }, []);
 
   if (!isSignedIn) {
     return (
@@ -412,7 +403,7 @@ function App() {
         <button
           onClick={() => {
             setInitTimeout(false);
-            initialize();
+            getAgentService().initialize();
           }}
           className="flex items-center gap-2 px-4 py-2 bg-nb-surface hover:bg-nb-surface-2 rounded-lg text-nb-text transition-colors"
         >
@@ -452,9 +443,9 @@ function App() {
         {/* Agent Drawer - 也可以在 setup 页面打开 */}
         <AgentDrawer
           isOpen={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
+          onClose={() => getLayoutService().setDrawerOpen(false)}
           onSelectAgent={handleSelectAgent}
-          onCreateNew={() => setCreateAgentModalOpen(true)}
+          onCreateNew={() => useAppStore.getState().patchState({ createAgentModalOpen: true })}
         />
       </>
     );
@@ -464,8 +455,8 @@ function App() {
     <div className="h-screen flex flex-col bg-nb-bg">
       {/* Header with Menu Button */}
       <Header 
-        onOpenSettings={() => setSettingsOpen(true)} 
-        onToggleDrawer={() => setDrawerOpen(!drawerOpen)}
+        onOpenSettings={() => useAppStore.getState().patchState({ settingsOpen: true })} 
+        onToggleDrawer={() => getLayoutService().setDrawerOpen(!drawerOpen)}
         isDrawerOpen={drawerOpen}
         onAgentCreated={handleAgentCreated}
       />
@@ -474,14 +465,14 @@ function App() {
       <LayoutContainer
         drawerWidth={drawerWidth}
         drawerOpen={drawerOpen}
-        onDrawerResize={(delta) => setDrawerWidth(useAppStore.getState().drawerWidth + delta)}
-        onDrawerClose={() => setDrawerOpen(false)}
-        onDrawerDoubleClick={() => setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
+        onDrawerResize={(delta) => getLayoutService().setDrawerWidth(useAppStore.getState().drawerWidth + delta)}
+        onDrawerClose={() => getLayoutService().setDrawerOpen(false)}
+        onDrawerDoubleClick={() => getLayoutService().setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
         onSelectAgent={handleSelectAgent}
-        onCreateNew={() => setCreateAgentModalOpen(true)}
+        onCreateNew={() => useAppStore.getState().patchState({ createAgentModalOpen: true })}
       />
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal open={settingsOpen} onClose={() => useAppStore.getState().patchState({ settingsOpen: false })} />
       
       {/* Status bar */}
       <footer className="h-6 bg-nb-surface border-t border-nb-border px-4 flex items-center text-xs text-nb-text-muted">

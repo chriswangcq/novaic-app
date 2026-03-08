@@ -8,8 +8,8 @@
  * 4. 使用稳定的 ref 避免重渲染
  */
 
-import { useEffect, useRef, memo } from 'react';
-import { useAppStore } from '../../store';
+import { useEffect, useRef, memo, useCallback } from 'react';
+import { useAppStore } from '../../application/store';
 import { Monitor, Play, Loader2 } from 'lucide-react';
 import RFB from 'novnc-rfb';
 import { useVNCConnection } from './useVNCConnection';
@@ -23,7 +23,9 @@ function VNCViewComponent({ isThumbnail = false }: VNCViewProps) {
   const currentAgentId = useAppStore(state => state.currentAgentId);
   const vncLocked = useAppStore(state => state.vncLocked);
   
-  const setVncConnected = useAppStore(state => state.setVncConnected);
+  const setVncConnected = useCallback((v: boolean) => {
+    useAppStore.getState().patchState({ vncConnected: v });
+  }, []);
   
   // 使用自定义 hook 管理连接
   const [connectionState, connectionActions, wsUrl] = useVNCConnection(

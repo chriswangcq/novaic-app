@@ -10,7 +10,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, Power, MousePointer2, Monitor, Smartphone, Loader2 } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAgent } from '../hooks/useAgent';
 import { api } from '../../services/api';
 import { VNCViewShared } from '../Visual/VNCViewShared';
 import { ScrcpyView } from '../Visual/ScrcpyView';
@@ -476,7 +476,7 @@ function StoppedDeviceChip({ device, bottomOffset }: ChipProps) {
 // ─── Container ───────────────────────────────────────────────────────────────
 
 export function DeviceFloatingPanel() {
-  const { currentAgentId, agents } = useAppStore();
+  const { currentAgentId, agents } = useAgent();
   const [deviceStatuses, setDeviceStatuses] = useState<Record<string, boolean>>({});
 
   const currentAgent = currentAgentId ? agents.find(a => a.id === currentAgentId) : null;

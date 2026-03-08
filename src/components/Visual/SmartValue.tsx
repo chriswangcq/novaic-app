@@ -7,6 +7,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { ChevronDown, ChevronRight, ExternalLink, Image, Copy, Check, X, Maximize2 } from 'lucide-react';
 import { toFileUrl } from '../../services/trs';
+import { useAuthenticatedImage } from '../hooks/useAuthenticatedImage';
 
 // ==================== 工具函数 ====================
 
@@ -49,14 +50,23 @@ function ImagePreview({ src, alt = 'Image' }: ImagePreviewProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [error, setError] = useState(false);
 
+  // /api/files/* 和 /api/images/* 需要 JWT 认证，走 Rust 请求 + IndexedDB 缓存
+  const needsAuth = src.startsWith('/api/files/') || src.startsWith('/api/images/');
+  const authUrl = useAuthenticatedImage(needsAuth ? toFileUrl(src) : '');
+
   const imageSrc = useMemo(() => {
     if (src.startsWith('data:image/')) return src;
+    if (needsAuth) return authUrl; // 等待 Rust 认证获取
     if (src.startsWith('http://') || src.startsWith('https://')) return src;
-    // /api/files/* 经 Gateway 代理 File Service，需转完整 URL
-    if (src.startsWith('/api/files/')) return toFileUrl(src);
-    if (src.startsWith('/api/images/')) return toFileUrl(src);
     return `data:image/png;base64,${src}`;
-  }, [src]);
+  }, [src, needsAuth, authUrl]);
+
+  if (!imageSrc) return (
+    <div className="flex items-center gap-2 text-nb-text-secondary text-[11px]">
+      <Image size={12} />
+      <span>加载中...</span>
+    </div>
+  );
 
   if (error) {
     return (

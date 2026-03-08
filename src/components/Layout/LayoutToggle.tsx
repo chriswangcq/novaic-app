@@ -1,4 +1,4 @@
-import { useAppStore } from '../../store';
+import { useLayout } from '../hooks/useLayout';
 import { LayoutMode } from '../../types';
 import { Maximize, Columns, PictureInPicture2 } from 'lucide-react';
 
@@ -9,7 +9,7 @@ const modes: { id: LayoutMode; icon: typeof Maximize; title: string }[] = [
 ];
 
 export function LayoutToggle() {
-  const { layoutMode, setLayoutMode } = useAppStore();
+  const { layoutMode, setLayoutMode } = useLayout();
 
   return (
     <div className="flex items-center rounded-md bg-white/[0.04] p-0.5">

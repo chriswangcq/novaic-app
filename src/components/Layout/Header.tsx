@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { Settings, Menu, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { CreateAgentModal } from '../Agent/CreateAgentModal';
-import { useAppStore } from '../../store';
+import { useAppStore } from '../../application/store';
+import { useAgent } from '../hooks/useAgent';
 import { useVNCConnection } from '../Visual/useVNCConnection';
 
 const RECENT_AGENTS_LIMIT = 5;
@@ -28,7 +29,9 @@ const STATUS_DOT: Record<string, { dot: string; label: string; pulse: boolean }>
 export function Header(props: HeaderProps) {
   const { onOpenSettings, onToggleDrawer, isDrawerOpen, onAgentCreated } = props;
   const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);
-  const { createAgentModalOpen, setCreateAgentModalOpen, agents, currentAgentId, selectAgent, setVncConnected } = useAppStore();
+  const { createModalOpen: createAgentModalOpen, setCreateModal, agents, currentAgentId, select: selectAgent } = useAgent();
+  const setCreateAgentModalOpen = (open: boolean) => setCreateModal(open);
+  const setVncConnected = (v: boolean) => useAppStore.getState().patchState({ vncConnected: v });
 
   const currentAgent = agents.find(a => a.id === currentAgentId);
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);

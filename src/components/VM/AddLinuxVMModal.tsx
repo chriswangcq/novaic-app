@@ -7,7 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import { X, Monitor, Check, AlertCircle, Download, Settings } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAgent } from '../hooks/useAgent';
 import { api, AvailableImage } from '../../services/api';
 import * as setup from '../../services/setup';
 
@@ -62,7 +62,7 @@ interface SetupProgress {
 }
 
 export function AddLinuxVMModal({ isOpen, onClose, onCreated }: AddLinuxVMModalProps) {
-  const { currentAgentId, agents, loadAgents } = useAppStore();
+  const { currentAgentId, agents, loadAgents } = useAgent();
   
   // Form state
   const [osType, setOsType] = useState('ubuntu');

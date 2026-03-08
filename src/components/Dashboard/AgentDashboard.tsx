@@ -6,7 +6,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useAppStore } from '../../store';
+import { useAppStore } from '../../application/store';
+import { useAgent } from '../hooks/useAgent';
 import { AICAgent } from '../../services/api';
 import { vmService, VmStatus } from '../../services/vm';
 import { AgentDisplayStatus } from '../../types';
@@ -261,7 +262,7 @@ interface AgentDashboardProps {
 }
 
 export function AgentDashboard({ onEnterWorkspace, onEnterSetup }: AgentDashboardProps) {
-  const { agents, currentAgentId, selectAgent, deleteAgent, loadAgents } = useAppStore();
+  const { agents, currentAgentId, select: selectAgent, delete: deleteAgent, loadAgents } = useAgent();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [loadingAction, setLoadingAction] = useState<{ agentId: string; action: 'starting' | 'stopping' } | null>(null);
   // Store ALL VM statuses, keyed by agent_id

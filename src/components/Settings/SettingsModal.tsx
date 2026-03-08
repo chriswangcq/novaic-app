@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { ChevronDown, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Wrench, Eye, Edit3 } from 'lucide-react';
-import { api, type ApiKeyInfo, type CandidateModel, type AICAgent } from '../../services/api';
-import { useAppStore } from '../../store';
+import type { ApiKeyInfo, CandidateModel, AICAgent } from '../../gateway/client';
+import { useAgent } from '../hooks/useAgent';
+import { useSettings } from '../hooks/useSettings';
 import { vmService } from '../../services/vm';
 import { Markdown } from '../Chat/Markdown';
 
@@ -767,7 +768,7 @@ function ApiKeyForm({
 // ==================== Agents Tab ====================
 
 function AgentsTab() {
-  const { agents, loadAgents, deleteAgent, currentAgentId } = useAppStore();
+  const { agents, loadAgents, delete: deleteAgent, currentAgentId } = useAgent();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [vmStatuses, setVmStatuses] = useState<Record<string, { running: boolean }>>({});
 
@@ -780,7 +781,8 @@ function AgentsTab() {
       } catch { /* ignore */ }
     };
     loadStatuses();
-  }, [loadAgents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleDelete = async (agent: AICAgent) => {
     if (!confirm(`确定删除 "${agent.name}" 吗？这将同时删除关联的虚拟机和所有数据。`)) return;
@@ -876,6 +878,7 @@ function AgentsTab() {
 // ==================== Skills Tab ====================
 
 function SkillsTab() {
+  const settings = useSettings();
   const [builtinSkills, setBuiltinSkills] = useState<any[]>([]);
   const [customSkills, setCustomSkills] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -896,7 +899,7 @@ function SkillsTab() {
   const loadSkills = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.getSkills(true);
+      const res = await settings.getSkills(true);
       setBuiltinSkills(res.builtin_skills || []);
       setCustomSkills(res.custom_skills || []);
     } catch (e) {
@@ -904,6 +907,7 @@ function SkillsTab() {
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { loadSkills(); }, [loadSkills]);
@@ -944,9 +948,9 @@ function SkillsTab() {
         auto_match_keywords: formKeywords,
       };
       if (editing?.id && !editing.id.startsWith('builtin:')) {
-        await api.updateSkill(editing.id, data);
+        await settings.updateSkill(editing.id, data);
       } else {
-        await api.createSkill(data);
+        await settings.createSkill(data);
       }
       setEditing(null);
       await loadSkills();
@@ -964,7 +968,7 @@ function SkillsTab() {
     }
     if (!confirm('Delete this skill?')) return;
     try {
-      await api.deleteSkill(skillId);
+      await settings.deleteSkill(skillId);
       await loadSkills();
     } catch (e) {
       console.error('Failed to delete skill:', e);
@@ -974,7 +978,7 @@ function SkillsTab() {
   const handleFork = async (skillId: string) => {
     setForking(skillId);
     try {
-      await api.forkSkill(skillId);
+      await settings.forkSkill(skillId);
       await loadSkills();
     } catch (e) {
       console.error('Failed to fork skill:', e);
@@ -1432,7 +1436,8 @@ function ToolCategorySection({
 // ==================== Agent Tools Tab ====================
 
 function AgentToolsTab() {
-  const { agents, currentAgentId } = useAppStore();
+  const settings = useSettings();
+  const { agents, currentAgentId } = useAgent();
   const [selectedAgentId, setSelectedAgentId] = useState<string>(currentAgentId || '');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1465,10 +1470,10 @@ function AgentToolsTab() {
     setLoading(true);
     try {
       const [catRes, configRes, skillsRes, agentSkillsRes] = await Promise.all([
-        api.getToolCategories(),
-        api.getAgentToolsConfig(selectedAgentId),
-        api.getSkills(true),
-        api.getAgentSkills(selectedAgentId),
+        settings.getToolCategories(),
+        settings.getAgentToolsConfig(selectedAgentId),
+        settings.getSkills(true),
+        settings.getAgentSkills(selectedAgentId),
       ]);
       setCategories(catRes.categories || {});
       setDisabledTools(configRes.disabled_tools || []);
@@ -1478,7 +1483,7 @@ function AgentToolsTab() {
 
       // Load prompts preview
       try {
-        const p = await api.getPromptsPreview(selectedAgentId);
+        const p = await settings.getPromptsPreview(selectedAgentId);
         setPrompts(p);
       } catch {
         setPrompts(null);
@@ -1486,7 +1491,7 @@ function AgentToolsTab() {
 
       // Load bootstrap files
       try {
-        const bootstrapFiles = await api.getBootstrapFiles(selectedAgentId);
+        const bootstrapFiles = await settings.getBootstrapFiles(selectedAgentId);
         setSoulMd(bootstrapFiles.soul_md || '');
         setHeartbeatMd(bootstrapFiles.heartbeat_md || '');
         setMemoryMd(bootstrapFiles.memory_md || '');
@@ -1517,12 +1522,12 @@ function AgentToolsTab() {
     setSaving(true);
     try {
       await Promise.all([
-        api.saveAgentToolsConfig(selectedAgentId, {
+        settings.saveAgentToolsConfig(selectedAgentId, {
           disabled_tools: disabledTools,
           custom_instructions: customInstructions,
         }),
-        api.setAgentSkills(selectedAgentId, assignedSkillIds),
-        api.saveBootstrapFiles(selectedAgentId, {
+        settings.setAgentSkills(selectedAgentId, assignedSkillIds),
+        settings.saveBootstrapFiles(selectedAgentId, {
           soul_md: soulMd,
           heartbeat_md: heartbeatMd,
           // memory_md 和 user_md 是 Agent 维护的，用户不应该编辑
@@ -1533,7 +1538,7 @@ function AgentToolsTab() {
       ]);
       // Reload prompts preview after save
       try {
-        const p = await api.getPromptsPreview(selectedAgentId);
+        const p = await settings.getPromptsPreview(selectedAgentId);
         setPrompts(p);
       } catch { /* ignore */ }
     } catch (e) {
@@ -1853,6 +1858,7 @@ function AgentToolsTab() {
 
 export function SettingsModal(props: { open: boolean; onClose: () => void }) {
   const { open, onClose } = props;
+  const settings = useSettings();
 
   // Tab state
   const [activeTab, setActiveTab] = useState<SettingsTab>('models');
@@ -1889,13 +1895,14 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     setLoading(true);
     setError(null);
     try {
-      const cfg = await api.getConfig() as unknown as AppConfigLocal;
+      const cfg = await settings.getConfig() as unknown as AppConfigLocal;
       setConfig(cfg);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1918,7 +1925,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.addApiKey({ 
+      const result = await settings.addApiKey({ 
         provider: newProvider, 
         ...data 
       });
@@ -1930,9 +1937,9 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
       // Auto-fetch models for the new key
       if (result?.id && data.api_key) {
         try {
-          const models = await api.fetchModelsForKey(result.id);
+          const models = await settings.fetchModelsForKey(result.id);
           if (models.length > 0) {
-            await api.saveModelsForKey(result.id, models);
+            await settings.saveModelsForKey(result.id, models);
             setInfo(`Added ${models.length} models.`);
             await loadConfig();
           }
@@ -1951,7 +1958,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     setSubmitting(true);
     setError(null);
     try {
-      await api.updateApiKey(id, data);
+      await settings.updateApiKey(id, data);
       setEditingKeyId(null);
       setInfo('API key updated');
       await loadConfig();
@@ -1966,7 +1973,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     if (!confirm('Delete this API key and all its models?')) return;
     setError(null);
     try {
-      await api.deleteApiKey(id);
+      await settings.deleteApiKey(id);
       setInfo('API key deleted');
       await loadConfig();
     } catch (e) {
@@ -1979,7 +1986,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     setError(null);
     setInfo(null);
     try {
-      const result = await api.testApiKeyConnection(id);
+      const result = await settings.testApiKey(id);
       if (result.success) {
         setInfo('✓ Connection successful');
       } else {
@@ -1997,9 +2004,9 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     setError(null);
     setInfo(null);
     try {
-      const models = await api.fetchModelsForKey(id);
+      const models = await settings.fetchModelsForKey(id);
       if (models.length > 0) {
-        await api.saveModelsForKey(id, models);
+        await settings.saveModelsForKey(id, models);
         setInfo(`Found ${models.length} models`);
         await loadConfig();
       } else {
@@ -2015,7 +2022,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
   const handleToggleModel = async (modelId: string, apiKeyId: string, enabled: boolean) => {
     setError(null);
     try {
-      await api.toggleModel(modelId, apiKeyId, enabled);
+      await settings.toggleModel(modelId, apiKeyId, enabled);
       await loadConfig();
     } catch (e) {
       setError(String(e));
@@ -2026,7 +2033,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     if (!confirm(`Delete custom model "${modelId}"?`)) return;
     setError(null);
     try {
-      await api.deleteModel(apiKeyId, modelId);
+      await settings.deleteModel(apiKeyId, modelId);
       await loadConfig();
     } catch (e) {
       setError(String(e));
@@ -2036,7 +2043,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
   const handleAddCustomModel = async (apiKeyId: string, modelId: string, modelName: string) => {
     setError(null);
     try {
-      await api.addModel(apiKeyId, modelId, modelName);
+      await settings.addModel(apiKeyId, modelId, modelName);
       setInfo(`Added custom model: ${modelId}`);
       await loadConfig();
     } catch (e) {
@@ -2048,7 +2055,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     setError(null);
     setInfo(null);
     try {
-      await api.initAgent();
+      await settings.initAgent();
       setInfo('Agent initialized!');
       setTimeout(() => onClose(), 800);
     } catch (e) {
@@ -2063,7 +2070,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
     setInfo(null);
     setCleanupResult(null);
     try {
-      const result = await api.cleanupGarbage({ deep, clean_vm_cache: cleanVmCache });
+      const result = await settings.cleanupGarbage({ deep, clean_vm_cache: cleanVmCache });
       setCleanupResult(result.details);
       setInfo(result.message);
     } catch (e) {

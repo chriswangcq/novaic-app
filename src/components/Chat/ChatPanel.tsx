@@ -5,20 +5,17 @@ import { ChatInput } from './ChatInput';
 import { CollapsibleExecutionLog } from '../Visual/CollapsibleExecutionLog';
 import { ExecutionLog } from '../Visual/ExecutionLog';
 import { Resizer } from '../Layout/Resizer';
-import { useAppStore } from '../../store';
+import { useAppStore } from '../../application/store';
+import { useMessages } from '../hooks/useMessages';
+import { useLogs } from '../hooks/useLogs';
+import { useLayout } from '../hooks/useLayout';
 import { LAYOUT_CONFIG } from '../../config';
 import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
 
 export function ChatPanel() {
-  const {
-    messages,
-    sendMessage,
-    logs,
-    logExpanded,
-    setLogExpanded,
-    logHeightRatio,
-    setLogHeightRatio,
-  } = useAppStore();
+  const { messages, send: sendMessage } = useMessages();
+  const { logs } = useLogs();
+  const { logExpanded, setLogExpanded, logHeightRatio, setLogHeightRatio } = useLayout();
   const [unreadCount, setUnreadCount] = useState(0);
   const scrollToBottomRef = useRef<(() => void) | null>(null);
   const clearUnreadRef = useRef<(() => void) | null>(null);

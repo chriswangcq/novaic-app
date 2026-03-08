@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Monitor, Smartphone, Plus, Play, Square, Trash2, X, ExternalLink, MoreHorizontal, PanelRightOpen, PanelRightClose, EyeOff } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAgent } from '../hooks/useAgent';
+import { useLayout } from '../hooks/useLayout';
 import { api } from '../../services/api';
 import { VNCViewShared } from '../Visual/VNCViewShared';
 import { ScrcpyView } from '../Visual/ScrcpyView';
@@ -311,7 +312,8 @@ function DeviceDisplayModal({ device, onClose }: DeviceDisplayModalProps) {
 }
 
 export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth }: DeviceSidebarProps) {
-  const { currentAgentId, agents, loadAgents, sidebarWidth: storeSidebarWidth, sidebarMode, setSidebarMode } = useAppStore();
+  const { currentAgentId, agents, loadAgents } = useAgent();
+  const { sidebarWidth: storeSidebarWidth, sidebarMode, setSidebarMode } = useLayout();
   const sidebarWidth = propsSidebarWidth ?? storeSidebarWidth ?? 208;
   const isLgOrAbove = useIsLgOrAbove();
   const isOverlay = !isLgOrAbove;

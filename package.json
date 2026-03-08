@@ -26,6 +26,7 @@
     "@tauri-apps/plugin-shell": "^2",
     "@yume-chan/scrcpy": "^2.3.0",
     "@yume-chan/scrcpy-decoder-webcodecs": "^2.5.0",
+    "idb": "^8.0.3",
     "lucide-react": "^0.312.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

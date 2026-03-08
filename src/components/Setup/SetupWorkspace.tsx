@@ -15,7 +15,7 @@ import {
   ArrowLeft,
   RefreshCw
 } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAgent } from '../hooks/useAgent';
 import { AICAgent } from '../../services/api';
 import * as setup from '../../services/setup';
 
@@ -69,7 +69,7 @@ export function SetupWorkspace({
   onComplete, 
   onBack 
 }: SetupWorkspaceProps) {
-  const { setupAgent, updateSetupProgress, agents } = useAppStore();
+  const { setup: setupAgent, updateSetupProgress, agents } = useAgent();
   
   // Get live agent from store (updates in real-time)
   const agent = agents.find(a => a.id === initialAgent.id) || initialAgent;

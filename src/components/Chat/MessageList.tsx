@@ -4,7 +4,9 @@ import { Message } from '../../types';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { WelcomeScreen } from './WelcomeScreen';
-import { useAppStore } from '../../store';
+import { useMessages } from '../hooks/useMessages';
+import { useAgent } from '../hooks/useAgent';
+import { useLogs } from '../hooks/useLogs';
 import { useVirtualList } from '../../hooks/useVirtualList';
 import { useScrollPagination } from '../../hooks/useScrollPagination';
 import { MESSAGE_ESTIMATE_SIZE, MESSAGE_OVERSCAN } from '../../constants/scroll';
@@ -24,13 +26,9 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
   const [unreadCount, setUnreadCount] = useState(0);
   const hasInitialScrolled = useRef(false);
   
-  const { 
-    hasMoreMessages, 
-    isLoadingMore, 
-    loadMoreMessages,
-    currentAgentId,
-    logs
-  } = useAppStore();
+  const { hasMore: hasMoreMessages, isLoadingMore, loadMore: loadMoreMessages } = useMessages();
+  const { currentAgentId } = useAgent();
+  const { logs } = useLogs();
   
   // 检测是否有执行日志（用于调整顶部 padding，避免被 ExecutionLog 遮挡）
   const hasLogs = logs.length > 0;

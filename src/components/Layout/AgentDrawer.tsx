@@ -6,12 +6,14 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Plus, Monitor } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAppStore } from '../../application/store';
+import { useAgent } from '../hooks/useAgent';
+import { useLayout } from '../hooks/useLayout';
 import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
 import { Resizer } from './Resizer';
 import type { AICAgent } from '../../services/api';
-import { api } from '../../services/api';
 import { vmService, VmStatus } from '../../services/vm';
+import { getLastMessage } from '../../db/messageRepo';
 import { POLL_CONFIG, LAYOUT_CONFIG } from '../../config';
 
 interface AgentDrawerProps {
@@ -24,8 +26,10 @@ interface AgentDrawerProps {
 }
 
 export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal' }: AgentDrawerProps) {
-  const { agents, currentAgentId, loadAgents, drawerWidth, setDrawerWidth } = useAppStore();
+  const { agents, currentAgentId, loadAgents } = useAgent();
+  const { drawerWidth, setDrawerWidth } = useLayout();
   const isOverlay = !useIsLgOrAbove();
+  const userId = useAppStore(s => s.user?.user_id);
   const [vmStatuses, setVmStatuses] = useState<Record<string, VmStatus>>({});
   const [lastMessages, setLastMessages] = useState<Record<string, string>>({});
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -35,7 +39,8 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     if (isOpen) {
       loadAgents();
     }
-  }, [isOpen, loadAgents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Poll VM statuses
   const refreshVmStatuses = useCallback(async () => {
@@ -55,23 +60,22 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     }
   }, [isOpen, refreshVmStatuses]);
 
-  // Load last messages for all agents（依赖 agentIds 而非 agents，避免 store 其他更新触发重复请求）
+  // Load last messages for all agents from local DB (no gateway calls).
+  // Data is populated by messageService whenever an agent is selected.
+  // Agents never visited will show empty until first selection.
   const agentIds = agents.map((a) => a.id).join(',');
   useEffect(() => {
-    if (!isOpen || agents.length === 0) return;
+    if (!isOpen || agents.length === 0 || !userId) return;
 
     const loadLastMessages = async () => {
       const msgs: Record<string, string> = {};
       await Promise.allSettled(
         agents.map(async (agent) => {
           try {
-            const history = await api.getChatHistory({
-              agent_id: agent.id,
-              limit: 1,
-              summary_length: 50,
-            });
-            if (history.success && history.messages.length > 0) {
-              msgs[agent.id] = history.messages[0].summary;
+            const raw = await getLastMessage(userId, agent.id);
+            if (raw?.summary) {
+              const text = typeof raw.summary === 'string' ? raw.summary : JSON.stringify(raw.summary);
+              msgs[agent.id] = text.slice(0, 60);
             }
           } catch {
             // ignore
@@ -80,10 +84,10 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
       );
       setLastMessages(msgs);
     };
-    
+
     loadLastMessages();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 有意使用 agentIds 替代 agents，避免 agents 引用变化触发重复请求
-  }, [isOpen, agentIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 有意使用 agentIds 替代 agents
+  }, [isOpen, agentIds, userId]);
 
   // Handle keyboard escape
   useEffect(() => {

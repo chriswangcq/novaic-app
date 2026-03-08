@@ -1,6 +1,8 @@
 import { useState, useRef, KeyboardEvent, useEffect, useMemo, useCallback } from 'react';
 import { ArrowUp, ChevronDown, Bot, X, ArrowDown, Paperclip } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useModels } from '../hooks/useModels';
+import { useAgent } from '../hooks/useAgent';
+import { getModelService } from '../../application';
 import { CandidateModel } from '../../types';
 
 const MAX_ATTACHMENTS = 5;
@@ -41,14 +43,8 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { 
-    availableModels,
-    apiKeys,
-    selectedModel, 
-    setSelectedModel,
-    loadModelsFromConfig,
-    currentAgentId
-  } = useAppStore();
+  const { availableModels, apiKeys, selectedModel, setModel: setSelectedModel } = useModels();
+  const { currentAgentId } = useAgent();
 
   // Check if agent is selected
   const hasAgent = !!currentAgentId;
@@ -56,11 +52,10 @@ export function ChatInput({
   // Fetch latest models when dropdown opens
   const handleOpenModelDropdown = useCallback(async () => {
     if (!showModelDropdown) {
-      // Fetch latest models from config before showing dropdown
-      await loadModelsFromConfig();
+      await getModelService().loadConfig();
     }
     setShowModelDropdown(!showModelDropdown);
-  }, [showModelDropdown, loadModelsFromConfig]);
+  }, [showModelDropdown]);
 
   // Focus on mount
   useEffect(() => {

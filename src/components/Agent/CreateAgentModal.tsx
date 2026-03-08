@@ -7,9 +7,10 @@
 
 import { useState, useEffect } from 'react';
 import { X, Loader2, Bot, Settings } from 'lucide-react';
-import { useAppStore } from '../../store';
-import { api } from '../../services';
-import type { CandidateModel, AICAgent } from '../../services/api';
+import { useAppStore } from '../../application/store';
+import { useAgent } from '../hooks/useAgent';
+import { useModels } from '../hooks/useModels';
+import type { AICAgent } from '../../services/api';
 
 /**
  * SetupConfig - Configuration for VM setup after agent creation
@@ -27,43 +28,44 @@ interface CreateAgentModalProps {
 }
 
 export function CreateAgentModal({ isOpen, onClose, onCreated }: CreateAgentModalProps) {
-  const { createAgent, loadAgents, selectAgent, setSettingsOpen } = useAppStore();
-  
+  const { create: createAgent, loadAgents, select: selectAgent } = useAgent();
+  const { availableModels, loadConfig: loadModels } = useModels();
+  const setSettingsOpen = (v: boolean) => useAppStore.getState().patchState({ settingsOpen: v });
+
   // Form state
   const [name, setName] = useState('');
   const [selectedModelId, setSelectedModelId] = useState<string>('');
-  
+
   // UI state
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
-  
-  // Model state
-  const [availableModels, setAvailableModels] = useState<CandidateModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [error, setError] = useState('');
 
-  // Load available models when modal opens
+  // Load models via service (populates store, no direct API call)
   useEffect(() => {
-    if (isOpen) {
-      loadAvailableModels();
+    if (!isOpen) return;
+    if (availableModels.length > 0) {
+      // Already in store — just auto-select
+      if (!selectedModelId) {
+        const first = availableModels[0];
+        setSelectedModelId(`${first.api_key_id}:${first.id}`);
+      }
+      return;
     }
+    setIsLoadingModels(true);
+    loadModels()
+      .catch((e: unknown) => console.error('Failed to load models:', e))
+      .finally(() => setIsLoadingModels(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const loadAvailableModels = async () => {
-    setIsLoadingModels(true);
-    try {
-      const models = await api.listAvailableModels();
-      setAvailableModels(models);
-      // Auto-select first model if available
-      if (models.length > 0 && !selectedModelId) {
-        const firstModel = models[0];
-        setSelectedModelId(`${firstModel.api_key_id}:${firstModel.id}`);
-      }
-    } catch (error) {
-      console.error('Failed to load models:', error);
-    } finally {
-      setIsLoadingModels(false);
+  // Auto-select first model when models load into store
+  useEffect(() => {
+    if (availableModels.length > 0 && !selectedModelId) {
+      const first = availableModels[0];
+      setSelectedModelId(`${first.api_key_id}:${first.id}`);
     }
-  };
+  }, [availableModels, selectedModelId]);
 
   // Reset form when modal opens
   useEffect(() => {
@@ -96,24 +98,11 @@ export function CreateAgentModal({ isOpen, onClose, onCreated }: CreateAgentModa
     setError('');
 
     try {
-      // Create agent (no VM by default)
-      // User can add VM later via DeviceSidebar
-      const agent = await createAgent({
-        name: name.trim(),
-      });
-      
-      // Set model for the new agent
-      // selectedModelId format: "api_key_id:model_id", backend only needs model_id
-      if (selectedModelId) {
-        try {
-          const colonIndex = selectedModelId.indexOf(':');
-          const modelId = colonIndex !== -1 ? selectedModelId.substring(colonIndex + 1) : selectedModelId;
-          await api.setAgentModel(agent.id, modelId);
-          console.log('[CreateAgentModal] Set model for agent:', agent.id, modelId);
-        } catch (modelError) {
-          console.warn('[CreateAgentModal] Failed to set model, continuing:', modelError);
-        }
-      }
+      // selectedModelId format: "api_key_id:model_id" — extract only model_id for backend
+      const colonIndex = selectedModelId.indexOf(':');
+      const modelId = colonIndex !== -1 ? selectedModelId.substring(colonIndex + 1) : selectedModelId;
+
+      const agent = await createAgent({ name: name.trim() }, modelId || undefined);
       
       // Reload agents and select the new one
       await loadAgents();

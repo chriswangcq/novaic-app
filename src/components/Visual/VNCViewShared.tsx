@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState, memo, useCallback } from 'react';
 import { Monitor, Play, Loader2 } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAppStore } from '../../application/store';
 import {
   subscribeToVNCStream,
   setVNCViewOnly,
@@ -40,7 +40,9 @@ function VNCViewSharedComponent({
   // 从 store 获取 agentId（如果没有传入 prop）
   const storeAgentId = useAppStore(state => state.currentAgentId);
   const vncLocked = useAppStore(state => state.vncLocked);
-  const setVncConnected = useAppStore(state => state.setVncConnected);
+  const setVncConnected = useCallback((v: boolean) => {
+    useAppStore.getState().patchState({ vncConnected: v });
+  }, []);
   
   const agentId = propAgentId || storeAgentId;
   

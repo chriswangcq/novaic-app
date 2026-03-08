@@ -2,7 +2,9 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { VNCView } from './VNCView';
 import { ScrcpyView } from './ScrcpyView';
 import { ExecutionLog } from './ExecutionLog';
-import { useAppStore } from '../../store';
+import { useLayout } from '../hooks/useLayout';
+import { useLogs } from '../hooks/useLogs';
+import { useAgent } from '../hooks/useAgent';
 import { GripHorizontal, Maximize2, Monitor, Smartphone } from 'lucide-react';
 import { isLinuxDevice, isAndroidDevice, LinuxDevice, AndroidDevice } from '../../types';
 
@@ -42,7 +44,9 @@ interface VisualPanelProps {
 }
 
 export function VisualPanel({ isThumbnail = false }: VisualPanelProps) {
-  const { setLayoutMode, logs, currentAgentId, agents } = useAppStore();
+  const { setLayoutMode } = useLayout();
+  const { logs } = useLogs();
+  const { currentAgentId, agents } = useAgent();
   const [vmHeightRatio, setVmHeightRatio] = useState(loadVmHeightRatio);
   const [isResizing, setIsResizing] = useState(false);
   const [isLogsCollapsed, setIsLogsCollapsed] = useState(false);

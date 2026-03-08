@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDown, Plus, Trash2, Monitor, Loader2 } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useAgent } from '../hooks/useAgent';
 import type { AICAgent } from '../../services/api';
 import { vmService, VmStatus } from '../../services/vm';
 import { POLL_CONFIG } from '../../config';
@@ -16,7 +16,7 @@ interface AgentSelectorProps {
 }
 
 export function AgentSelector({ onCreateNew }: AgentSelectorProps) {
-  const { agents, currentAgentId, loadAgents, selectAgent, deleteAgent } = useAppStore();
+  const { agents, currentAgentId, loadAgents, select: selectAgent, delete: deleteAgent } = useAgent();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
@@ -26,7 +26,8 @@ export function AgentSelector({ onCreateNew }: AgentSelectorProps) {
   // Load agents on mount
   useEffect(() => {
     loadAgents();
-  }, [loadAgents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Poll VM status - get all statuses and find running one
   const refreshVmStatus = useCallback(async () => {
