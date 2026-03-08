@@ -79,12 +79,15 @@ export function Header(props: HeaderProps) {
   return (
     <>
       <header
-        className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
+        className={`relative h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
                     flex items-center pr-2 no-select shrink-0
                     ${isMacOS ? 'pl-[76px]' : 'pl-2'}`}
       >
+        {/* Full-width drag region sits behind all content */}
+        <div className="absolute inset-0" data-tauri-drag-region />
+
         {/* Logo + menu toggle */}
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="relative z-10 flex items-center gap-1 shrink-0">
           <img src="/logo.png" alt="NovAIC" className="w-5 h-5 opacity-90" />
           <button
             onClick={onToggleDrawer}
@@ -96,12 +99,12 @@ export function Header(props: HeaderProps) {
           </button>
         </div>
 
-        {/* Drag zone left */}
-        <div className="flex-1" data-tauri-drag-region />
+        {/* Spacer */}
+        <div className="flex-1" />
 
         {/* Center — agent selector + status */}
         {currentAgent ? (
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="relative z-10 flex items-center gap-1 shrink-0">
             {/* Prev */}
             <button
               onClick={handlePrevAgent}
@@ -172,18 +175,18 @@ export function Header(props: HeaderProps) {
             </button>
           </div>
         ) : (
-          <span className="text-[12px] text-nb-text-secondary/50 shrink-0">
+          <span className="relative z-10 text-[12px] text-nb-text-secondary/50 shrink-0">
             No agent selected
           </span>
         )}
 
-        {/* Drag zone right */}
-        <div className="flex-1" data-tauri-drag-region />
+        {/* Spacer */}
+        <div className="flex-1" />
 
         {/* Settings */}
         <button
           onClick={onOpenSettings}
-          className="w-7 h-7 flex items-center justify-center rounded-md
+          className="relative z-10 w-7 h-7 flex items-center justify-center rounded-md
                      text-nb-text-muted hover:text-nb-text hover:bg-white/[0.06] transition-all shrink-0"
           title="Settings"
         >
