@@ -82,7 +82,6 @@ export function Header(props: HeaderProps) {
         className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
                     flex items-center pr-2 no-select shrink-0
                     ${isMacOS ? 'pl-[76px]' : 'pl-2'}`}
-        data-tauri-drag-region
       >
         {/* Logo + menu toggle */}
         <div className="flex items-center gap-1 shrink-0">
@@ -92,18 +91,17 @@ export function Header(props: HeaderProps) {
             className={`w-7 h-7 flex items-center justify-center rounded-md transition-all
                         ${isDrawerOpen ? 'bg-white/[0.08] text-nb-text' : 'text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text'}`}
             title="Toggle sidebar"
-            data-tauri-drag-region="false"
           >
             <Menu size={15} strokeWidth={1.8} />
           </button>
         </div>
 
         {/* Drag zone left */}
-        <div className="flex-1 min-w-0" data-tauri-drag-region />
+        <div className="flex-1" data-tauri-drag-region />
 
         {/* Center — agent selector + status */}
         {currentAgent ? (
-          <div className="flex items-center gap-1 shrink-0" data-tauri-drag-region="false">
+          <div className="flex items-center gap-1 shrink-0">
             {/* Prev */}
             <button
               onClick={handlePrevAgent}
@@ -174,13 +172,13 @@ export function Header(props: HeaderProps) {
             </button>
           </div>
         ) : (
-          <span className="text-[12px] text-nb-text-secondary/50 shrink-0" data-tauri-drag-region="false">
+          <span className="text-[12px] text-nb-text-secondary/50 shrink-0">
             No agent selected
           </span>
         )}
 
         {/* Drag zone right */}
-        <div className="flex-1 min-w-0" data-tauri-drag-region />
+        <div className="flex-1" data-tauri-drag-region />
 
         {/* Settings */}
         <button
@@ -188,7 +186,6 @@ export function Header(props: HeaderProps) {
           className="w-7 h-7 flex items-center justify-center rounded-md
                      text-nb-text-muted hover:text-nb-text hover:bg-white/[0.06] transition-all shrink-0"
           title="Settings"
-          data-tauri-drag-region="false"
         >
           <Settings size={15} strokeWidth={1.6} />
         </button>
