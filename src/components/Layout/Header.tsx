@@ -66,11 +66,15 @@ export function Header(props: HeaderProps) {
   const [connectionState] = useVNCConnection(currentAgentId, setVncConnected);
   const { status } = connectionState;
 
-  const handleDragStart = (e: React.MouseEvent<HTMLElement>) => {
-    if (e.button !== 0) return;
+  const handleHeaderMouseDown = (e: React.MouseEvent<HTMLElement>) => {
+    if (e.buttons !== 1) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, input, select, a, [role="button"]')) return;
-    getCurrentWindow().startDragging().catch(() => {});
+    if (e.detail === 2) {
+      getCurrentWindow().toggleMaximize().catch(() => {});
+    } else {
+      getCurrentWindow().startDragging().catch(() => {});
+    }
   };
 
   const statusKey = (() => {
@@ -90,7 +94,7 @@ export function Header(props: HeaderProps) {
         className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
                     flex items-center pr-2 no-select shrink-0
                     ${isMacOS ? 'pl-[76px]' : 'pl-2'}`}
-        onMouseDown={handleDragStart}
+        onMouseDown={handleHeaderMouseDown}
       >
         {/* Logo + menu toggle */}
         <div className="flex items-center gap-1 shrink-0">
