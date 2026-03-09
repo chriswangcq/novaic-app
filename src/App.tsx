@@ -75,13 +75,57 @@ function App() {
   const [isSignedIn, setIsSignedIn] = useState(() => getCurrentUser() !== null);
   const [currentUserInfo, setCurrentUserInfo] = useState<UserInfo | null>(() => getCurrentUser());
 
-  // 应用启动时，若已登录则预热当前用户的 IndexedDB
+  // 应用启动时优先尝试恢复登录态：
+  // 即使 access token 已过期，也先让 auth.ts 用 refresh_token 换新，
+  // 避免 Rust CloudBridge 因拿不到新 token 而一直停在未登录状态。
   useEffect(() => {
-    const user = getCurrentUser();
-    if (user) {
-      getDb(user.user_id).catch(() => {});
-    }
+    let cancelled = false;
+
+    const restoreSession = async () => {
+      try {
+        const token = await getAccessToken();
+        if (cancelled) return;
+
+        if (!token) {
+          setIsSignedIn(false);
+          setCurrentUserInfo(null);
+          await invoke('update_cloud_token', { token: '' }).catch(() => {});
+          return;
+        }
+
+        const user = getCurrentUser();
+        if (!user) {
+          setIsSignedIn(false);
+          setCurrentUserInfo(null);
+          await invoke('update_cloud_token', { token: '' }).catch(() => {});
+          return;
+        }
+
+        setCurrentUserInfo(user);
+        setIsSignedIn(true);
+        await invoke('update_cloud_token', { token }).catch((e) => {
+          console.warn('[CloudBridge] Failed to restore token to Rust:', e);
+        });
+      } catch (e) {
+        console.warn('[Auth] Failed to restore session on startup:', e);
+        if (cancelled) return;
+        setIsSignedIn(false);
+        setCurrentUserInfo(null);
+      }
+    };
+
+    restoreSession();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // 用户恢复登录态后预热当前用户的 IndexedDB
+  useEffect(() => {
+    if (currentUserInfo?.user_id) {
+      getDb(currentUserInfo.user_id).catch(() => {});
+    }
+  }, [currentUserInfo]);
 
   const isInitialized = useAppStore(s => s.isInitialized);
   const settingsOpen = useAppStore(s => s.settingsOpen);

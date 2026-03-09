@@ -104,15 +104,13 @@ class VMUSEServer:
         self.app.router.add_post('/api/browser/switch_tab', self.browser_switch_tab)
         self.app.router.add_post('/api/browser/close_tab', self.browser_close_tab)
         
-        # Shell tools
+        # Shell tools (run_command only)
         self.app.router.add_post('/api/shell/run_command', self.shell_run_command)
-        self.app.router.add_post('/api/shell/command', self.shell_run_command)  # Alias for executor.py
-        self.app.router.add_post('/api/shell/run_python', self.shell_run_python)
+        self.app.router.add_post('/api/shell/command', self.shell_run_command)  # Alias for executor
         
-        # File tools
-        self.app.router.add_post('/api/file/read', self.file_read)
-        self.app.router.add_post('/api/file/write', self.file_write)
-        self.app.router.add_post('/api/file/info', self.file_info)
+        # File tools (pull=VM→host, push=host→VM)
+        self.app.router.add_post('/api/file/pull', self.file_pull)
+        self.app.router.add_post('/api/file/push', self.file_push)
         
         # Window tools
         self.app.router.add_post('/api/window/list', self.window_list)
@@ -372,35 +370,15 @@ class VMUSEServer:
             logger.error(f"Run command error: {e}")
             return web.json_response({"success": False, "error": str(e)}, status=500)
     
-    async def shell_run_python(self, request):
-        """执行 Python 代码"""
-        try:
-            data = await request.json()
-            code = data.get('code')
-            if not code:
-                return web.json_response({"success": False, "error": "Missing code"}, status=400)
-            
-            result = await ShellTools.run_python(
-                code,
-                data.get('timeout'),
-                data.get('visible', False),
-                runtime_context=_get_runtime_context(data),
-            )
-            return web.json_response(result)
-        except Exception as e:
-            logger.error(f"Run python error: {e}")
-            return web.json_response({"success": False, "error": str(e)}, status=500)
-    
     # ==================== File Tools ====================
     
-    async def file_read(self, request):
-        """读取文件。支持 binary 参数：True=二进制(base64)，False=文本，None=按扩展名自动检测"""
+    async def file_pull(self, request):
+        """Pull file from VM (path → content). binary=True returns base64."""
         try:
-            data = await request.json()
+            data = await request.json() if request.body_exists else {}
             path = data.get('path')
             if not path:
                 return web.json_response({"success": False, "error": "Missing path"}, status=400)
-            
             binary = data.get('binary')  # True/False/None
             result = await FileTools.read_file(
                 path,
@@ -409,19 +387,18 @@ class VMUSEServer:
             )
             return web.json_response(result)
         except Exception as e:
-            logger.error(f"Read file error: {e}")
+            logger.error(f"File pull error: {e}")
             return web.json_response({"success": False, "error": str(e)}, status=500)
     
-    async def file_write(self, request):
-        """写入文件"""
+    async def file_push(self, request):
+        """Push file to VM (content → path). binary=True expects base64 content."""
         try:
-            data = await request.json()
+            data = await request.json() if request.body_exists else {}
             path = data.get('path')
             content = data.get('content')
             binary = data.get('binary', False)
             if not path or content is None:
                 return web.json_response({"success": False, "error": "Missing path or content"}, status=400)
-            
             result = await FileTools.write_file(
                 path,
                 content,
@@ -430,24 +407,7 @@ class VMUSEServer:
             )
             return web.json_response(result)
         except Exception as e:
-            logger.error(f"Write file error: {e}")
-            return web.json_response({"success": False, "error": str(e)}, status=500)
-    
-    async def file_info(self, request):
-        """获取文件信息"""
-        try:
-            data = await request.json()
-            path = data.get('path')
-            if not path:
-                return web.json_response({"success": False, "error": "Missing path"}, status=400)
-            
-            result = await FileTools.file_info(
-                path,
-                runtime_context=_get_runtime_context(data),
-            )
-            return web.json_response(result)
-        except Exception as e:
-            logger.error(f"File info error: {e}")
+            logger.error(f"File push error: {e}")
             return web.json_response({"success": False, "error": str(e)}, status=500)
     
     # ==================== Window Tools ====================
@@ -643,8 +603,8 @@ class VMUSEServer:
         logger.info(f"  Health: http://{settings.host}:{settings.port}/health")
         logger.info(f"  Desktop: /api/desktop/* (screenshot, mouse, keyboard)")
         logger.info(f"  Browser: /api/browser/* (navigate, click, type, screenshot, scroll, eval, tabs)")
-        logger.info(f"  Shell: /api/shell/* (run_command, run_python)")
-        logger.info(f"  Files: /api/file/* (read, write, list, info)")
+        logger.info(f"  Shell: /api/shell/* (run_command)")
+        logger.info(f"  Files: /api/file/* (pull, push)")
         logger.info(f"  Windows: /api/window/* (list, focus, maximize, minimize, close, resize, launch_app)")
         logger.info(f"  Context: /api/context/* (system_snapshot, directory_snapshot, clipboard, recent_files)")
         

@@ -435,8 +435,11 @@ async fn update_cloud_token(
 ) -> Result<(), String> {
     println!("[CloudBridge] Auth token updated (len={})", token.len());
     *cloud_token.write().await = token;
-    // 通知 CloudBridge：token 已就绪，可以开始连接 Gateway
-    login_notify.notify_one();
+    // 只有拿到非空 token 时才唤醒 CloudBridge；
+    // 空 token 代表已登出或会话恢复失败，此时应保持等待状态而不是立即触发 401 重连。
+    if !cloud_token.read().await.is_empty() {
+        login_notify.notify_one();
+    }
     Ok(())
 }
 

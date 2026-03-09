@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { ChevronDown, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Wrench, Eye, Edit3 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Wrench, Eye, Edit3, Smartphone } from 'lucide-react';
 import type { ApiKeyInfo, CandidateModel, AICAgent } from '../../gateway/client';
 import { useAgent } from '../hooks/useAgent';
 import { useSettings } from '../hooks/useSettings';
 import { vmService } from '../../services/vm';
+import { api, type AgentDeviceBinding, type DeviceSubject, type DeviceSubjectType, type MountedToolsByCategory } from '../../services/api';
 import { Markdown } from '../Chat/Markdown';
+import type { Device } from '../../types';
 
 // ==================== Tab Types ====================
 
@@ -1350,6 +1352,126 @@ function PromptSection({
   );
 }
 
+// Category labels for mounted tools (Linux + Android)
+const MOUNTED_CATEGORY_LABELS: Record<string, string> = {
+  desktop: 'Desktop Control',
+  file: 'File Transfer',
+  shell: 'Command Execution',
+  clipboard: 'Clipboard',
+  screen: 'Screen Control',
+  app: 'App Management',
+  browser: 'Browser',
+  ui: 'UI Automation',
+};
+
+// ==================== Mounted Tools Section (reuses ToolCategorySection-style UI) ====================
+
+function MountedToolsSection({
+  supportedTools,
+  mountedTools,
+  onToggle,
+  toolDescriptions = {},
+}: {
+  supportedTools: MountedToolsByCategory;
+  mountedTools: MountedToolsByCategory;
+  onToggle: (category: string, tool: string) => void;
+  toolDescriptions?: Record<string, string>;
+}) {
+  const categories = Object.keys(supportedTools || {}).filter(c => (supportedTools[c]?.length ?? 0) > 0);
+
+  return (
+    <div className="space-y-2">
+      {categories.map(catName => (
+        <MountedCategoryBlock
+          key={catName}
+          categoryName={MOUNTED_CATEGORY_LABELS[catName] ?? catName}
+          tools={supportedTools[catName] || []}
+          mounted={mountedTools[catName] || []}
+          onToggle={(tool, enabled) => {
+            const cur = (mountedTools[catName] || []).includes(tool);
+            if (enabled !== cur) onToggle(catName, tool);
+          }}
+          toolDescriptions={toolDescriptions}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MountedCategoryBlock({
+  categoryName,
+  tools,
+  mounted,
+  onToggle,
+  toolDescriptions,
+}: {
+  categoryName: string;
+  tools: string[];
+  mounted: string[];
+  onToggle: (tool: string, enabled: boolean) => void;
+  toolDescriptions: Record<string, string>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const enabledCount = tools.filter(t => mounted.includes(t)).length;
+  const allEnabled = enabledCount === tools.length;
+  const noneEnabled = enabledCount === 0;
+
+  return (
+    <div className="border border-nb-border rounded overflow-hidden">
+      <button
+        className="w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-nb-surface-2 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-2">
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <span className="font-medium text-nb-text">{categoryName}</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+            allEnabled ? 'bg-green-500/20 text-green-400'
+              : noneEnabled ? 'bg-red-500/20 text-red-400'
+              : 'bg-yellow-500/20 text-yellow-400'
+          }`}>
+            {enabledCount}/{tools.length}
+          </span>
+        </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            const shouldEnable = !allEnabled;
+            tools.forEach(t => onToggle(t, shouldEnable));
+          }}
+          className="text-[10px] text-nb-text-muted hover:text-nb-text px-1.5 py-0.5 rounded hover:bg-nb-surface-2"
+        >
+          {allEnabled ? 'Disable All' : 'Enable All'}
+        </button>
+      </button>
+      {expanded && (
+        <div className="border-t border-nb-border divide-y divide-nb-border/50">
+          {tools.map(tool => {
+            const isEnabled = mounted.includes(tool);
+            return (
+              <div
+                key={tool}
+                className="flex items-center gap-3 px-3 py-2 hover:bg-nb-surface-2/50 transition-colors"
+              >
+                <Toggle
+                  checked={isEnabled}
+                  onChange={(enabled) => onToggle(tool, enabled)}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-nb-text">{tool}</div>
+                  {toolDescriptions[tool] && (
+                    <div className="text-[10px] text-nb-text-muted truncate">{toolDescriptions[tool]}</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ==================== Tool Category Section ====================
 
 function ToolCategorySection({
@@ -1441,11 +1563,24 @@ function AgentToolsTab() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>(currentAgentId || '');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveInfo, setSaveInfo] = useState<string | null>(null);
 
   // Tool config
   const [categories, setCategories] = useState<Record<string, { name: string; count: number; tools: { name: string; description: string }[] }>>({});
   const [disabledTools, setDisabledTools] = useState<string[]>([]);
   const [customInstructions, setCustomInstructions] = useState('');
+
+  // Device binding
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [currentBinding, setCurrentBinding] = useState<AgentDeviceBinding | null>(null);
+  const [bindingDeviceId, setBindingDeviceId] = useState('');
+  const [deviceSubjects, setDeviceSubjects] = useState<DeviceSubject[]>([]);
+  const [loadingSubjects, setLoadingSubjects] = useState(false);
+  const [selectedSubjectType, setSelectedSubjectType] = useState<DeviceSubjectType | ''>('');
+  const [selectedSubjectId, setSelectedSubjectId] = useState('');
+  const [mountedTools, setMountedTools] = useState<MountedToolsByCategory>({});
 
   // Bootstrap files state
   const [soulMd, setSoulMd] = useState('');
@@ -1465,21 +1600,141 @@ function AgentToolsTab() {
   // Prompts
   const [prompts, setPrompts] = useState<{ system_prompt: string; wake_message: string; system_prompt_length: number; wake_message_length: number } | null>(null);
 
+  const selectedDevice = useMemo(
+    () => devices.find(device => device.id === bindingDeviceId) ?? null,
+    [devices, bindingDeviceId]
+  );
+
+  const selectedSubject = useMemo(
+    () => deviceSubjects.find(subject => subject.subject_type === selectedSubjectType && subject.subject_id === selectedSubjectId) ?? null,
+    [deviceSubjects, selectedSubjectId, selectedSubjectType]
+  );
+
+  const loadSubjectsForDevice = useCallback(
+    async (
+      deviceId: string,
+      preferred?: {
+        subjectType?: DeviceSubjectType;
+        subjectId?: string;
+        mountedTools?: MountedToolsByCategory;
+      }
+    ) => {
+      if (!deviceId) {
+        setDeviceSubjects([]);
+        setSelectedSubjectType('');
+        setSelectedSubjectId('');
+        setMountedTools({});
+        return;
+      }
+
+      setLoadingSubjects(true);
+      try {
+        const res = await api.devices.getSubjects(deviceId);
+        const subjects = Array.isArray(res.subjects) ? res.subjects : [];
+        setDeviceSubjects(subjects);
+
+        const matchedSubject = preferred?.subjectType
+          ? subjects.find(
+              subject =>
+                subject.subject_type === preferred.subjectType &&
+                subject.subject_id === (preferred.subjectId ?? '')
+            ) ?? null
+          : null;
+        const fallbackSubject = matchedSubject ?? subjects[0] ?? null;
+
+        if (!fallbackSubject) {
+          setSelectedSubjectType('');
+          setSelectedSubjectId('');
+          setMountedTools({});
+          return;
+        }
+
+        setSelectedSubjectType(fallbackSubject.subject_type);
+        setSelectedSubjectId(fallbackSubject.subject_id);
+
+        const supported = (fallbackSubject.supported_tools ?? {}) as MountedToolsByCategory;
+        const preferredMounted = preferred?.mountedTools ?? {};
+        const merged: MountedToolsByCategory = {};
+        for (const cat of Object.keys(supported)) {
+          const allowed = supported[cat] || [];
+          const chosen = (preferredMounted[cat] || []).filter((t: string) => allowed.includes(t));
+          merged[cat] = chosen.length > 0 ? chosen : [...allowed];
+        }
+        setMountedTools(merged);
+      } catch (error) {
+        console.error('Failed to load device subjects:', error);
+        setDeviceSubjects([]);
+        setSelectedSubjectType('');
+        setSelectedSubjectId('');
+        setMountedTools({});
+      } finally {
+        setLoadingSubjects(false);
+      }
+    },
+    []
+  );
+
   const loadData = useCallback(async () => {
     if (!selectedAgentId) return;
     setLoading(true);
+    setLoadError(null);
+    setSaveError(null);
+    setSaveInfo(null);
     try {
-      const [catRes, configRes, skillsRes, agentSkillsRes] = await Promise.all([
+      const [catResult, configResult, skillsResult, agentSkillsResult, devicesResult, bindingResult] = await Promise.allSettled([
         settings.getToolCategories(),
         settings.getAgentToolsConfig(selectedAgentId),
         settings.getSkills(true),
         settings.getAgentSkills(selectedAgentId),
+        api.devices.listForUser(),
+        api.getAgentBinding(selectedAgentId),
       ]);
-      setCategories(catRes.categories || {});
-      setDisabledTools(configRes.disabled_tools || []);
-      setCustomInstructions(configRes.custom_instructions || '');
-      setAllSkills(skillsRes.skills || []);
-      setAssignedSkillIds((agentSkillsRes.skills || []).map((s: any) => s.id));
+
+      const errors: string[] = [];
+
+      const catRes = catResult.status === 'fulfilled' ? catResult.value : null;
+      if (!catRes) errors.push('tools categories');
+      setCategories(catRes?.categories || {});
+
+      const configRes = configResult.status === 'fulfilled' ? configResult.value : null;
+      if (!configRes) errors.push('tools config');
+      setDisabledTools(configRes?.disabled_tools || []);
+      setCustomInstructions(configRes?.custom_instructions || '');
+
+      const skillsRes = skillsResult.status === 'fulfilled' ? skillsResult.value : null;
+      if (!skillsRes) errors.push('skills');
+      setAllSkills(skillsRes?.skills || []);
+
+      const agentSkillsRes = agentSkillsResult.status === 'fulfilled' ? agentSkillsResult.value : null;
+      if (!agentSkillsRes) errors.push('agent skills');
+      setAssignedSkillIds(((agentSkillsRes?.skills) || []).map((s: any) => s.id));
+
+      const devicesRes = devicesResult.status === 'fulfilled' ? devicesResult.value : null;
+      if (!devicesRes) errors.push('devices');
+      const nextDevices = devicesRes?.devices || [];
+      setDevices(nextDevices);
+
+      const bindingRes = bindingResult.status === 'fulfilled' ? bindingResult.value : null;
+      if (bindingResult.status === 'rejected') errors.push('device binding');
+      setCurrentBinding(bindingRes);
+      if (bindingRes?.device_id) {
+        setBindingDeviceId(bindingRes.device_id);
+        await loadSubjectsForDevice(bindingRes.device_id, {
+          subjectType: bindingRes.subject_type,
+          subjectId: bindingRes.subject_id,
+          mountedTools: bindingRes.mounted_tools,
+        });
+      } else {
+        setBindingDeviceId('');
+        setDeviceSubjects([]);
+        setSelectedSubjectType('');
+        setSelectedSubjectId('');
+        setMountedTools({});
+      }
+
+      if (errors.length > 0) {
+        setLoadError(`部分配置加载失败: ${errors.join(', ')}`);
+      }
 
       // Load prompts preview
       try {
@@ -1487,6 +1742,7 @@ function AgentToolsTab() {
         setPrompts(p);
       } catch {
         setPrompts(null);
+        setLoadError(prev => prev ?? 'Prompts preview load failed');
       }
 
       // Load bootstrap files
@@ -1501,13 +1757,17 @@ function AgentToolsTab() {
         setActiveHoursTimezone(bootstrapFiles.active_hours_timezone || 'Asia/Shanghai');
       } catch (e) {
         console.error('Failed to load bootstrap files:', e);
+        setLoadError(prev => prev ?? 'Bootstrap files load failed');
       }
     } catch (e) {
       console.error('Failed to load agent tools data:', e);
+      setLoadError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [selectedAgentId]);
+  // settings 来自 useSettings()，每次渲染都是新对象，放进去会导致 loadData 无限重跑
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadSubjectsForDevice, selectedAgentId]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -1520,8 +1780,10 @@ function AgentToolsTab() {
   const handleSave = async () => {
     if (!selectedAgentId) return;
     setSaving(true);
+    setSaveError(null);
+    setSaveInfo(null);
     try {
-      await Promise.all([
+      const saveTasks: Promise<unknown>[] = [
         settings.saveAgentToolsConfig(selectedAgentId, {
           disabled_tools: disabledTools,
           custom_instructions: customInstructions,
@@ -1535,14 +1797,37 @@ function AgentToolsTab() {
           active_hours_end: activeHoursEnd,
           active_hours_timezone: activeHoursTimezone,
         }),
-      ]);
+      ];
+
+      if (bindingDeviceId && selectedSubjectType) {
+        saveTasks.push(
+          api.setAgentBinding(selectedAgentId, {
+            device_id: bindingDeviceId,
+            subject_type: selectedSubjectType,
+            subject_id: selectedSubjectId,
+            mounted_tools: mountedTools,
+          }).then(binding => {
+            setCurrentBinding(binding);
+          })
+        );
+      } else if (currentBinding) {
+        saveTasks.push(
+          api.clearAgentBinding(selectedAgentId).then(() => {
+            setCurrentBinding(null);
+          })
+        );
+      }
+
+      await Promise.all(saveTasks);
       // Reload prompts preview after save
       try {
         const p = await settings.getPromptsPreview(selectedAgentId);
         setPrompts(p);
       } catch { /* ignore */ }
+      setSaveInfo('Configuration saved');
     } catch (e) {
       console.error('Failed to save:', e);
+      setSaveError(String(e));
     } finally {
       setSaving(false);
     }
@@ -1564,9 +1849,63 @@ function AgentToolsTab() {
     );
   };
 
+  const handleDeviceChange = async (deviceId: string) => {
+    setBindingDeviceId(deviceId);
+    setCurrentBinding(null);
+    if (!deviceId) {
+      setDeviceSubjects([]);
+      setSelectedSubjectType('');
+      setSelectedSubjectId('');
+      setMountedTools({});
+      return;
+    }
+    await loadSubjectsForDevice(deviceId);
+  };
+
+  const handleSubjectChange = (value: string) => {
+    const [subjectType, ...rest] = value.split(':');
+    const subjectId = rest.join(':');
+    const nextSubject = deviceSubjects.find(
+      subject => subject.subject_type === subjectType && subject.subject_id === subjectId
+    );
+    if (!nextSubject) return;
+    setSelectedSubjectType(nextSubject.subject_type);
+    setSelectedSubjectId(nextSubject.subject_id);
+    const supported = (nextSubject.supported_tools ?? {}) as MountedToolsByCategory;
+    setMountedTools(prev => {
+      const merged: MountedToolsByCategory = {};
+      for (const cat of Object.keys(supported)) {
+        const allowed = supported[cat] || [];
+        const chosen = (prev[cat] || []).filter(t => allowed.includes(t));
+        merged[cat] = chosen.length > 0 ? chosen : [...allowed];
+      }
+      return merged;
+    });
+  };
+
+  const handleToggleMountedTool = (category: string, tool: string) => {
+    const supported = (selectedSubject?.supported_tools ?? {}) as MountedToolsByCategory;
+    if (!(supported[category] || []).includes(tool)) return;
+    setMountedTools(prev => {
+      const list = prev[category] || [];
+      const next = list.includes(tool) ? list.filter(t => t !== tool) : [...list, tool];
+      return { ...prev, [category]: next };
+    });
+  };
+
   // Calculate stats
   const totalTools = Object.values(categories).reduce((sum, cat) => sum + cat.tools.length, 0);
   const enabledToolsCount = totalTools - disabledTools.length;
+
+  const mountedToolDescriptions = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const cat of Object.values(categories)) {
+      for (const t of cat.tools) {
+        if (t.description) out[t.name] = t.description;
+      }
+    }
+    return out;
+  }, [categories]);
 
   return (
     <div className="flex flex-col h-full">
@@ -1596,6 +1935,12 @@ function AgentToolsTab() {
       ) : (
         <>
           <div className="flex-1 overflow-y-auto p-4 space-y-5">
+            {loadError && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                {loadError}
+              </div>
+            )}
+
             {/* Skills Section */}
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -1641,6 +1986,102 @@ function AgentToolsTab() {
                   })}
                 </div>
               )}
+            </div>
+
+            {/* Device Binding Section */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-medium text-nb-text">Device Binding</h4>
+                <span className="text-[10px] text-nb-text-muted">
+                  {currentBinding?.device_name
+                    ? `${currentBinding.device_name} / ${currentBinding.subject_label || currentBinding.subject_id || currentBinding.subject_type}`
+                    : 'Unbound'}
+                </span>
+              </div>
+              <div className="border border-nb-border rounded-lg bg-nb-surface-2 p-3 space-y-3">
+                <p className="text-[10px] text-nb-text-muted">
+                  在这里指定当前 agent 可以使用哪个 device，以及进入该 device 时用哪个 subject 和哪些 mounted tools。
+                </p>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] text-nb-text-muted mb-1">Device</label>
+                    <select
+                      value={bindingDeviceId}
+                      onChange={e => { void handleDeviceChange(e.target.value); }}
+                      className="w-full bg-nb-surface border border-nb-border rounded px-2 py-2 text-xs text-nb-text"
+                    >
+                      <option value="">No device</option>
+                      {devices.map(device => (
+                        <option key={device.id} value={device.id}>
+                          {device.type === 'linux' ? 'Linux VM' : 'Android'} · {device.name || device.id.slice(0, 8)} · {device.status}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-nb-text-muted mb-1">Subject</label>
+                    <select
+                      value={selectedSubjectType ? `${selectedSubjectType}:${selectedSubjectId}` : ''}
+                      onChange={e => handleSubjectChange(e.target.value)}
+                      disabled={!bindingDeviceId || loadingSubjects || deviceSubjects.length === 0}
+                      className="w-full bg-nb-surface border border-nb-border rounded px-2 py-2 text-xs text-nb-text disabled:opacity-50"
+                    >
+                      <option value="">
+                        {!bindingDeviceId
+                          ? 'Select a device first'
+                          : loadingSubjects
+                            ? 'Loading subjects...'
+                            : deviceSubjects.length === 0
+                              ? 'No subjects available'
+                              : 'Select subject'}
+                      </option>
+                      {deviceSubjects.map(subject => (
+                        <option
+                          key={`${subject.subject_type}:${subject.subject_id}`}
+                          value={`${subject.subject_type}:${subject.subject_id}`}
+                        >
+                          {subject.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {selectedDevice && (
+                  <div className="rounded border border-nb-border/70 bg-black/10 px-3 py-2 text-[10px] text-nb-text-muted space-y-1">
+                    <div className="flex items-center gap-1.5 text-nb-text">
+                      {selectedDevice.type === 'linux' ? <Monitor size={12} /> : <Smartphone size={12} />}
+                      <span className="font-medium">{selectedDevice.name || selectedDevice.id}</span>
+                    </div>
+                    <div>Type: {selectedDevice.type}</div>
+                    <div>Status: {selectedDevice.status}</div>
+                    {selectedSubject && (
+                      <>
+                        <div>Subject: {selectedSubject.label}</div>
+                        <div>Desktop Resource: {selectedSubject.desktop_resource_id}</div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[10px] text-nb-text-muted mb-2">Mounted Tools</label>
+                  {selectedSubject && Object.values(selectedSubject.supported_tools ?? {}).some(arr => (arr?.length ?? 0) > 0) ? (
+                    <MountedToolsSection
+                      supportedTools={(selectedSubject.supported_tools ?? {}) as MountedToolsByCategory}
+                      mountedTools={mountedTools}
+                      onToggle={handleToggleMountedTool}
+                      toolDescriptions={mountedToolDescriptions}
+                    />
+                  ) : selectedSubject && !Object.values(selectedSubject.supported_tools ?? {}).some(arr => (arr?.length ?? 0) > 0) ? (
+                    <span className="text-[10px] text-nb-text-muted">This subject has no supported tools.</span>
+                  ) : (
+                    <span className="text-[10px] text-nb-text-muted">Select a device subject to configure mounted tools.</span>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Tools Section - By Category */}
@@ -1839,7 +2280,19 @@ function AgentToolsTab() {
           </div>
 
           {/* Save button */}
-          <div className="px-4 py-3 border-t border-nb-border flex justify-end flex-shrink-0">
+          <div className="px-4 py-3 border-t border-nb-border flex items-center justify-between gap-3 flex-shrink-0">
+            <div className="min-w-0 flex-1">
+              {saveError && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-200">
+                  {saveError}
+                </div>
+              )}
+              {saveInfo && !saveError && (
+                <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs text-green-200">
+                  {saveInfo}
+                </div>
+              )}
+            </div>
             <button
               onClick={handleSave}
               disabled={saving}

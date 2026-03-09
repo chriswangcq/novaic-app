@@ -203,8 +203,6 @@ export function CollapsibleExecutionLog({ className = '', isExpanded = false }: 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('main');
   const [userPickedTab, setUserPickedTab] = useState(false);
-  const [autoCollapsed, setAutoCollapsed] = useState(false);
-  const autoCollapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runStartTimeRef = useRef<number | null>(null);
 
   // 按 subagent 分组，计算每组的最后活跃时间
@@ -241,40 +239,12 @@ export function CollapsibleExecutionLog({ className = '', isExpanded = false }: 
   useEffect(() => {
     if (runningCount > 0 && runStartTimeRef.current === null) {
       runStartTimeRef.current = Date.now();
-      setAutoCollapsed(false);
-      if (autoCollapseTimerRef.current) {
-        clearTimeout(autoCollapseTimerRef.current);
-        autoCollapseTimerRef.current = null;
-      }
     }
   }, [runningCount]);
-
-  // Auto-collapse when all done with no failures
-  useEffect(() => {
-    if (runningCount === 0 && failedCount === 0 && completedCount > 0 && logs.length > 0) {
-      if (!autoCollapseTimerRef.current) {
-        autoCollapseTimerRef.current = setTimeout(() => {
-          setAutoCollapsed(true);
-          autoCollapseTimerRef.current = null;
-        }, 3000);
-      }
-    } else if (runningCount > 0 || failedCount > 0) {
-      if (autoCollapseTimerRef.current) {
-        clearTimeout(autoCollapseTimerRef.current);
-        autoCollapseTimerRef.current = null;
-      }
-      setAutoCollapsed(false);
-    }
-  }, [runningCount, failedCount, completedCount, logs.length]);
 
   // Reset run start time when agent changes
   useEffect(() => {
     runStartTimeRef.current = null;
-    setAutoCollapsed(false);
-    if (autoCollapseTimerRef.current) {
-      clearTimeout(autoCollapseTimerRef.current);
-      autoCollapseTimerRef.current = null;
-    }
   }, [currentAgentId]);
 
   // Build summary line text
@@ -316,39 +286,6 @@ export function CollapsibleExecutionLog({ className = '', isExpanded = false }: 
 
   if (!currentAgentId || logs.length === 0) return null;
   if (isExpanded) return null;
-
-  // When auto-collapsed, show only a minimal summary bar
-  if (autoCollapsed) {
-    return (
-      <>
-        <div
-          className={`
-            absolute top-4 left-1/2 -translate-x-1/2 z-50
-            bg-nb-surface/95 backdrop-blur-md
-            rounded-full shadow-lg border border-nb-border
-            px-4 py-1.5 flex items-center gap-3 cursor-pointer
-            hover:bg-nb-surface transition-colors
-            ${className}
-          `}
-          onClick={() => setAutoCollapsed(false)}
-        >
-          {failedCount > 0 ? (
-            <span className="text-[11px] text-nb-error font-medium">{summaryLine}</span>
-          ) : (
-            <span className="text-[11px] text-nb-success font-medium">{summaryLine}</span>
-          )}
-          <button
-            onClick={(e) => { e.stopPropagation(); setIsModalOpen(true); }}
-            className="text-nb-text-secondary hover:text-nb-text transition-colors"
-            title="全屏查看"
-          >
-            <Maximize2 size={11} />
-          </button>
-        </div>
-        <FullLogModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
-      </>
-    );
-  }
 
   return (
     <>

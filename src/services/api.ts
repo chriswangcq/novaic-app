@@ -123,28 +123,30 @@ export interface AgentListResponse {
 }
 
 export type DeviceSubjectType = 'main' | 'vm_user' | 'default';
-export type MountedTool = 'desktop' | 'file' | 'shell';
+
+/** mounted_tools / supported_tools: { category: [tool, ...] } */
+export type MountedToolsByCategory = Record<string, string[]>;
 
 export interface AgentDeviceBinding {
   agent_id: string;
   device_id: string;
   subject_type: DeviceSubjectType;
   subject_id: string;
-  mounted_tools: MountedTool[];
+  mounted_tools: MountedToolsByCategory;
   created_at: string;
   updated_at: string;
   device_type?: string | null;
   device_name?: string | null;
   subject_label?: string | null;
   desktop_resource_id?: string | null;
-  supported_tools?: MountedTool[];
+  supported_tools?: MountedToolsByCategory;
 }
 
 export interface UpsertAgentDeviceBindingRequest {
   device_id: string;
   subject_type: DeviceSubjectType;
   subject_id?: string;
-  mounted_tools?: MountedTool[];
+  mounted_tools?: MountedToolsByCategory;
 }
 
 export interface DeviceSubject {
@@ -154,7 +156,7 @@ export interface DeviceSubject {
   subject_id: string;
   label: string;
   desktop_resource_id: string;
-  supported_tools: MountedTool[];
+  supported_tools: MountedToolsByCategory;
   username?: string;
   display_num?: number;
   linux_user?: string;
@@ -170,7 +172,7 @@ export interface DeviceToolCapabilitiesResponse {
   device_id: string;
   subject_type?: DeviceSubjectType | null;
   subject_id?: string | null;
-  capabilities: MountedTool[];
+  capabilities: MountedToolsByCategory;
 }
 
 // Android 管理模式

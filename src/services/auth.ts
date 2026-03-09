@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 /**
  * Frontend auth helper — custom JWT edition.
  *
@@ -14,8 +16,6 @@
  *   isAuthenticated()         – true if a valid session exists
  *   getCurrentUser()          – basic user info from stored token payload
  */
-
-const GATEWAY_URL = import.meta.env.VITE_GATEWAY_URL || 'https://api.gradievo.com';
 
 const STORAGE_ACCESS  = 'novaic_access_token';
 const STORAGE_REFRESH = 'novaic_refresh_token';
@@ -34,6 +34,39 @@ interface TokenResponse {
   user_id: string;
   email: string;
   display_name: string;
+}
+
+function normalizeGatewayError(error: unknown, fallback: string): Error {
+  const raw = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : String(error);
+
+  const jsonStart = raw.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      if (parsed?.detail) return new Error(String(parsed.detail));
+      if (parsed?.error) return new Error(String(parsed.error));
+    } catch {
+      // Ignore malformed payloads and fall through to generic handling.
+    }
+  }
+
+  if (raw.includes('Request failed:')) {
+    return new Error('无法连接到 Gateway');
+  }
+
+  return new Error(raw || fallback);
+}
+
+async function gatewayPublicPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>('gateway_post', { path, body });
+  } catch (error) {
+    throw normalizeGatewayError(error, 'Request failed');
+  }
 }
 
 // ── Token storage ─────────────────────────────────────────────────────────────
@@ -73,19 +106,13 @@ async function _doRefresh(): Promise<string | null> {
   const refreshToken = localStorage.getItem(STORAGE_REFRESH);
   if (!refreshToken) return null;
   try {
-    const resp = await fetch(`${GATEWAY_URL}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+    const data = await gatewayPublicPost<TokenResponse>('/auth/refresh', {
+      refresh_token: refreshToken,
     });
-    if (!resp.ok) {
-      clearSession();
-      return null;
-    }
-    const data: TokenResponse = await resp.json();
     saveSession(data);
     return data.access_token;
   } catch {
+    clearSession();
     return null;
   }
 }
@@ -138,16 +165,7 @@ export function getCurrentUser(): UserInfo | null {
 // ── Public: Login ─────────────────────────────────────────────────────────────
 
 export async function login(email: string, password: string): Promise<UserInfo> {
-  const resp = await fetch(`${GATEWAY_URL}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err.detail || 'Login failed');
-  }
-  const data: TokenResponse = await resp.json();
+  const data = await gatewayPublicPost<TokenResponse>('/auth/login', { email, password });
   saveSession(data);
   return { user_id: data.user_id, email: data.email, display_name: data.display_name };
 }
@@ -159,16 +177,11 @@ export async function register(
   password: string,
   displayName?: string,
 ): Promise<UserInfo> {
-  const resp = await fetch(`${GATEWAY_URL}/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, display_name: displayName ?? '' }),
+  const data = await gatewayPublicPost<TokenResponse>('/auth/register', {
+    email,
+    password,
+    display_name: displayName ?? '',
   });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err.detail || 'Registration failed');
-  }
-  const data: TokenResponse = await resp.json();
   saveSession(data);
   return { user_id: data.user_id, email: data.email, display_name: data.display_name };
 }
@@ -179,11 +192,7 @@ export async function logout(): Promise<void> {
   const refreshToken = localStorage.getItem(STORAGE_REFRESH);
   if (refreshToken) {
     // Best-effort server-side revocation
-    fetch(`${GATEWAY_URL}/auth/logout`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    }).catch(() => {});
+    gatewayPublicPost('/auth/logout', { refresh_token: refreshToken }).catch(() => {});
   }
   clearSession();
 }

@@ -38,6 +38,18 @@ interface LLMMessage {
 
 // ==================== Helper Functions ====================
 
+/** 解析 Gateway 错误响应，提取 detail 或返回原字符串 */
+function parseGatewayError(err: string): string {
+  const m = err.match(/Gateway error \d+: (.+)/);
+  if (!m) return err;
+  try {
+    const json = JSON.parse(m[1]);
+    return (json.detail ?? json.error ?? err) as string;
+  } catch {
+    return err;
+  }
+}
+
 /**
  * 解析消息内容，返回用于显示的信息
  * - 处理字符串和数组格式的 content
@@ -181,19 +193,30 @@ interface ToolResultContentProps {
 function InlineTrsResult({ resultId }: { resultId: string }) {
   const [items, setItems] = useState<TrsContentItem[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    getTrsFull(resultId).then((res) => {
-      if (cancelled) return;
-      if (res.success && res.normalized) {
-        const content = normalizedToContent(res.normalized);
-        if (content.length) setItems(content);
-      }
-    }).finally(() => { if (!cancelled) setLoading(false); });
+    setError(null);
+    getTrsFull(resultId)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.success && res.normalized) {
+          const content = normalizedToContent(res.normalized);
+          if (content.length) setItems(content);
+          else setError('TRS 返回空内容');
+        } else {
+          setError((res as { error?: string })?.error || 'TRS 请求失败');
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(parseGatewayError(String(e)));
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [resultId]);
   if (loading) return <span className="text-[11px] text-nb-text-muted">加载中...</span>;
+  if (error) return <span className="text-[11px] text-nb-error" title={error}>加载失败: {error.slice(0, 80)}{error.length > 80 ? '…' : ''}</span>;
   if (!items?.length) return null;
   return <TrsContentRenderer items={items} />;
 }
@@ -270,7 +293,7 @@ function ToolResultContent({ content, resultId, toolCallId, toolName }: ToolResu
         }
       })
       .catch((e) => {
-        if (!cancelled) setTrsError(String(e));
+        if (!cancelled) setTrsError(parseGatewayError(String(e)));
       })
       .finally(() => {
         if (!cancelled) setTrsLoading(false);
