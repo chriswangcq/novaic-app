@@ -19,6 +19,8 @@ use quinn::{Connection, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::UnixStream;
+use tokio_tungstenite::tungstenite::Message as WsMsg;
+use futures_util::{SinkExt as _, StreamExt as _};
 use tracing::{debug, info, warn};
 
 /// 流类型标识（首字节）
@@ -81,26 +83,35 @@ async fn handle_incoming_stream(
 
     match stream_type {
         0x01 => {
-            // VNC：QEMU 使用 Unix socket（-vnc unix:/tmp/novaic/novaic-vnc-{id}.sock）
-            // 直连，无需 HTTP 查询 TCP port
-            let socket_path = find_vnc_unix_socket(&resource_id)?;
-            info!("[Tunnel] VNC stream: vm={} → {}", resource_id, socket_path);
-            let unix = UnixStream::connect(&socket_path)
-                .await
-                .map_err(|e| anyhow::anyhow!("VNC Unix connect to {} failed: {}", socket_path, e))?;
-            proxy_quic_to_unix(send, recv, unix).await?;
+            // VNC: try TCP port file first (TigerVNC sub-user), fallback to Unix socket
+            match find_vnc_target(&resource_id) {
+                VncTarget::Tcp(port) => {
+                    let addr = format!("127.0.0.1:{}", port);
+                    info!("[Tunnel] VNC stream (TCP): vm={} → {}", resource_id, addr);
+                    let tcp = TcpStream::connect(&addr).await
+                        .map_err(|e| anyhow::anyhow!("VNC TCP connect to {} failed: {}", addr, e))?;
+                    proxy_quic_to_tcp(send, recv, tcp).await?;
+                }
+                VncTarget::Unix(socket_path) => {
+                    info!("[Tunnel] VNC stream (Unix): vm={} → {}", resource_id, socket_path);
+                    let unix = UnixStream::connect(&socket_path).await
+                        .map_err(|e| anyhow::anyhow!("VNC Unix connect to {} failed: {}", socket_path, e))?;
+                    proxy_quic_to_unix(send, recv, unix).await?;
+                }
+                VncTarget::NotFound(msg) => {
+                    anyhow::bail!("{}", msg);
+                }
+            }
         }
         0x02 => {
-            // scrcpy：scrcpy-server 监听 TCP，查询 VmControl 获取端口
-            let scrcpy_addr = get_scrcpy_tcp_addr(vmcontrol_base_url, &resource_id).await?;
-            let tcp = TcpStream::connect(&scrcpy_addr).await.map_err(|e| {
-                anyhow::anyhow!("scrcpy TCP connect to {} failed: {}", scrcpy_addr, e)
-            })?;
-            info!(
-                "[Tunnel] scrcpy stream: device={} → {}",
-                resource_id, scrcpy_addr
+            // scrcpy：连接 VmControl 的 WS 端点，做 QUIC ↔ WS 桥接
+            let ws_url = format!(
+                "{}/api/android/scrcpy?device={}",
+                vmcontrol_base_url.replace("http://", "ws://"),
+                resource_id,
             );
-            proxy_quic_to_tcp(send, recv, tcp).await?;
+            info!("[Tunnel] scrcpy stream: device={} → {}", resource_id, ws_url);
+            proxy_quic_to_ws(send, recv, &ws_url).await?;
         }
         unknown => {
             warn!("[Tunnel] Unknown stream type: 0x{:02x}", unknown);
@@ -110,20 +121,53 @@ async fn handle_incoming_stream(
     Ok(())
 }
 
-/// QEMU VNC Unix socket 路径推导（与 VmControl vnc.rs 保持一致）
+enum VncTarget {
+    Tcp(u16),
+    Unix(String),
+    NotFound(String),
+}
+
+/// 推导 VNC 连接目标。
 ///
-/// VmControl 固定将 socket 写在 /tmp/novaic/，不使用 std::env::temp_dir()。
-fn find_vnc_unix_socket(vm_id: &str) -> anyhow::Result<String> {
-    let socket_dir = std::path::PathBuf::from("/tmp/novaic");
-    let filename = format!("novaic-vnc-{}.sock", vm_id);
-    let exact = socket_dir.join(&filename);
-    if exact.exists() {
-        return Ok(exact.to_string_lossy().into_owned());
+/// `resource_id` 格式：
+///   - `{vm_id}`            → 主桌面：先查 TCP port 文件，再试 TigerVNC Unix socket，最后 QEMU VNC
+///   - `{vm_id}:{username}` → 子用户：读 TCP port 文件（9p 不支持 socket 文件）
+///
+/// TCP 优先：Xvnc 现在监听 TCP 端口，通过 QMP hostfwd 映射到主机 localhost。
+fn find_vnc_target(resource_id: &str) -> VncTarget {
+    // 多用户格式：{vm_id}:{username}
+    if let Some(colon_pos) = resource_id.find(':') {
+        let vm_id  = &resource_id[..colon_pos];
+        let username = &resource_id[colon_pos + 1..];
+        if !username.is_empty() {
+            // 优先读 TCP port 文件
+            let port_file = format!("/tmp/novaic/share-{}/vnc-{}.port", vm_id, username);
+            if let Ok(s) = std::fs::read_to_string(&port_file) {
+                if let Ok(port) = s.trim().parse::<u16>() {
+                    info!("[VNC] Multi-user TCP: vm={} user={} → port {}", vm_id, username, port);
+                    return VncTarget::Tcp(port);
+                }
+            }
+            return VncTarget::NotFound(format!(
+                "VNC port file not found for user '{}': {} — \
+                 user may not be created yet or VM is not running.",
+                username, port_file
+            ));
+        }
     }
-    anyhow::bail!(
-        "VNC socket not found: {} — VM may not have been started with VNC enabled",
-        exact.display()
-    )
+
+    // 主桌面：走稳定的 QEMU 内置 VNC Unix socket
+    let vm_id = resource_id;
+    let qemu_vnc = format!("/tmp/novaic/novaic-vnc-{}.sock", vm_id);
+    if std::path::Path::new(&qemu_vnc).exists() {
+        info!("[VNC] Main desktop (QEMU VNC): {}", qemu_vnc);
+        return VncTarget::Unix(qemu_vnc);
+    }
+
+    VncTarget::NotFound(format!(
+        "No VNC socket found for VM '{}': {}",
+        vm_id, qemu_vnc
+    ))
 }
 
 /// 双向代理：QUIC stream ↔ Unix socket（VNC，65K 缓冲）
@@ -207,6 +251,86 @@ async fn proxy_quic_to_tcp(
     Ok(())
 }
 
+/// 双向代理：QUIC stream ↔ WebSocket（scrcpy via VmControl WS）
+///
+/// 帧格式（VmControl → QUIC → 前端方向，需保留 WS 消息类型）：
+///   [type: u8][len: u32 BE][data: len bytes]
+///   type = 0x00 → Binary，type = 0x01 → Text
+///
+/// 前端 → VmControl 方向（控制事件，全是 Binary）：原始字节，无需帧头。
+async fn proxy_quic_to_ws(
+    mut quic_send: SendStream,
+    mut quic_recv: RecvStream,
+    ws_url: &str,
+) -> anyhow::Result<()> {
+    let (ws, _) = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("scrcpy WS connect to {} failed: {}", ws_url, e))?;
+
+    let (mut ws_write, mut ws_read) = ws.split();
+
+    // 前端控制事件 → VmControl（带帧头，解帧后保留 Text/Binary 类型）
+    let quic_to_vmcontrol = async {
+        let mut header = [0u8; 5];
+        loop {
+            match quic_recv.read_exact(&mut header).await {
+                Ok(_) => {}
+                Err(_) => break,
+            }
+            let msg_type = header[0];
+            let len = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+            let mut data = vec![0u8; len];
+            if quic_recv.read_exact(&mut data).await.is_err() {
+                break;
+            }
+            let msg = if msg_type == 0x01 {
+                match String::from_utf8(data) {
+                    Ok(s) => WsMsg::Text(s.into()),
+                    Err(e) => WsMsg::Binary(e.into_bytes().into()),
+                }
+            } else {
+                WsMsg::Binary(data.into())
+            };
+            if ws_write.send(msg).await.is_err() {
+                break;
+            }
+        }
+        ws_write.close().await.ok();
+        Ok::<(), anyhow::Error>(())
+    };
+
+    // VmControl 响应 → 前端（带帧头，保留 Text/Binary 类型）
+    let vmcontrol_to_quic = async {
+        while let Some(msg) = ws_read.next().await {
+            match msg? {
+                WsMsg::Binary(b) => {
+                    let len = b.len() as u32;
+                    quic_send.write_all(&[0x00]).await?;
+                    quic_send.write_all(&len.to_be_bytes()).await?;
+                    quic_send.write_all(&b).await?;
+                }
+                WsMsg::Text(t) => {
+                    let bytes = t.as_bytes();
+                    let len = bytes.len() as u32;
+                    quic_send.write_all(&[0x01]).await?;
+                    quic_send.write_all(&len.to_be_bytes()).await?;
+                    quic_send.write_all(bytes).await?;
+                }
+                WsMsg::Close(_) => break,
+                _ => {}
+            }
+        }
+        let _ = quic_send.finish();
+        Ok::<(), anyhow::Error>(())
+    };
+
+    tokio::select! {
+        r = quic_to_vmcontrol  => r?,
+        r = vmcontrol_to_quic  => r?,
+    }
+    Ok(())
+}
+
 // ─── 手机侧（Tunnel Client）────────────────────────────────────────────────────
 
 /// 手机侧：发起 VNC 隧道连接。
@@ -248,29 +372,4 @@ async fn write_stream_header(
     Ok(())
 }
 
-// ─── VmControl HTTP 查询辅助（仅 scrcpy TCP port） ────────────────────────────
 
-/// 查询 VmControl 获取 scrcpy TCP 端口。
-/// `GET /api/android/scrcpy/{device_id}/tcp-port → {"port": 27183}`
-async fn get_scrcpy_tcp_addr(
-    vmcontrol_base_url: &str,
-    device_id: &str,
-) -> anyhow::Result<String> {
-    let url = format!(
-        "{}/api/android/scrcpy/{}/tcp-port",
-        vmcontrol_base_url.trim_end_matches('/'),
-        device_id
-    );
-    let resp: serde_json::Value = reqwest::get(&url)
-        .await
-        .map_err(|e| anyhow::anyhow!("scrcpy port query failed: {}", e))?
-        .json()
-        .await?;
-    let port = resp["port"].as_u64().ok_or_else(|| {
-        anyhow::anyhow!(
-            "No 'port' field in scrcpy port response for device {}",
-            device_id
-        )
-    })?;
-    Ok(format!("127.0.0.1:{}", port))
-}

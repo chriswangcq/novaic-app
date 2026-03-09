@@ -1,0 +1,11 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/powerfmt-542077cc85112e34.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/buf.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/ext.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display_impls.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libpowerfmt-542077cc85112e34.rlib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/buf.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/ext.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display_impls.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libpowerfmt-542077cc85112e34.rmeta: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/buf.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/ext.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display_impls.rs
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/buf.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/ext.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/powerfmt-0.2.0/src/smart_display_impls.rs:

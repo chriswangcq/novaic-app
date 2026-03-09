@@ -20,6 +20,7 @@ import type {
   CandidateModel,
   AICAgent,
 } from '../types';
+import type { Device } from '../types';
 import type { SubAgentMeta } from '../types/subagent';
 import type { UserInfo } from '../services/auth';
 import {
@@ -132,6 +133,12 @@ export interface AppState {
   vncInteractive: boolean;
   vncLocked: boolean;
   androidConnected: boolean;
+  deviceManagerDevices: Device[];
+  selectedDeviceId: string | null;
+  selectedVmUser: { username: string; displayNum: number } | null;
+  addLinuxDeviceModalOpen: boolean;
+  addAndroidDeviceModalOpen: boolean;
+  addVmSubuserDeviceId: string | null;
 
   // UI
   settingsOpen: boolean;
@@ -214,6 +221,12 @@ export const useAppStore = create<Store>((set) => ({
   vncInteractive:     false,
   vncLocked:          false,
   androidConnected:   false,
+  deviceManagerDevices: [],
+  selectedDeviceId:   null,
+  selectedVmUser:     null,
+  addLinuxDeviceModalOpen: false,
+  addAndroidDeviceModalOpen: false,
+  addVmSubuserDeviceId: null,
   settingsOpen:       false,
   logInputCache:      new Map(),
   ...defaultLayout(),

@@ -232,65 +232,10 @@ async fn serve_local_scrcpy(
     device_serial: &str,
     state: &HandlerState,
 ) -> anyhow::Result<()> {
-    use tokio_tungstenite::tungstenite::Message as TungMsg;
-    use futures_util::SinkExt as _;
-
-    let vmcontrol_url = state.vmcontrol_url.read().await.clone();
-    if vmcontrol_url.is_empty() {
-        anyhow::bail!("VmControl URL not set — wait for VmControl to start");
-    }
-    let internal_ws_url = format!(
-        "{}/api/android/scrcpy?device={}",
-        vmcontrol_url.replace("http://", "ws://"),
-        device_serial
-    );
-
-    tracing::info!("[ScrcpyProxy] Local: bridging browser WS ↔ {}", internal_ws_url);
-
-    let (internal_ws, _) = tokio_tungstenite::connect_async(&internal_ws_url)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to VmControl scrcpy WS: {}", e))?;
-
-    let (mut int_write, mut int_read) = internal_ws.split();
-    let (mut br_write, mut br_read) = ws.split();
-
-    // browser → internal
-    let b2i = async {
-        while let Some(msg) = br_read.next().await {
-            match msg? {
-                axum::extract::ws::Message::Binary(b) =>
-                    int_write.send(TungMsg::Binary(b.into())).await?,
-                axum::extract::ws::Message::Text(t) =>
-                    int_write.send(TungMsg::Text(t.to_string().into())).await?,
-                axum::extract::ws::Message::Close(_) => break,
-                _ => {}
-            }
-        }
-        int_write.close().await.ok();
-        Ok::<_, anyhow::Error>(())
-    };
-
-    // internal → browser
-    let i2b = async {
-        while let Some(msg) = int_read.next().await {
-            match msg? {
-                TungMsg::Binary(b) =>
-                    br_write.send(axum::extract::ws::Message::Binary(b.into())).await?,
-                TungMsg::Text(t) =>
-                    br_write.send(axum::extract::ws::Message::Text(t.into())).await?,
-                TungMsg::Close(_) => break,
-                _ => {}
-            }
-        }
-        Ok::<_, anyhow::Error>(())
-    };
-
-    tokio::select! {
-        r = b2i => r?,
-        r = i2b => r?,
-    }
-    tracing::info!("[ScrcpyProxy] Local bridge closed: serial={}", device_serial);
-    Ok(())
+    let conn = get_or_create_local_conn(state).await?;
+    let (quic_send, quic_recv) = p2p::tunnel::open_scrcpy_stream(&conn, device_serial).await?;
+    tracing::info!("[ScrcpyProxy] Local QUIC loopback: serial={}", device_serial);
+    bridge_ws_quic_scrcpy(ws, quic_send, quic_recv).await
 }
 
 async fn serve_remote_scrcpy(
@@ -308,7 +253,7 @@ async fn serve_remote_scrcpy(
             e
         })?;
     tracing::info!("[ScrcpyProxy] Remote QUIC scrcpy stream: device={} serial={}", &device_id[..8.min(device_id.len())], device_serial);
-    bridge_ws_quic(ws, quic_send, quic_recv).await
+    bridge_ws_quic_scrcpy(ws, quic_send, quic_recv).await
 }
 
 async fn get_or_create_local_conn(state: &HandlerState) -> anyhow::Result<Connection> {
@@ -410,6 +355,73 @@ async fn get_or_create_remote_conn(
 }
 
 // ── WS ↔ QUIC bridge ─────────────────────────────────────────────────────────
+
+/// scrcpy 전용 bridge：tunnel 측에서 [type:u8][len:u32 BE][data] 프레이밍을 사용하므로
+/// QUIC→WS 방향에서 프레임 헤더를 읽어 Text/Binary 타입을 복원한다.
+/// WS→QUIC 방향(제어 이벤트)은 기존과 동일하게 raw bytes.
+async fn bridge_ws_quic_scrcpy(
+    ws: axum::extract::ws::WebSocket,
+    mut quic_send: quinn::SendStream,
+    mut quic_recv: quinn::RecvStream,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    let (mut ws_write, mut ws_read) = ws.split();
+
+    // 前端控制事件 → QUIC（带帧头，并保留 Text/Binary 类型）
+    let ws_to_quic = async {
+        while let Some(msg) = ws_read.next().await {
+            let (msg_type, bytes): (u8, Vec<u8>) = match msg? {
+                axum::extract::ws::Message::Binary(b) => (0x00, b.into()),
+                axum::extract::ws::Message::Text(t)   => (0x01, t.as_bytes().to_vec()),
+                axum::extract::ws::Message::Close(_)  => break,
+                axum::extract::ws::Message::Ping(_) | axum::extract::ws::Message::Pong(_) => continue,
+            };
+            let len = bytes.len() as u32;
+            quic_send.write_all(&[msg_type]).await?;
+            quic_send.write_all(&len.to_be_bytes()).await?;
+            quic_send.write_all(&bytes).await?;
+        }
+        let _ = quic_send.finish();
+        Ok::<(), anyhow::Error>(())
+    };
+
+    // QUIC 帧 → 前端 WS（解帧，还原 Text/Binary）
+    let quic_to_ws = async {
+        let mut header = [0u8; 5]; // [type: 1][len: 4]
+        loop {
+            match quic_recv.read_exact(&mut header).await {
+                Ok(_) => {}
+                Err(_) => break,
+            }
+            let msg_type = header[0];
+            let len = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+            let mut data = vec![0u8; len];
+            if quic_recv.read_exact(&mut data).await.is_err() {
+                break;
+            }
+            let msg = if msg_type == 0x01 {
+                // Text（info JSON 等）
+                match String::from_utf8(data) {
+                    Ok(s) => axum::extract::ws::Message::Text(s.into()),
+                    Err(e) => axum::extract::ws::Message::Binary(e.into_bytes().into()),
+                }
+            } else {
+                axum::extract::ws::Message::Binary(data.into())
+            };
+            if ws_write.send(msg).await.is_err() {
+                break;
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+
+    tokio::select! {
+        r = ws_to_quic  => r?,
+        r = quic_to_ws  => r?,
+    }
+    Ok(())
+}
 
 async fn bridge_ws_quic(
     ws: axum::extract::ws::WebSocket,

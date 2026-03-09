@@ -515,6 +515,29 @@ impl QmpClient {
     ///     Ok(())
     /// }
     /// ```
+    /// 通过 human-monitor-command 添加 SLIRP 端口转发
+    /// e.g. `hostfwd_add tcp::5911-:5911`
+    pub async fn hostfwd_add(&mut self, host_port: u16, guest_port: u16) -> Result<()> {
+        let cmd = format!("hostfwd_add tcp::{}-:{}", host_port, guest_port);
+        self.execute(
+            "human-monitor-command",
+            Some(serde_json::json!({ "command-line": cmd })),
+        ).await?;
+        tracing::info!("[QMP] hostfwd_add tcp::{}->:{}", host_port, guest_port);
+        Ok(())
+    }
+
+    /// 移除 SLIRP 端口转发
+    pub async fn hostfwd_remove(&mut self, host_port: u16) -> Result<()> {
+        let cmd = format!("hostfwd_remove tcp::{}", host_port);
+        self.execute(
+            "human-monitor-command",
+            Some(serde_json::json!({ "command-line": cmd })),
+        ).await?;
+        tracing::info!("[QMP] hostfwd_remove tcp::{}", host_port);
+        Ok(())
+    }
+
     pub async fn send_mouse_scroll(&mut self, delta: i32) -> Result<()> {
         tracing::debug!("Scrolling mouse wheel: {}", delta);
         

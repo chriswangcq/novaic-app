@@ -221,7 +221,7 @@ export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalP
     setCreationProgress('创建 Android 设备...');
     const finalAvdName = avdName.trim() || generateAvdName();
     
-    const device = await api.devices.createAndroid(currentAgentId, {
+    const device = await api.devices.createAndroidForUser({
       name: finalAvdName,
       memory: parseInt(memory, 10),
       cpus: cpuCores,
@@ -281,7 +281,7 @@ export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalP
     
     // Step 2: Create Android device using unified device API (external mode)
     setCreationProgress('创建 Android 设备...');
-    const device = await api.devices.createAndroid(currentAgentId, {
+    const device = await api.devices.createAndroidForUser({
       name: targetDevice.avdName || `External Android (${serial})`,
       managed: false,
       device_serial: serial,
@@ -290,7 +290,7 @@ export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalP
     console.log('[AddAndroidModal] Created external device:', device.id);
     
     // Step 3: Update device status to ready (external devices don't need setup)
-    await api.devices.update(currentAgentId, device.id, {
+    await api.devices.update(device.id, {
       status: 'ready',
     });
     

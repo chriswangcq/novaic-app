@@ -1,4 +1,6 @@
 pub mod vm;
+pub mod setup;
+pub mod users;
 pub mod health;
 pub mod input;
 pub mod screen;
@@ -114,6 +116,11 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>, process_state: 
         .route("/health", get(health::health_check))
         .route("/api/vms", get(vm::list_vms).post(vm::register_vm))
         .route("/api/vms/:id", get(vm::get_vm))
+        .route("/api/vms/:id/setup", post(setup::setup_vm))
+        .route("/api/vms/:id/users", get(users::list_vm_users).post(users::create_vm_user))
+        .route("/api/vms/:id/users/:username", delete(users::delete_vm_user))
+        .route("/api/vms/:id/users/:username/restart", post(users::restart_vm_user_vnc))
+        .route("/api/vms/:id/users/:username/diag", get(users::diag_vm_user_vnc))
         .route("/api/vms/:id/start", post(vm::start_vm))
         .route("/api/vms/:id/stop", post(vm::stop_vm))
         .route("/api/vms/:id/ssh-exec", post(vm::ssh_exec))

@@ -1,0 +1,10 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/zerovec_derive-6fd3ac718a193b10.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/make_ule.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/make_varule.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/ule.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/utils.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/varule.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libzerovec_derive-6fd3ac718a193b10.dylib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/make_ule.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/make_varule.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/ule.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/utils.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/varule.rs
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/make_ule.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/make_varule.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/ule.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/utils.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/zerovec-derive-0.11.2/src/varule.rs:

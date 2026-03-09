@@ -1,0 +1,14 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/serde-a2fa4bda50a7f79b.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/integer128.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/mod.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/de.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/ser.rs /Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/serde-2beb76a2a4a45d11/out/private.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libserde-a2fa4bda50a7f79b.rlib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/integer128.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/mod.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/de.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/ser.rs /Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/serde-2beb76a2a4a45d11/out/private.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libserde-a2fa4bda50a7f79b.rmeta: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/integer128.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/mod.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/de.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/ser.rs /Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/serde-2beb76a2a4a45d11/out/private.rs
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/integer128.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/mod.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/de.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/serde-1.0.228/src/private/ser.rs:
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/serde-2beb76a2a4a45d11/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/serde-2beb76a2a4a45d11/out

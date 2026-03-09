@@ -1,0 +1,14 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/thiserror-17fbc910c8248278.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/aserror.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/display.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/var.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/private.rs /Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/thiserror-b84c3459e91921f8/out/private.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libthiserror-17fbc910c8248278.rlib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/aserror.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/display.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/var.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/private.rs /Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/thiserror-b84c3459e91921f8/out/private.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libthiserror-17fbc910c8248278.rmeta: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/aserror.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/display.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/var.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/private.rs /Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/thiserror-b84c3459e91921f8/out/private.rs
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/aserror.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/display.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/var.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/thiserror-2.0.18/src/private.rs:
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/thiserror-b84c3459e91921f8/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/build/thiserror-b84c3459e91921f8/out

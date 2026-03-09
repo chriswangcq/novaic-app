@@ -13,7 +13,7 @@ export type DeviceStatus = 'created' | 'setup' | 'ready' | 'running' | 'stopped'
  */
 export interface DeviceConfig {
   id: string;
-  agent_id: string;
+  user_id: string;
   type: DeviceType;
   name: string;
   created_at: string;
@@ -51,6 +51,17 @@ export interface AndroidDevice extends DeviceConfig {
  * Union type for any device
  */
 export type Device = LinuxDevice | AndroidDevice;
+
+/**
+ * Sub-user inside a Linux VM (multi-user TigerVNC)
+ */
+export interface VmUser {
+  id: string;
+  device_id: string;
+  username: string;
+  display_num: number;
+  created_at: string;
+}
 
 /**
  * Type guard for Linux device

@@ -455,7 +455,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
     
     try {
       // 使用统一设备 API 删除设备
-      await api.devices.delete(currentAgentId, device.id);
+      await api.devices.delete(device.id);
       
       // 刷新 Agent 列表
       await loadAgents();

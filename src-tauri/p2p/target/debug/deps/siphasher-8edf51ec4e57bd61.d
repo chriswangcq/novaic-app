@@ -1,0 +1,11 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/siphasher-8edf51ec4e57bd61.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/common.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip128.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/../README.md
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libsiphasher-8edf51ec4e57bd61.rlib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/common.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip128.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/../README.md
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libsiphasher-8edf51ec4e57bd61.rmeta: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/common.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip128.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/../README.md
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/common.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/sip128.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/siphasher-1.0.2/src/../README.md:

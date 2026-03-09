@@ -1,0 +1,10 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/icu_normalizer-d563c464b7c0d94f.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/properties.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/provider.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/uts46.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libicu_normalizer-d563c464b7c0d94f.rlib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/properties.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/provider.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/uts46.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libicu_normalizer-d563c464b7c0d94f.rmeta: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/properties.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/provider.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/uts46.rs
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/properties.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/provider.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/icu_normalizer-2.1.1/src/uts46.rs:

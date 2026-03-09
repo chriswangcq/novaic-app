@@ -142,7 +142,7 @@ export function AddLinuxVMModal({ isOpen, onClose, onCreated }: AddLinuxVMModalP
         message: 'Creating Linux device...',
       });
       
-      const device = await api.devices.createLinux(currentAgentId, {
+      const device = await api.devices.createLinuxForUser({
         name: 'Linux VM',
         memory: parseInt(memory),
         cpus,

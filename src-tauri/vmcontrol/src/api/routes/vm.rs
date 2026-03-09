@@ -70,6 +70,27 @@ const SOCKET_DIR: &str = "/tmp/novaic";
 const QMP_SOCKET_PREFIX: &str = "novaic-qmp-";
 const QMP_SOCKET_SUFFIX: &str = ".sock";
 
+fn is_qemu_process_alive(agent_id: &str) -> bool {
+    let vm_name = format!("novaic-vm-{}", agent_id);
+    std::process::Command::new("ps")
+        .args(["-axo", "command="])
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|stdout| stdout.lines().any(|line| line.contains(&vm_name)))
+        .unwrap_or(false)
+}
+
+fn is_vnc_socket_live(agent_id: &str) -> bool {
+    use std::os::unix::net::UnixStream as StdUnix;
+
+    let vnc_socket = PathBuf::from(format!("{}/novaic-vnc-{}.sock", SOCKET_DIR, agent_id));
+    if !vnc_socket.exists() {
+        return false;
+    }
+    StdUnix::connect(&vnc_socket).is_ok()
+}
+
 /// Discover all running VMs by scanning QMP socket files
 fn discover_running_vms() -> Vec<(String, PathBuf)> {
     let socket_dir = PathBuf::from(SOCKET_DIR);
@@ -132,6 +153,15 @@ fn is_vm_running_sync(agent_id: &str) -> Option<PathBuf> {
             Some(qmp_socket)
         }
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            // QMP 在启动窗口期偶尔会短暂拒绝连接，但此时 QEMU 进程或 VNC
+            // 可能已经活着。不要把这种情况误删成 stale socket。
+            if is_qemu_process_alive(agent_id) || is_vnc_socket_live(agent_id) {
+                tracing::warn!(
+                    "[is_vm_running] QMP connect refused for VM {} but process/VNC is alive; keeping socket",
+                    agent_id
+                );
+                return Some(qmp_socket);
+            }
             tracing::warn!(
                 "[is_vm_running] Stale socket for VM {} — removing ({})",
                 agent_id, e
@@ -456,7 +486,11 @@ pub async fn start_vm(
     // Ensure /tmp/novaic exists
     let socket_dir = std::path::PathBuf::from("/tmp/novaic");
     std::fs::create_dir_all(&socket_dir).ok();
-    
+
+    // 9p shared directory: host path accessible inside VM as mount_tag=novaic_share
+    let share_dir = format!("/tmp/novaic/share-{}", agent_id);
+    std::fs::create_dir_all(&share_dir).ok();
+
     let mcp_socket = format!("/tmp/novaic/novaic-mcp-{}.sock", agent_id);
     let qmp_socket = format!("/tmp/novaic/novaic-qmp-{}.sock", agent_id);
     let ga_socket = format!("/tmp/novaic/novaic-ga-{}.sock", agent_id);
@@ -536,6 +570,9 @@ pub async fn start_vm(
             "-device".to_string(), "usb-tablet".to_string(),
             "-vnc".to_string(), format!("unix:{}", vnc_socket),
             "-display".to_string(), "none".to_string(),
+            // 9p virtfs: share host dir into guest as mount_tag=novaic_share
+            "-virtfs".to_string(),
+            format!("local,path={},mount_tag=novaic_share,security_model=none,id=novaic_share", share_dir),
         ]);
     } else {
         // x86_64 fallback
@@ -557,6 +594,9 @@ pub async fn start_vm(
             "-qmp".to_string(), format!("unix:{},server,nowait", qmp_socket),
             "-vnc".to_string(), format!("unix:{}", vnc_socket),
             "-display".to_string(), "none".to_string(),
+            // 9p virtfs: share host dir into guest as mount_tag=novaic_share
+            "-virtfs".to_string(),
+            format!("local,path={},mount_tag=novaic_share,security_model=none,id=novaic_share", share_dir),
         ]);
     }
 

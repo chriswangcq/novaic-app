@@ -1,17 +1,17 @@
 /**
  * LayoutContainer - 主布局容器
  *
- * 结构：AgentDrawer | Resizer | main(ChatPanel) + DeviceFloatingPanel
- * - 使用 useIsLgOrAbove() 控制 Resizer 显示：lg 以下 Drawer 为 overlay，不渲染 Resizer
- * - AgentDrawer 传入 resizerPlacement="external"，由本组件提供 Drawer Resizer
- * - DeviceFloatingPanel 作为浮窗显示在右下角
- * - CSS 变量 --drawer-width 供子组件或未来样式覆盖使用
+ * 结构：AgentDrawer | Resizer | main(ChatPanel or DeviceManagerPage)
+ * - activeView 控制主区域显示 Chat 还是 Devices
+ * - AgentDrawer 传入 resizerPlacement="external" 和 onOpenDevices 回调
  */
 
+import { useState } from 'react';
 import { AgentDrawer } from './AgentDrawer';
 import { Resizer } from './Resizer';
 import { ChatPanel } from '../Chat/ChatPanel';
 import { DeviceFloatingPanel } from './DeviceFloatingPanel';
+import { DeviceManagerPage } from '../VM/DeviceManagerPage';
 import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
 
 interface LayoutContainerProps {
@@ -24,6 +24,8 @@ interface LayoutContainerProps {
   onCreateNew: () => void;
 }
 
+type ActiveView = 'chat' | 'devices';
+
 export function LayoutContainer({
   drawerWidth,
   drawerOpen,
@@ -34,26 +36,30 @@ export function LayoutContainer({
   onCreateNew,
 }: LayoutContainerProps) {
   const isLgOrAbove = useIsLgOrAbove();
+  const [activeView, setActiveView] = useState<ActiveView>('chat');
+
+  const handleSelectAgent = (agentId: string, needsSetup: boolean) => {
+    setActiveView('chat');
+    onSelectAgent(agentId, needsSetup);
+  };
 
   return (
     <div
       className="flex-1 flex overflow-hidden"
-      style={
-        {
-          '--drawer-width': `${drawerWidth}px`,
-        } as React.CSSProperties
-      }
+      style={{ '--drawer-width': `${drawerWidth}px` } as React.CSSProperties}
     >
-      {/* Agent Drawer - resizerPlacement=external 由 LayoutContainer 提供 Resizer */}
+      {/* Agent Drawer */}
       <AgentDrawer
         resizerPlacement="external"
         isOpen={drawerOpen}
         onClose={onDrawerClose}
-        onSelectAgent={onSelectAgent}
+        onSelectAgent={handleSelectAgent}
         onCreateNew={onCreateNew}
+        activeView={activeView}
+        onOpenDevices={() => setActiveView('devices')}
       />
 
-      {/* Drawer <-> Main 水平 Resizer（lg 以上且 drawer 打开时显示） */}
+      {/* Drawer <-> Main 水平 Resizer */}
       {drawerOpen && isLgOrAbove && (
         <Resizer
           axis="horizontal"
@@ -62,14 +68,14 @@ export function LayoutContainer({
         />
       )}
 
-      {/* Main: ChatPanel */}
+      {/* Main area */}
       <main className="flex-1 flex overflow-hidden min-w-0">
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <ChatPanel />
+          {activeView === 'devices' ? <DeviceManagerPage /> : <ChatPanel />}
         </div>
       </main>
 
-      {/* 设备浮窗 - fixed 定位，不占布局空间 */}
+      {/* 设备浮窗 */}
       <DeviceFloatingPanel />
     </div>
   );

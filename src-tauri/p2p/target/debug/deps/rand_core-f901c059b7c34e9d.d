@@ -1,0 +1,11 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/rand_core-f901c059b7c34e9d.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/block.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/impls.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/le.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/os.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/librand_core-f901c059b7c34e9d.rlib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/block.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/impls.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/le.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/os.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/librand_core-f901c059b7c34e9d.rmeta: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/block.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/impls.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/le.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/os.rs
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/block.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/impls.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/le.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/rand_core-0.9.5/src/os.rs:

@@ -951,51 +951,38 @@ export const api = {
     },
 
     /**
-     * Create a Linux device
+     * Create a Linux device owned by the user (no agent required)
      */
-    createLinux: async (agentId: string, data: CreateLinuxDeviceRequest): Promise<Device> => {
-      return invoke('gateway_post', { 
-        path: `/api/agents/${agentId}/devices/linux`, 
-        body: data 
-      });
+    createLinuxForUser: async (data: CreateLinuxDeviceRequest): Promise<Device> => {
+      return invoke('gateway_post', { path: '/api/devices/linux', body: data });
     },
 
     /**
-     * Create an Android device
+     * Create an Android device owned by the user (no agent required)
      */
-    createAndroid: async (agentId: string, data: CreateAndroidDeviceRequest): Promise<Device> => {
-      return invoke('gateway_post', { 
-        path: `/api/agents/${agentId}/devices/android`, 
-        body: data 
-      });
+    createAndroidForUser: async (data: CreateAndroidDeviceRequest): Promise<Device> => {
+      return invoke('gateway_post', { path: '/api/devices/android', body: data });
     },
 
     /**
      * Get a device
      */
-    get: async (agentId: string, deviceId: string): Promise<Device> => {
-      return invoke('gateway_get', { 
-        path: `/api/agents/${agentId}/devices/${deviceId}` 
-      });
+    get: async (deviceId: string): Promise<Device> => {
+      return invoke('gateway_get', { path: `/api/devices/${deviceId}` });
     },
 
     /**
      * Update a device
      */
-    update: async (agentId: string, deviceId: string, data: UpdateDeviceRequest): Promise<Device> => {
-      return invoke('gateway_patch', { 
-        path: `/api/agents/${agentId}/devices/${deviceId}`, 
-        body: data 
-      });
+    update: async (deviceId: string, data: UpdateDeviceRequest): Promise<Device> => {
+      return invoke('gateway_patch', { path: `/api/devices/${deviceId}`, body: data });
     },
 
     /**
      * Delete a device
      */
-    delete: async (agentId: string, deviceId: string): Promise<void> => {
-      await invoke('gateway_delete', { 
-        path: `/api/agents/${agentId}/devices/${deviceId}` 
-      });
+    delete: async (deviceId: string): Promise<void> => {
+      await invoke('gateway_delete', { path: `/api/devices/${deviceId}` });
     },
 
     /**
@@ -1033,6 +1020,28 @@ export const api = {
       return invoke('gateway_get', { 
         path: `/api/devices/${deviceId}/status` 
       });
+    },
+  },
+
+  /**
+   * VM Users — sub-users inside a Linux VM, each with their own TigerVNC desktop.
+   * VNC connection: get_vnc_proxy_url("{device_id}:{username}") → QUIC tunnel
+   */
+  vmUsers: {
+    list: async (deviceId: string): Promise<import('../types').VmUser[]> => {
+      return invoke('gateway_get', { path: `/api/devices/${deviceId}/vm-users` });
+    },
+    create: async (deviceId: string, username: string, password: string): Promise<import('../types').VmUser> => {
+      return invoke('gateway_post', { 
+        path: `/api/devices/${deviceId}/vm-users`,
+        body: { username, password },
+      });
+    },
+    delete: async (deviceId: string, username: string): Promise<void> => {
+      await invoke('gateway_delete', { path: `/api/devices/${deviceId}/vm-users/${username}` });
+    },
+    restartVnc: async (deviceId: string, username: string): Promise<void> => {
+      await invoke('gateway_post', { path: `/api/devices/${deviceId}/vm-users/${username}/restart` });
     },
   },
 

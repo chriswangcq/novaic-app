@@ -1,0 +1,11 @@
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/socket2-d0a1fbc010fbcf10.d: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockaddr.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/socket.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockref.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sys/unix.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libsocket2-d0a1fbc010fbcf10.rlib: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockaddr.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/socket.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockref.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sys/unix.rs
+
+/Users/wangchaoqun/new-build-novaic/novaic-app/src-tauri/p2p/target/debug/deps/libsocket2-d0a1fbc010fbcf10.rmeta: /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/lib.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockaddr.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/socket.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockref.rs /Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sys/unix.rs
+
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/lib.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockaddr.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/socket.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sockref.rs:
+/Users/wangchaoqun/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/socket2-0.6.3/src/sys/unix.rs:

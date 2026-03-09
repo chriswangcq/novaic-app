@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Plus, Monitor, Smartphone, Play, Square, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Monitor, HardDrive, Smartphone, ChevronDown, Home, Users, RefreshCw } from 'lucide-react';
 import { useAppStore } from '../../application/store';
 import { useAgent } from '../hooks/useAgent';
 import { useLayout } from '../hooks/useLayout';
@@ -13,12 +13,10 @@ import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
 import { Resizer } from './Resizer';
 import type { AICAgent } from '../../services/api';
 import { api } from '../../services/api';
+import type { Device, VmUser } from '../../types';
 import { vmService, VmStatus } from '../../services/vm';
 import { getLastMessage } from '../../db/messageRepo';
 import { POLL_CONFIG, LAYOUT_CONFIG } from '../../config';
-import { isLinuxDevice, isAndroidDevice, type Device, type AndroidDevice as AndroidDeviceType } from '../../types';
-import { AddLinuxVMModal } from '../VM/AddLinuxVMModal';
-import { AddAndroidModal } from '../VM/AddAndroidModal';
 
 interface AgentDrawerProps {
   isOpen: boolean;
@@ -27,15 +25,32 @@ interface AgentDrawerProps {
   onCreateNew: () => void;
   /** Resizer 由谁提供：internal=组件内部，external=由父组件（如 LayoutContainer）提供。默认 internal */
   resizerPlacement?: 'internal' | 'external';
+  /** 当前主区域视图，用于高亮 Devices 入口 */
+  activeView?: 'chat' | 'devices';
+  /** 点击 Devices 入口时的回调 */
+  onOpenDevices?: () => void;
 }
 
-export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal' }: AgentDrawerProps) {
+export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal', activeView, onOpenDevices }: AgentDrawerProps) {
   const { agents, currentAgentId, loadAgents } = useAgent();
   const { drawerWidth, setDrawerWidth } = useLayout();
   const isOverlay = !useIsLgOrAbove();
   const userId = useAppStore(s => s.user?.user_id);
+  const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
+  const selectedVmUser = useAppStore(s => s.selectedVmUser);
+  const setSelectedDeviceId = (id: string | null) => useAppStore.getState().patchState({ selectedDeviceId: id });
+  const setSelectedVmUser = (v: { username: string; displayNum: number } | null) => useAppStore.getState().patchState({ selectedVmUser: v });
+  const setDeviceManagerDevices = (devices: Device[]) => useAppStore.getState().patchState({ deviceManagerDevices: devices });
+  const openLinuxDeviceModal = () => useAppStore.getState().patchState({ addLinuxDeviceModalOpen: true });
+  const openAndroidDeviceModal = () => useAppStore.getState().patchState({ addAndroidDeviceModalOpen: true });
+  const openVmSubuserModal = (deviceId: string) => useAppStore.getState().patchState({ addVmSubuserDeviceId: deviceId });
   const [vmStatuses, setVmStatuses] = useState<Record<string, VmStatus>>({});
   const [lastMessages, setLastMessages] = useState<Record<string, string>>({});
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [vmUsersByDevice, setVmUsersByDevice] = useState<Record<string, VmUser[]>>({});
+  const [expandedDeviceIds, setExpandedDeviceIds] = useState<Set<string>>(new Set());
+  const [deviceAddOpen, setDeviceAddOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
 
   // Load agents on mount
@@ -56,6 +71,21 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     }
   }, []);
 
+  const loadDevices = useCallback(async () => {
+    setDevicesLoading(true);
+    try {
+      const res = await api.devices.listForUser();
+      const next = res.devices ?? [];
+      setDevices(next);
+      setDeviceManagerDevices(next);
+    } catch {
+      setDevices([]);
+      setDeviceManagerDevices([]);
+    } finally {
+      setDevicesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (isOpen) {
       refreshVmStatuses();
@@ -63,6 +93,30 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
       return () => clearInterval(interval);
     }
   }, [isOpen, refreshVmStatuses]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    loadDevices();
+    const interval = setInterval(loadDevices, POLL_CONFIG.VM_STATUS_NORMAL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [isOpen, loadDevices]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    const selected = devices.find(d => d.id === selectedDeviceId);
+    if (selected?.type !== 'linux' || !['running', 'ready'].includes(selected.status)) return;
+    let cancelled = false;
+    api.vmUsers.list(selected.id)
+      .then(list => {
+        if (cancelled) return;
+        setVmUsersByDevice(prev => ({ ...prev, [selected.id]: Array.isArray(list) ? list : [] }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setVmUsersByDevice(prev => ({ ...prev, [selected.id]: [] }));
+      });
+    return () => { cancelled = true; };
+  }, [selectedDeviceId, devices]);
 
   // Load last messages for all agents from local DB (no gateway calls).
   // Data is populated by messageService whenever an agent is selected.
@@ -106,71 +160,25 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     }
   }, [isOpen, onClose]);
 
-  // ── Device section state ────────────────────────────────────────────────────
-  const [deviceStatuses, setDeviceStatuses] = useState<Record<string, boolean>>({});
-  const [loadingDevices, setLoadingDevices] = useState<Set<string>>(new Set());
-  const [devicesExpanded, setDevicesExpanded] = useState(true);
-  // Which agent groups are collapsed; keyed by agent_id
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [showAddVMModal, setShowAddVMModal] = useState(false);
-  const [showAddAndroidModal, setShowAddAndroidModal] = useState(false);
-  // The agent context for "Add device" action
-  const [addDeviceAgentId, setAddDeviceAgentId] = useState<string | null>(null);
-
-  // Flat list of all devices across all loaded agents
-  const allDevices: Device[] = agents.flatMap(a => a.devices || []);
-  const allDeviceIds = allDevices.map(d => d.id).join(',');
-
-  // Total device count (for section header badge)
-  const totalDeviceCount = allDevices.length;
-
-  // Poll status for all devices via the user-level endpoint
-  const fetchDeviceStatuses = useCallback(async () => {
-    if (!allDevices.length) { setDeviceStatuses({}); return; }
-    try {
-      const { devices: fresh } = await api.devices.listForUser();
-      const statuses: Record<string, boolean> = {};
-      for (const d of fresh) {
-        statuses[d.id] = d.status === 'running';
-      }
-      setDeviceStatuses(statuses);
-    } catch {
-      // fallback: mark all unknown
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allDeviceIds]);
-
-  useEffect(() => {
-    fetchDeviceStatuses();
-    const t = setInterval(fetchDeviceStatuses, 5000);
-    return () => clearInterval(t);
-  }, [fetchDeviceStatuses]);
-
-  const handleStartDevice = async (device: Device) => {
-    setLoadingDevices(p => new Set(p).add(device.id));
-    try { await api.devices.start(device.id); await fetchDeviceStatuses(); await loadAgents(); }
-    catch (e) { console.error('[Drawer] start device', e); }
-    finally { setLoadingDevices(p => { const n = new Set(p); n.delete(device.id); return n; }); }
-  };
-
-  const handleStopDevice = async (device: Device) => {
-    setLoadingDevices(p => new Set(p).add(device.id));
-    try { await api.devices.stop(device.id); await fetchDeviceStatuses(); await loadAgents(); }
-    catch (e) { console.error('[Drawer] stop device', e); }
-    finally { setLoadingDevices(p => { const n = new Set(p); n.delete(device.id); return n; }); }
-  };
-
-  const toggleGroup = (agentId: string) => {
-    setCollapsedGroups(prev => {
-      const next = new Set(prev);
-      next.has(agentId) ? next.delete(agentId) : next.add(agentId);
-      return next;
-    });
-  };
 
   const handleSelect = (agent: AICAgent) => {
     const needsSetup = !agent.setup_complete;
     onSelectAgent(agent.id, needsSetup);
+  };
+
+  const toggleExpanded = (deviceId: string) => {
+    setExpandedDeviceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(deviceId)) next.delete(deviceId);
+      else next.add(deviceId);
+      return next;
+    });
+  };
+
+  const openDevice = (deviceId: string) => {
+    setSelectedDeviceId(deviceId);
+    setSelectedVmUser(null);
+    onOpenDevices?.();
   };
 
   // Get status dot color
@@ -244,133 +252,175 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
         )}
       </div>
 
-      {/* Devices Section — all devices by user, grouped by agent */}
-      <div className="border-t border-nb-border shrink-0">
-        {/* Section header */}
-        <button
-          type="button"
-          onClick={() => setDevicesExpanded(v => !v)}
-          className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/[0.03] transition-colors"
-        >
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-nb-text-secondary">
-            Devices
-          </span>
-          <span className="flex items-center gap-1.5">
-            {totalDeviceCount > 0 && (
-              <span className="text-[10px] text-nb-text-secondary">{totalDeviceCount}</span>
-            )}
-            {devicesExpanded
-              ? <ChevronDown size={11} className="text-nb-text-secondary" />
-              : <ChevronRight size={11} className="text-nb-text-secondary" />
-            }
-          </span>
-        </button>
+      {/* Devices section */}
+      <div className="shrink-0 border-t border-nb-border">
+        <div className="flex items-center justify-between px-3 py-2">
+          <button
+            type="button"
+            onClick={onOpenDevices}
+            className={`flex items-center gap-2 text-sm ${
+              activeView === 'devices' ? 'text-nb-text' : 'text-nb-text-secondary hover:text-nb-text'
+            }`}
+          >
+            <HardDrive size={14} strokeWidth={1.6} />
+            <span className="font-medium">Devices</span>
+          </button>
+          <div className="flex items-center gap-1">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setDeviceAddOpen(v => !v)}
+                className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+                title="Add device"
+              >
+                <Plus size={12} />
+              </button>
+              {deviceAddOpen && (
+                <div className="absolute right-0 top-full mt-1 w-36 py-1 rounded-lg bg-nb-surface border border-nb-border shadow-xl z-20">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeviceAddOpen(false);
+                      onOpenDevices?.();
+                      openLinuxDeviceModal();
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-nb-text hover:bg-white/[0.05] transition-colors"
+                  >
+                    <Monitor size={12} className="text-blue-400" />
+                    Linux VM
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeviceAddOpen(false);
+                      onOpenDevices?.();
+                      openAndroidDeviceModal();
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-nb-text hover:bg-white/[0.05] transition-colors"
+                  >
+                    <Smartphone size={12} className="text-green-400" />
+                    Android
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={loadDevices}
+              className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+              title="Refresh devices"
+            >
+              <RefreshCw size={12} className={devicesLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+        </div>
 
-        {devicesExpanded && (
-          <div className="pb-2 space-y-0">
-            {agents.length === 0 ? (
-              <p className="text-[11px] text-nb-text-secondary text-center py-3 px-2">
-                No agents yet
-              </p>
-            ) : (
-              agents.map(agent => {
-                const groupDevices: Device[] = agent.devices || [];
-                const isGroupCollapsed = collapsedGroups.has(agent.id);
-
+        <div className="max-h-[38vh] overflow-y-auto px-2 pb-2">
+          {devices.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-nb-text-secondary/50">
+              {devicesLoading ? 'Loading devices…' : 'No devices yet'}
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {devices.map((device) => {
+                const isSelectedDevice = device.id === selectedDeviceId;
+                const isLinux = device.type === 'linux';
+                const isExpanded = isLinux && (expandedDeviceIds.has(device.id) || isSelectedDevice);
+                const users = vmUsersByDevice[device.id] ?? [];
                 return (
-                  <div key={agent.id}>
-                    {/* Agent group header */}
-                    <div className="flex items-center gap-1 px-3 py-1 group/gh">
+                  <div key={device.id}>
+                    <div
+                      onClick={() => openDevice(device.id)}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                        activeView === 'devices' && isSelectedDevice
+                          ? 'bg-white/10 text-nb-text'
+                          : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
+                      }`}
+                    >
                       <button
                         type="button"
-                        onClick={() => toggleGroup(agent.id)}
-                        className="flex items-center gap-1.5 flex-1 min-w-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isLinux) toggleExpanded(device.id);
+                        }}
+                        className={`w-4 h-4 flex items-center justify-center rounded-sm ${isLinux ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                        aria-label="Toggle device tree"
                       >
-                        {isGroupCollapsed
-                          ? <ChevronRight size={10} className="text-nb-text-secondary shrink-0" />
-                          : <ChevronDown size={10} className="text-nb-text-secondary shrink-0" />
-                        }
-                        <span className="text-[11px] text-nb-text-muted truncate">{agent.name}</span>
-                        {groupDevices.length > 0 && (
-                          <span className="text-[10px] text-nb-text-secondary shrink-0">
-                            {groupDevices.length}
-                          </span>
-                        )}
+                        <ChevronDown size={11} className={`transition-transform ${isExpanded ? 'rotate-0' : '-rotate-90'}`} />
                       </button>
-                      {/* Add buttons inline in group header */}
-                      <div className="flex gap-0.5 opacity-0 group-hover/gh:opacity-100 transition-opacity shrink-0">
-                        <button
-                          type="button"
-                          title="Add Linux VM"
-                          onClick={() => { setAddDeviceAgentId(agent.id); setShowAddVMModal(true); }}
-                          className="p-0.5 rounded hover:bg-white/10 text-nb-text-secondary hover:text-nb-text transition-colors"
-                        >
-                          <Monitor size={11} />
-                        </button>
-                        <button
-                          type="button"
-                          title="Add Android"
-                          onClick={() => { setAddDeviceAgentId(agent.id); setShowAddAndroidModal(true); }}
-                          className="p-0.5 rounded hover:bg-white/10 text-nb-text-secondary hover:text-nb-text transition-colors"
-                        >
-                          <Smartphone size={11} />
-                        </button>
+                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${isLinux ? 'bg-blue-500/10' : 'bg-green-500/10'}`}>
+                        {isLinux ? <Monitor size={14} className="text-blue-400" /> : <Smartphone size={14} className="text-green-400" />}
                       </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm truncate">{device.name || (isLinux ? 'Linux VM' : 'Android')}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-[10px] opacity-50 font-mono">{device.id.slice(0, 8)}…</span>
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            device.status === 'running' ? 'bg-emerald-400' :
+                            device.status === 'setup' ? 'bg-amber-400 animate-pulse' :
+                            device.status === 'error' ? 'bg-red-400' : 'bg-white/20'
+                          }`} />
+                        </div>
+                      </div>
+                      {isLinux && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDevice(device.id);
+                            openVmSubuserModal(device.id);
+                          }}
+                          className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+                          title="Add sub-user"
+                        >
+                          <Users size={12} />
+                        </button>
+                      )}
                     </div>
 
-                    {/* Device rows */}
-                    {!isGroupCollapsed && (
-                      <div className="px-2 space-y-0.5">
-                        {groupDevices.length === 0 ? (
-                          <p className="text-[10px] text-nb-text-secondary px-4 pb-1">No devices</p>
-                        ) : (
-                          groupDevices.map(device => {
-                            const isRunning = deviceStatuses[device.id] ?? false;
-                            const isLoading = loadingDevices.has(device.id);
-                            const Icon = isLinuxDevice(device) ? Monitor : Smartphone;
-                            const serial = isAndroidDevice(device)
-                              ? (device as AndroidDeviceType).device_serial
-                              : undefined;
-                            const label = device.name || (isLinuxDevice(device) ? 'Linux VM' : serial || 'Android');
+                    {isLinux && isExpanded && (
+                      <div className="ml-6 mr-2 mt-0.5 mb-1 pl-3 border-l border-white/10 space-y-0.5">
+                        <div
+                          onClick={() => {
+                            openDevice(device.id);
+                            setSelectedVmUser(null);
+                          }}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer transition-colors ${
+                            activeView === 'devices' && isSelectedDevice && selectedVmUser === null
+                              ? 'bg-white/8 text-nb-text'
+                              : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
+                          }`}
+                        >
+                          <Home size={11} />
+                          <span className="text-[11px]">Main Desktop</span>
+                        </div>
 
-                            return (
-                              <div
-                                key={device.id}
-                                className="flex items-center gap-2 pl-5 pr-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors group/dev"
-                              >
-                                <div className="relative shrink-0">
-                                  <Icon size={13} className="text-nb-text-muted" />
-                                  <span className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-nb-surface ${
-                                    isLoading ? 'bg-amber-400 animate-pulse' : isRunning ? 'bg-emerald-400' : 'bg-slate-500'
-                                  }`} />
-                                </div>
-                                <span className="flex-1 text-xs text-nb-text truncate min-w-0" title={label}>
-                                  {label}
-                                </span>
-                                <button
-                                  type="button"
-                                  disabled={isLoading}
-                                  onClick={() => isRunning ? handleStopDevice(device) : handleStartDevice(device)}
-                                  className="opacity-0 group-hover/dev:opacity-100 p-1 rounded hover:bg-white/10 text-nb-text-muted hover:text-nb-text transition-all disabled:opacity-30"
-                                  title={isRunning ? 'Stop' : 'Start'}
-                                >
-                                  {isLoading
-                                    ? <Loader2 size={11} className="animate-spin" />
-                                    : isRunning ? <Square size={11} /> : <Play size={11} />
-                                  }
-                                </button>
-                              </div>
-                            );
-                          })
-                        )}
+                        {users.map((user) => (
+                          <div
+                            key={user.username}
+                            onClick={() => {
+                              openDevice(device.id);
+                              setSelectedVmUser({ username: user.username, displayNum: user.display_num });
+                            }}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer transition-colors ${
+                              activeView === 'devices' && isSelectedDevice && selectedVmUser?.username === user.username
+                                ? 'bg-white/8 text-nb-text'
+                                : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
+                            }`}
+                          >
+                            <Users size={11} />
+                            <span className="text-[11px] truncate flex-1">{user.username}</span>
+                            <span className="text-[10px] opacity-50">:{user.display_num}</span>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
                 );
-              })
-            )}
-          </div>
-        )}
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Footer - Create New Agent */}
@@ -386,18 +436,6 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
           <span>Create New Agent</span>
         </button>
       </div>
-
-      {/* Modals — agentId is set when user clicks + on a specific agent group */}
-      <AddLinuxVMModal
-        isOpen={showAddVMModal}
-        onClose={() => { setShowAddVMModal(false); setAddDeviceAgentId(null); }}
-        onCreated={() => { setShowAddVMModal(false); setAddDeviceAgentId(null); loadAgents(); fetchDeviceStatuses(); }}
-      />
-      <AddAndroidModal
-        isOpen={showAddAndroidModal}
-        onClose={() => { setShowAddAndroidModal(false); setAddDeviceAgentId(null); }}
-        onCreated={() => { setShowAddAndroidModal(false); setAddDeviceAgentId(null); loadAgents(); fetchDeviceStatuses(); }}
-      />
     </>
   );
 

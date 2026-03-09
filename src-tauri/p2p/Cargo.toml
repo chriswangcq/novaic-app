@@ -31,6 +31,9 @@ time = { version = "0.3", features = ["parsing"] }
 # Phase 3: HTTP 客户端（Rendezvous 心跳，与 vmcontrol 同版本避免冲突）
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 
+# QUIC ↔ WS 桥接（scrcpy tunnel server 侧）
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+
 # Phase 3: 工具
 futures-util = "0.3"
 bytes = "1"

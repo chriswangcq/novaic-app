@@ -75,7 +75,12 @@ fn get_bundled_resources_dir() -> Option<std::path::PathBuf> {
 /// scrcpy-server.jar 路径
 fn get_scrcpy_server_path() -> String {
     std::env::var("SCRCPY_SERVER").unwrap_or_else(|_| {
-        // 0. 检查 bundled 路径
+        // 0. 优先检查生产包（dev 模式 vnode 锁问题）
+        let prod_server = "/Applications/NovAIC.app/Contents/Resources/scrcpy-server";
+        if std::path::Path::new(prod_server).exists() {
+            return prod_server.to_string();
+        }
+        // 1. 检查 bundled 路径
         if let Some(res_dir) = get_bundled_resources_dir() {
             let bundled = res_dir.join("scrcpy-server");
             if bundled.exists() {
@@ -106,7 +111,11 @@ fn get_scrcpy_server_path() -> String {
 /// 获取 ADB 路径
 fn get_adb_path() -> String {
     std::env::var("ADB").unwrap_or_else(|_| {
-        // 0. 检查 bundled android-sdk
+        // 0. 检查 bundled android-sdk（优先用生产包，避免 dev 模式 vnode 锁问题）
+        let prod_adb = "/Applications/NovAIC.app/Contents/Resources/android-sdk/platform-tools/adb";
+        if std::path::Path::new(prod_adb).exists() {
+            return prod_adb.to_string();
+        }
         if let Some(res_dir) = get_bundled_resources_dir() {
             let bundled = res_dir.join("android-sdk").join("platform-tools").join("adb");
             if bundled.exists() {
