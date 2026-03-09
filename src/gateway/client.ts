@@ -6,6 +6,10 @@
 export { api as gateway } from '../services';
 export type {
   AICAgent,
+  AgentDeviceBinding,
+  DeviceSubject,
+  DeviceSubjectsResponse,
+  DeviceToolCapabilitiesResponse,
   CreateAgentRequest,
   AppConfig,
   ApiKeyInfo,

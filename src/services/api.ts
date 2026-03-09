@@ -115,10 +115,62 @@ export interface AICAgent {
   };
   // 统一设备列表（新架构）
   devices?: Device[];
+  binding?: AgentDeviceBinding | null;
 }
 
 export interface AgentListResponse {
   agents: AICAgent[];
+}
+
+export type DeviceSubjectType = 'main' | 'vm_user' | 'default';
+export type MountedTool = 'desktop' | 'file' | 'shell';
+
+export interface AgentDeviceBinding {
+  agent_id: string;
+  device_id: string;
+  subject_type: DeviceSubjectType;
+  subject_id: string;
+  mounted_tools: MountedTool[];
+  created_at: string;
+  updated_at: string;
+  device_type?: string | null;
+  device_name?: string | null;
+  subject_label?: string | null;
+  desktop_resource_id?: string | null;
+  supported_tools?: MountedTool[];
+}
+
+export interface UpsertAgentDeviceBindingRequest {
+  device_id: string;
+  subject_type: DeviceSubjectType;
+  subject_id?: string;
+  mounted_tools?: MountedTool[];
+}
+
+export interface DeviceSubject {
+  device_id: string;
+  device_type: string;
+  subject_type: DeviceSubjectType;
+  subject_id: string;
+  label: string;
+  desktop_resource_id: string;
+  supported_tools: MountedTool[];
+  username?: string;
+  display_num?: number;
+  linux_user?: string;
+  home_path?: string;
+  android_serial?: string;
+}
+
+export interface DeviceSubjectsResponse {
+  subjects: DeviceSubject[];
+}
+
+export interface DeviceToolCapabilitiesResponse {
+  device_id: string;
+  subject_type?: DeviceSubjectType | null;
+  subject_id?: string | null;
+  capabilities: MountedTool[];
 }
 
 // Android 管理模式
@@ -446,6 +498,25 @@ export const api = {
     return invoke<AICAgent>('gateway_patch', { 
       path: `/api/agents/${agentId}`, 
       body: data 
+    });
+  },
+
+  async getAgentBinding(agentId: string): Promise<AgentDeviceBinding | null> {
+    return invoke<AgentDeviceBinding | null>('gateway_get', {
+      path: `/api/agents/${agentId}/binding`,
+    });
+  },
+
+  async setAgentBinding(agentId: string, data: UpsertAgentDeviceBindingRequest): Promise<AgentDeviceBinding> {
+    return invoke<AgentDeviceBinding>('gateway_put', {
+      path: `/api/agents/${agentId}/binding`,
+      body: data,
+    });
+  },
+
+  async clearAgentBinding(agentId: string): Promise<void> {
+    await invoke('gateway_delete', {
+      path: `/api/agents/${agentId}/binding`,
     });
   },
 
@@ -969,6 +1040,27 @@ export const api = {
      */
     get: async (deviceId: string): Promise<Device> => {
       return invoke('gateway_get', { path: `/api/devices/${deviceId}` });
+    },
+
+    getSubjects: async (deviceId: string): Promise<DeviceSubjectsResponse> => {
+      return invoke<DeviceSubjectsResponse>('gateway_get', {
+        path: `/api/devices/${deviceId}/subjects`,
+      });
+    },
+
+    getToolCapabilities: async (
+      deviceId: string,
+      params?: { subject_type?: DeviceSubjectType; subject_id?: string }
+    ): Promise<DeviceToolCapabilitiesResponse> => {
+      const search = new URLSearchParams();
+      if (params?.subject_type) search.set('subject_type', params.subject_type);
+      if (params?.subject_id) search.set('subject_id', params.subject_id);
+      const qs = search.toString();
+      return invoke<DeviceToolCapabilitiesResponse>('gateway_get', {
+        path: qs
+          ? `/api/devices/${deviceId}/tool-capabilities?${qs}`
+          : `/api/devices/${deviceId}/tool-capabilities`,
+      });
     },
 
     /**
