@@ -141,6 +141,8 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>, process_state: 
         .route("/api/vms/:id/browser/type", post(browser::type_text))
         .route("/api/vms/:id/browser/content", get(browser::get_content))
         .route("/api/vms/:id/browser/screenshot", post(browser::screenshot))
+        // Sync bundled VMUSE code into a running guest VM
+        .route("/api/vms/:id/vmuse/sync", post(vmuse::sync_vmuse_to_guest))
         // VMUSE Generic Proxy - supports all tools (browser, desktop, shell, files, etc.)
         .route("/api/vms/:id/vmuse/:tool/:operation", post(vmuse::vmuse_proxy))
         // VMUSE Agent Proxy - routes VMUSE calls via agent_id to VM's port-forwarded VMUSE server

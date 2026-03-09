@@ -2,15 +2,18 @@ use axum::{
     extract::{Path, State, Json as AxumJson},
     http::StatusCode,
 };
-use crate::api::types::ApiError;
+use crate::api::types::{ApiError, VmuseSyncResponse};
 use crate::qemu::GuestAgentClient;
 use crate::api::routes::CombinedState;
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value as JsonValue;
+use std::collections::BTreeSet;
+use std::path::{Path as StdPath, PathBuf};
 use std::time::Duration;
 
 /// Default timeout for VMUSE requests (60 seconds)
 const VMUSE_TIMEOUT_SECS: u64 = 60;
+const GUEST_VMUSE_ROOT: &str = "/opt/novaic/novaic-mcp-vmuse/src/novaic_mcp_vmuse";
 
 /// Generic VMUSE proxy - forwards all requests to VM's HTTP server
 /// This supports all VMUSE tools: Browser, Desktop, Shell, Files, Windows, Context
@@ -136,6 +139,143 @@ pub async fn vmuse_proxy(
             }),
         ))
     }
+}
+
+/// Sync bundled VMUSE Python package into a running guest VM and restart service.
+pub async fn sync_vmuse_to_guest(
+    Path(vm_id): Path<String>,
+) -> Result<AxumJson<VmuseSyncResponse>, (StatusCode, AxumJson<ApiError>)> {
+    let source_root = locate_vmuse_source_root().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(ApiError {
+                error: format!("Failed to locate local VMUSE source: {e}"),
+            }),
+        )
+    })?;
+
+    let mut relative_files = Vec::new();
+    collect_python_files(&source_root, &source_root, &mut relative_files).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(ApiError {
+                error: format!("Failed to enumerate VMUSE source files: {e}"),
+            }),
+        )
+    })?;
+
+    if relative_files.is_empty() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(ApiError {
+                error: format!("No Python files found under {}", source_root.display()),
+            }),
+        ));
+    }
+
+    let socket_path = format!("/tmp/novaic/novaic-ga-{}.sock", vm_id);
+    let mut client = GuestAgentClient::connect(&socket_path).await.map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            AxumJson(ApiError {
+                error: format!("Guest Agent not available: {}", e),
+            }),
+        )
+    })?;
+
+    let mut target_dirs = BTreeSet::new();
+    target_dirs.insert(GUEST_VMUSE_ROOT.to_string());
+    for rel_path in &relative_files {
+        if let Some(parent) = rel_path.parent() {
+            let guest_parent = if parent.as_os_str().is_empty() {
+                GUEST_VMUSE_ROOT.to_string()
+            } else {
+                format!("{}/{}", GUEST_VMUSE_ROOT, parent.to_string_lossy().replace('\\', "/"))
+            };
+            target_dirs.insert(guest_parent);
+        }
+    }
+
+    let mkdir_cmd = format!(
+        "mkdir -p {}",
+        target_dirs
+            .iter()
+            .map(|dir| shell_quote(dir))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    guest_exec_checked(
+        &mut client,
+        "/bin/sh",
+        vec!["-lc".to_string(), mkdir_cmd],
+        "create VMUSE directories",
+    )
+    .await?;
+
+    for rel_path in &relative_files {
+        let local_path = source_root.join(rel_path);
+        let guest_path = format!(
+            "{}/{}",
+            GUEST_VMUSE_ROOT,
+            rel_path.to_string_lossy().replace('\\', "/")
+        );
+        let data = std::fs::read(&local_path).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(ApiError {
+                    error: format!("Failed to read local file {}: {}", local_path.display(), e),
+                }),
+            )
+        })?;
+        client.write_file(&guest_path, &data).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(ApiError {
+                    error: format!("Failed to write guest file {}: {}", guest_path, e),
+                }),
+            )
+        })?;
+    }
+
+    guest_exec_checked(
+        &mut client,
+        "/bin/sh",
+        vec![
+            "-lc".to_string(),
+            "systemctl daemon-reload && systemctl restart novaic-vmuse".to_string(),
+        ],
+        "restart novaic-vmuse",
+    )
+    .await?;
+
+    let health_response = guest_exec_checked(
+        &mut client,
+        "/bin/sh",
+        vec![
+            "-lc".to_string(),
+            "curl -sf http://127.0.0.1:8080/health".to_string(),
+        ],
+        "check novaic-vmuse health",
+    )
+    .await?;
+
+    Ok(AxumJson(VmuseSyncResponse {
+        status: "ok".to_string(),
+        message: "Guest VMUSE synced and restarted".to_string(),
+        source_root: source_root.display().to_string(),
+        target_root: GUEST_VMUSE_ROOT.to_string(),
+        files_synced: relative_files.len(),
+        health_status: if health_response.contains("\"healthy\"") {
+            "healthy".to_string()
+        } else {
+            "unknown".to_string()
+        },
+        health_response: if health_response.is_empty() {
+            None
+        } else {
+            Some(health_response)
+        },
+    }))
 }
 
 /// VMUSE Agent Proxy - forwards requests to VM via port forwarding
@@ -357,4 +497,139 @@ async fn get_agent_vmuse_port(
         })?;
 
     Ok(vmuse_port)
+}
+
+fn locate_vmuse_source_root() -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+
+    if let Ok(resource_dir) = std::env::var("NOVAIC_RESOURCE_DIR") {
+        if !resource_dir.trim().is_empty() {
+            candidates.push(
+                PathBuf::from(resource_dir)
+                    .join("novaic-mcp-vmuse")
+                    .join("src")
+                    .join("novaic_mcp_vmuse"),
+            );
+        }
+    }
+
+    if let Some(resources_dir) = get_bundled_resources_dir() {
+        candidates.push(
+            resources_dir
+                .join("novaic-mcp-vmuse")
+                .join("src")
+                .join("novaic_mcp_vmuse"),
+        );
+    }
+
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let manifest_path = PathBuf::from(manifest_dir);
+        if let Some(src_tauri_dir) = manifest_path.parent() {
+            candidates.push(
+                src_tauri_dir
+                    .join("resources")
+                    .join("novaic-mcp-vmuse")
+                    .join("src")
+                    .join("novaic_mcp_vmuse"),
+            );
+            if let Some(app_dir) = src_tauri_dir.parent() {
+                if let Some(workspace_dir) = app_dir.parent() {
+                    candidates.push(
+                        workspace_dir
+                            .join("novaic-mcp-vmuse")
+                            .join("src")
+                            .join("novaic_mcp_vmuse"),
+                    );
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.join("http_server.py").exists())
+        .ok_or_else(|| "no candidate VMUSE source directory exists".to_string())
+}
+
+fn get_bundled_resources_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+
+    let resources = exe.parent()?.parent()?.join("Resources");
+    if resources.join("novaic-mcp-vmuse").exists() {
+        return Some(resources);
+    }
+
+    let exe_dir = exe.parent()?;
+    if exe_dir.join("novaic-mcp-vmuse").exists() {
+        return Some(exe_dir.to_path_buf());
+    }
+
+    None
+}
+
+fn collect_python_files(
+    root: &StdPath,
+    current: &StdPath,
+    output: &mut Vec<PathBuf>,
+) -> Result<(), std::io::Error> {
+    for entry in std::fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            collect_python_files(root, &path, output)?;
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("py") {
+            if let Ok(relative) = path.strip_prefix(root) {
+                output.push(relative.to_path_buf());
+            }
+        }
+    }
+    output.sort();
+    Ok(())
+}
+
+fn decode_guest_output(data: Option<String>) -> String {
+    data.and_then(|encoded| general_purpose::STANDARD.decode(encoded).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .unwrap_or_default()
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+async fn guest_exec_checked(
+    client: &mut GuestAgentClient,
+    path: &str,
+    args: Vec<String>,
+    action: &str,
+) -> Result<String, (StatusCode, AxumJson<ApiError>)> {
+    let status = client.exec_sync(path, args).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(ApiError {
+                error: format!("Failed to {action}: {e}"),
+            }),
+        )
+    })?;
+
+    let stdout = decode_guest_output(status.stdout);
+    let stderr = decode_guest_output(status.stderr);
+
+    if status.exit_code.unwrap_or(1) != 0 {
+        let detail = if stderr.is_empty() { stdout.clone() } else { stderr.clone() };
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(ApiError {
+                error: format!(
+                    "Failed to {action}: exit_code={:?}, output={}",
+                    status.exit_code,
+                    detail
+                ),
+            }),
+        ));
+    }
+
+    Ok(stdout)
 }

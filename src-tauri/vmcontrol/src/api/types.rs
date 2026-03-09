@@ -152,6 +152,19 @@ pub struct WriteFileResponse {
     pub bytes_written: usize,
 }
 
+/// VMUSE sync response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VmuseSyncResponse {
+    pub status: String,
+    pub message: String,
+    pub source_root: String,
+    pub target_root: String,
+    pub files_synced: usize,
+    pub health_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_response: Option<String>,
+}
+
 // ============ Browser Control Related Types ============
 
 /// Navigate to URL request
