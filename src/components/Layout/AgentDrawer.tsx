@@ -9,7 +9,7 @@ import { Plus, Monitor, HardDrive, Smartphone, ChevronDown, Home, Users, Refresh
 import { useAppStore } from '../../application/store';
 import { useAgent } from '../hooks/useAgent';
 import { useLayout } from '../hooks/useLayout';
-import { useIsLgOrAbove } from '../../hooks/useMediaQuery';
+import { useIsSidebarLayout } from '../../hooks/useMediaQuery';
 import { Resizer } from './Resizer';
 import type { AICAgent } from '../../services/api';
 import { api } from '../../services/api';
@@ -17,6 +17,7 @@ import type { Device, VmUser } from '../../types';
 import { vmService, VmStatus } from '../../services/vm';
 import { getLastMessage } from '../../db/messageRepo';
 import { POLL_CONFIG, LAYOUT_CONFIG } from '../../config';
+import { SettingsModal } from '../Settings/SettingsModal';
 
 interface AgentDrawerProps {
   isOpen: boolean;
@@ -29,12 +30,22 @@ interface AgentDrawerProps {
   activeView?: 'chat' | 'devices';
   /** 点击 Devices 入口时的回调 */
   onOpenDevices?: () => void;
+  /** 窄屏一级页面：作为主内容全屏展示，非浮层 */
+  asPrimaryPage?: boolean;
+  /** 主导航当前 tab（agents | devices | setting） */
+  primaryTab?: 'agents' | 'devices' | 'setting';
+  /** 打开设置模态 */
+  onOpenSettings?: () => void;
+  /** 设置二级 tab 选中，在第三栏渲染 */
+  settingsSubTab?: import('../Settings/SettingsModal').SettingsTab | null;
+  /** 点击设置子项，由父组件在第三栏渲染 */
+  onSettingsSubTabSelect?: (tab: import('../Settings/SettingsModal').SettingsTab) => void;
 }
 
-export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal', activeView, onOpenDevices }: AgentDrawerProps) {
+export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal', activeView, onOpenDevices, asPrimaryPage = false, primaryTab = 'agents', onOpenSettings, settingsSubTab, onSettingsSubTabSelect }: AgentDrawerProps) {
   const { agents, currentAgentId, loadAgents } = useAgent();
   const { drawerWidth, setDrawerWidth } = useLayout();
-  const isOverlay = !useIsLgOrAbove();
+  const isOverlay = !useIsSidebarLayout() && !asPrimaryPage;
   const userId = useAppStore(s => s.user?.user_id);
   const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
   const selectedVmUser = useAppStore(s => s.selectedVmUser);
@@ -195,77 +206,86 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     return 'bg-slate-400';
   };
 
-  const drawerInner = (
-    <>
-      {/* Agent List */}
-      <div className="flex-1 overflow-y-auto">
-        {agents.length === 0 ? (
-          <div className="px-4 py-8 text-center text-nb-text-secondary text-sm">
-            <Monitor size={32} className="mx-auto mb-3 opacity-50" />
-            <p>No agents yet</p>
-            <p className="text-xs mt-1">Create one to get started</p>
-          </div>
-        ) : (
-          <div className="py-1">
-            {agents.map(agent => {
-              const isSelected = agent.id === currentAgentId;
-              const lastMsg = lastMessages[agent.id];
-              
-              return (
-                <div
-                  key={agent.id}
-                  onClick={() => handleSelect(agent)}
-                  className={`mx-2 mb-0.5 px-3 py-2.5 rounded-lg cursor-pointer transition-all ${
-                    isSelected 
-                      ? 'bg-white/10 shadow-sm' 
-                      : 'hover:bg-white/[0.03]'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    {/* Avatar/Icon */}
-                    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0 border border-white/10">
-                      <Monitor size={20} className="text-white/60" />
+  const agentsContent = (
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="shrink-0 border-b border-nb-border">
+        <div className="flex items-center justify-between px-3 py-2">
+          <span data-tauri-drag-region className="flex-1 flex items-center gap-2 text-sm font-medium text-nb-text cursor-default min-w-0">
+            <Monitor size={14} strokeWidth={1.6} />
+            Agents
+          </span>
+          <button
+            type="button"
+            onClick={onCreateNew}
+            className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+            title="Create new agent"
+          >
+            <Plus size={12} />
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+          {agents.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-nb-text-secondary/50">
+              No agents yet
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {agents.map(agent => {
+                const isSelected = agent.id === currentAgentId;
+                const lastMsg = lastMessages[agent.id];
+
+                return (
+                  <div
+                    key={agent.id}
+                    onClick={() => handleSelect(agent)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                      activeView === 'chat' && isSelected
+                        ? 'bg-white/10 text-nb-text'
+                        : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
+                    }`}
+                  >
+                    <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-white/5 border border-white/10">
+                      <Monitor size={14} className="text-white/60" />
                     </div>
-                    
-                    {/* Info */}
                     <div className="flex-1 min-w-0">
-                      {/* 第一行：名字 + 系统版本 + 状态点 */}
                       <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium text-nb-text truncate shrink">
-                          {agent.name}
-                        </span>
-                        <span className="text-[11px] text-nb-text-muted whitespace-nowrap shrink-0">
-                          {agent.vm.os_version}
-                        </span>
+                        <span className="text-sm truncate">{agent.name}</span>
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusColor(agent)}`} />
                       </div>
-                      {/* 第二行：最新对话摘要 */}
-                      <div className="text-xs text-nb-text-muted mt-0.5 truncate">
-                        {lastMsg || (agent.setup_complete ? 'No messages yet' : 'Needs setup')}
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-[10px] opacity-50">{agent.vm.os_version}</span>
+                        <span className="text-[10px] text-nb-text-muted truncate">
+                          {lastMsg || (agent.setup_complete ? 'No messages yet' : 'Needs setup')}
+                        </span>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
+    </div>
+  );
 
-      {/* Devices section */}
-      <div className="shrink-0 border-t border-nb-border">
+  const devicesContent = (
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="shrink-0 border-b border-nb-border">
         <div className="flex items-center justify-between px-3 py-2">
           <button
             type="button"
             onClick={onOpenDevices}
-            className={`flex items-center gap-2 text-sm ${
+            className={`flex items-center gap-2 text-sm shrink-0 ${
               activeView === 'devices' ? 'text-nb-text' : 'text-nb-text-secondary hover:text-nb-text'
             }`}
           >
             <HardDrive size={14} strokeWidth={1.6} />
             <span className="font-medium">Devices</span>
           </button>
-          <div className="flex items-center gap-1">
+          <div data-tauri-drag-region className="flex-1 min-w-0 cursor-default" />
+          <div className="flex items-center gap-1 shrink-0">
             <div className="relative">
               <button
                 type="button"
@@ -315,7 +335,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
           </div>
         </div>
 
-        <div className="max-h-[38vh] overflow-y-auto px-2 pb-2">
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
           {devices.length === 0 ? (
             <div className="px-3 py-3 text-xs text-nb-text-secondary/50">
               {devicesLoading ? 'Loading devices…' : 'No devices yet'}
@@ -422,24 +442,44 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
           )}
         </div>
       </div>
+    </div>
+  );
 
-      {/* Footer - Create New Agent */}
-      <div className="p-3 border-t border-nb-border shrink-0">
-        <button
-          onClick={() => {
-            onCreateNew();
-            onClose();
-          }}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white/15 hover:bg-white/20 text-white rounded-lg transition-all text-sm font-medium shadow-lg border border-white/20"
-        >
-          <Plus size={18} />
-          <span>Create New Agent</span>
-        </button>
-      </div>
+  const settingsContent = (
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+      <SettingsModal
+        open={true}
+        onClose={() => {}}
+        embedded
+        embeddedMode="list"
+        embeddedTab={settingsSubTab ?? undefined}
+        onEmbeddedSubTabSelect={onSettingsSubTabSelect}
+      />
+    </div>
+  );
+
+  const drawerInner = (
+    <>
+      {primaryTab === 'agents' && agentsContent}
+      {primaryTab === 'devices' && devicesContent}
+      {primaryTab === 'setting' && settingsContent}
     </>
   );
 
-  // lg 以下：overlay 浮层 + 遮罩
+  // 窄屏一级页面：全屏主内容
+  if (asPrimaryPage) {
+    return (
+      <div
+        ref={drawerRef}
+        className="flex-1 flex flex-col min-w-0 overflow-hidden bg-nb-surface border-r border-nb-border"
+        style={{ width: '100%' }}
+      >
+        {drawerInner}
+      </div>
+    );
+  }
+
+  // lg 以下（非一级）：overlay 浮层 + 遮罩
   if (isOverlay) {
     return (
       <>

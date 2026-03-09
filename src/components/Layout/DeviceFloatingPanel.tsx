@@ -1,21 +1,26 @@
 /**
  * DeviceFloatingPanel – per-device floating windows.
  *
- * Key design: ONE fixed div per device that morphs between preview size/position
+ * Data source: agent binding (getAgentBinding + devices.get) instead of agent.devices.
+ * Renders by subject_type: main → VNCViewShared, vm_user → VmUserVNCView, default → ScrcpyView.
+ *
+ * Key design: ONE fixed div per subject that morphs between preview size/position
  * and expanded size/position using CSS transitions.
- * The stream component (VNCViewShared / ScrcpyView) is ALWAYS mounted inside
- * this div and NEVER remounts → no reconnection on expand/collapse.
+ * The stream component is ALWAYS mounted inside this div and NEVER remounts → no reconnection on expand/collapse.
  */
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, Power, MousePointer2, Monitor, Smartphone, Loader2 } from 'lucide-react';
 import { useAgent } from '../hooks/useAgent';
+import { useAgentBinding } from '../../hooks/useAgentBinding';
 import { api } from '../../services/api';
 import { VNCViewShared } from '../Visual/VNCViewShared';
+import { VmUserVNCView } from '../VM/VmUserVNCView';
 import { ScrcpyView } from '../Visual/ScrcpyView';
 import { Device, isLinuxDevice, AndroidDevice as AndroidDeviceType } from '../../types';
 import { setVNCViewOnly } from '../../services/vncStream';
+import type { AgentDeviceBinding } from '../../services/api';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -34,13 +39,17 @@ const DEVICE_RATIO = { linux: 16 / 10, android: 9 / 19.5 };
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface DeviceInfo {
-  id: string;
-  type: 'linux' | 'android';
-  name: string;
-  isRunning: boolean;
-  serial?: string;
-}
+interface SubjectCardInfo {
+  device: Device;
+  binding: AgentDeviceBinding;
+  deviceInfo: {
+    id: string;
+    type: 'linux' | 'android';
+    name: string;
+    isRunning: boolean;
+    serial?: string;
+  };
+};
 
 interface Rect { left: number; top: number; width: number; height: number; }
 
@@ -109,28 +118,35 @@ function PowerMenu({ onCancel, onConfirm, align = 'right' }: {
 // ─── Single device card (morphs between preview ↔ overlay) ───────────────────
 
 interface CardProps {
-  device: DeviceInfo;
+  subjectCard: SubjectCardInfo;
+  agentId: string;
   bottomOffset: number;
   spacerWidth: number;
+  inline?: boolean;
 }
 
-function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
+function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = false }: CardProps) {
+  const { device, binding, deviceInfo } = subjectCard;
   const [expanded,       setExpanded]       = useState(false);
   const [operating,      setOperating]      = useState(false);
   const [showPowerMenu,  setShowPowerMenu]  = useState(false);
 
-  // Geometry: always in left/top coords so CSS transition works smoothly
-  const [rect, setRect] = useState<Rect>(() => previewRect(device.type, bottomOffset));
+  const [rect, setRect] = useState<Rect>(() =>
+    inline ? { left: 0, top: 0, width: COL_WIDTH, height: 96 } : previewRect(deviceInfo.type, bottomOffset)
+  );
 
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickCount = useRef(0);
 
+  const isMain = deviceInfo.type === 'linux' && binding.subject_type === 'main';
+  const isVmUser = deviceInfo.type === 'linux' && binding.subject_type === 'vm_user';
+  const isAndroid = deviceInfo.type === 'android';
 
-  // Recompute geometry when window resizes or state changes
   const recompute = useCallback(() => {
-    if (expanded) setRect(overlayRect(device.type, spacerWidth));
-    else          setRect(previewRect(device.type, bottomOffset));
-  }, [expanded, device.type, spacerWidth, bottomOffset]);
+    if (expanded) setRect(overlayRect(deviceInfo.type, inline ? 0 : spacerWidth));
+    else if (inline) setRect({ left: 0, top: 0, width: COL_WIDTH, height: 96 });
+    else setRect(previewRect(deviceInfo.type, bottomOffset));
+  }, [expanded, deviceInfo.type, spacerWidth, bottomOffset, inline]);
 
   useLayoutEffect(() => {
     recompute();
@@ -148,31 +164,29 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
     return () => document.removeEventListener('keydown', onKey);
   }, [expanded, operating]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // VNC viewOnly + trigger coordinate recalc when entering operating mode
+  // VNC viewOnly for main subject (uses deviceId as stream key)
   useEffect(() => {
-    if (device.type === 'linux') {
+    if (isMain && device.id) {
       setVNCViewOnly(device.id, !operating);
       if (operating) {
-        // Give RFB a moment to un-viewOnly then recompute layout
         setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
       }
     }
-    return () => { if (device.type === 'linux') setVNCViewOnly(device.id, true); };
-  }, [device.id, device.type, operating]);
+    return () => { if (isMain && device.id) setVNCViewOnly(device.id, true); };
+  }, [device.id, isMain, operating]);
 
   const expand = useCallback(() => {
-    setRect(overlayRect(device.type, spacerWidth));
+    setRect(overlayRect(deviceInfo.type, inline ? 0 : spacerWidth));
     setExpanded(true);
-    // After the CSS transition finishes, fire a resize so noVNC
-    // recalculates its scale/coordinate mapping at the final size.
     setTimeout(() => window.dispatchEvent(new Event('resize')), 380);
-  }, [device.type, spacerWidth]);
+  }, [deviceInfo.type, spacerWidth, inline]);
 
   const collapse = useCallback(() => {
-    setRect(previewRect(device.type, bottomOffset));
+    if (inline) setRect({ left: 0, top: 0, width: COL_WIDTH, height: 96 });
+    else setRect(previewRect(deviceInfo.type, bottomOffset));
     setExpanded(false);
     setOperating(false);
-  }, [device.type, bottomOffset]);
+  }, [deviceInfo.type, bottomOffset, inline]);
 
   // Single click → expand; double click → operating
   const handleClick = (e: React.MouseEvent) => {
@@ -187,8 +201,6 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
     }, 250);
   };
 
-  // Outside-click handler attached to document (only when expanded)
-  // We use a ref-based approach to avoid stale closures
   const cardRef    = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -205,23 +217,33 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
     return () => { clearTimeout(id); document.removeEventListener('mousedown', onOutside); };
   }, [expanded, showPowerMenu, collapse]);
 
+  const cardStyle = inline && !expanded
+    ? { width: '100%', height: '100%', borderRadius: 12 }
+    : {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+        borderRadius: expanded ? 16 : 12,
+        zIndex: expanded ? 9999 : 50,
+      };
+
   return (
     <>
-      {/* Scrim – only when expanded, rendered behind card via portal */}
       {expanded && createPortal(
         <div
           className="fixed z-[9990] animate-scrim-in pointer-events-none"
-          style={{ top: 0, left: 0, right: spacerWidth, bottom: 0,
+          style={{ top: 0, left: 0, right: inline ? 0 : spacerWidth, bottom: 0,
                    background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(3px)' }}
         />,
         document.body
       )}
 
-      {/* ── The card itself – morphs via CSS transition ── */}
       <div
         ref={cardRef}
         className={`
-          fixed flex flex-col cursor-pointer
+          flex flex-col cursor-pointer
+          ${inline && !expanded ? 'relative w-full h-full' : 'fixed'}
           transition-[left,top,width,height,border-radius,box-shadow,border-color] duration-[350ms]
           ease-[cubic-bezier(0.34,1.56,0.64,1)]
           border
@@ -233,35 +255,31 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
           }
           bg-black
         `}
-        style={{
-          left:         rect.left,
-          top:          rect.top,
-          width:        rect.width,
-          height:       rect.height,
-          borderRadius: expanded ? 16 : 12,
-          zIndex:       expanded ? 9999 : 50,
-        }}
+        style={cardStyle}
       >
-        {/* ── Stream – ALWAYS mounted, never remounts ── */}
         <div className="w-full h-full bg-black overflow-hidden relative group/card rounded-[inherit]">
-          {device.type === 'linux' ? (
+          {isMain ? (
             <div className="w-full h-full">
-              <VNCViewShared isThumbnail={false} />
+              <VNCViewShared agentId={agentId} deviceId={device.id} isThumbnail={false} />
             </div>
-          ) : (
+          ) : isVmUser ? (
+            <div className="w-full h-full">
+              <VmUserVNCView
+                deviceId={device.id}
+                username={binding.subject_id}
+                displayNum={0}
+                onClose={collapse}
+                embedded={!expanded}
+              />
+            </div>
+          ) : isAndroid ? (
             <div className="w-full h-full flex items-center justify-center">
               <div className="w-full h-full" style={{ aspectRatio: '9 / 19.5' }}>
-                <ScrcpyView deviceSerial={device.serial} isThumbnail={false} autoConnect={true} />
+                <ScrcpyView deviceSerial={deviceInfo.serial!} isThumbnail={false} autoConnect={true} />
               </div>
             </div>
-          )}
+          ) : null}
 
-          {/*
-            ── Interaction interceptor overlay ──
-            Non-operating: covers the whole stream, captures click/dblclick before
-            canvas native listeners can swallow them.
-            Operating: pointer-events:none → events reach the canvas directly.
-          */}
           <div
             className={`absolute inset-0 z-20 ${operating ? 'pointer-events-none' : 'cursor-pointer'}`}
             onClick={operating ? undefined : handleClick}
@@ -274,7 +292,6 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
             }}
           />
 
-          {/* Preview hover controls (non-expanded only) */}
           {!expanded && (
             <div className="absolute top-1.5 right-1.5 z-30 flex items-center gap-1
                             opacity-0 group-hover/card:opacity-100 transition-opacity duration-150">
@@ -296,7 +313,6 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
             </div>
           )}
 
-          {/* Preview hover hint */}
           {!expanded && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none
                             opacity-0 group-hover/card:opacity-100 transition-opacity">
@@ -308,16 +324,13 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
         </div>
       </div>
 
-      {/* ── Expanded toolbar OUTSIDE the card ── */}
-      {expanded && device.type === 'linux' && (
-        /* VM: horizontal bar above the card, same width, follows rect via transition */
+      {expanded && deviceInfo.type === 'linux' && (
         <div
           ref={toolbarRef}
           className="fixed flex items-center justify-between px-2.5
                      transition-[left,top,width] duration-[350ms] ease-[cubic-bezier(0.34,1.56,0.64,1)]"
           style={{ left: rect.left, top: rect.top - 40, width: rect.width, height: 32, zIndex: 10000 }}
         >
-          {/* left: operating indicator */}
           <div className="flex items-center">
             {operating && (
               <span className="flex items-center gap-1 px-2 py-1 rounded-full
@@ -326,7 +339,6 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
               </span>
             )}
           </div>
-          {/* right: action buttons */}
           <div className="flex items-center gap-1.5">
             <button
               onClick={e => { e.stopPropagation(); setOperating(v => !v); }}
@@ -358,8 +370,7 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
         </div>
       )}
 
-      {expanded && device.type === 'android' && (
-        /* AVD: vertical strip to the right of the card, vertically centered */
+      {expanded && deviceInfo.type === 'android' && (
         <div
           ref={toolbarRef}
           className="fixed flex flex-col items-center gap-2
@@ -402,11 +413,13 @@ function DeviceCard({ device, bottomOffset, spacerWidth }: CardProps) {
 // ─── Stopped-device chip ─────────────────────────────────────────────────────
 
 interface ChipProps {
-  device: DeviceInfo;
+  subjectCard: SubjectCardInfo;
   bottomOffset: number;
+  inline?: boolean;
 }
 
-function StoppedDeviceChip({ device, bottomOffset }: ChipProps) {
+function StoppedDeviceChip({ subjectCard, bottomOffset, inline = false }: ChipProps) {
+  const { device, binding, deviceInfo } = subjectCard;
   const [starting, setStarting] = useState(false);
 
   const handleStart = async (e: React.MouseEvent) => {
@@ -423,37 +436,37 @@ function StoppedDeviceChip({ device, bottomOffset }: ChipProps) {
   };
 
   const chipH = 40;
-  const left  = window.innerWidth - RIGHT - COL_WIDTH;
-  const top   = window.innerHeight - bottomOffset - chipH;
+  const displayName = binding.subject_label || deviceInfo.name;
+
+  const chipStyle = inline
+    ? { minWidth: 100, height: chipH, borderRadius: 12 }
+    : {
+        left: window.innerWidth - RIGHT - COL_WIDTH,
+        top: window.innerHeight - bottomOffset - chipH,
+        width: COL_WIDTH,
+        height: chipH,
+        borderRadius: 12,
+        zIndex: 50,
+      };
 
   return (
     <div
-      className="fixed flex items-center gap-2 px-2.5 border border-nb-border/50 bg-nb-surface/70
+      className={`flex items-center gap-2 px-2.5 border border-nb-border/50 bg-nb-surface/70
                  backdrop-blur-sm cursor-default select-none
-                 transition-[top] duration-300"
-      style={{
-        left,
-        top,
-        width:        COL_WIDTH,
-        height:       chipH,
-        borderRadius: 12,
-        zIndex:       50,
-      }}
+                 ${inline ? 'relative shrink-0 w-fit' : 'fixed'} transition-[top] duration-300`}
+      style={chipStyle}
     >
-      {/* Device icon */}
       <div className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md bg-nb-surface-hover text-nb-text-muted">
-        {device.type === 'linux'
+        {deviceInfo.type === 'linux'
           ? <Monitor size={13} />
           : <Smartphone size={13} />
         }
       </div>
 
-      {/* Name */}
       <span className="flex-1 min-w-0 text-[11px] text-nb-text-muted truncate leading-tight">
-        {device.name}
+        {displayName}
       </span>
 
-      {/* Start button */}
       <button
         onClick={handleStart}
         disabled={starting}
@@ -475,47 +488,62 @@ function StoppedDeviceChip({ device, bottomOffset }: ChipProps) {
 
 // ─── Container ───────────────────────────────────────────────────────────────
 
-export function DeviceFloatingPanel() {
-  const { currentAgentId, agents } = useAgent();
+interface DeviceFloatingPanelProps {
+  /** 内联模式：与输入框同排，挤占部分宽度，高度一致 */
+  inline?: boolean;
+}
+
+export function DeviceFloatingPanel({ inline = false }: DeviceFloatingPanelProps) {
+  const { currentAgentId, currentAgent } = useAgent();
+  const { binding, device, loading, error } = useAgentBinding(currentAgentId, currentAgent?.binding ?? undefined);
   const [deviceStatuses, setDeviceStatuses] = useState<Record<string, boolean>>({});
 
-  const currentAgent = currentAgentId ? agents.find(a => a.id === currentAgentId) : null;
-
-  const fetchDeviceStatuses = useCallback(async () => {
-    if (!currentAgent?.devices?.length) { setDeviceStatuses({}); return; }
-    const s: Record<string, boolean> = {};
-    for (const d of currentAgent.devices) {
-      try { s[d.id] = (await api.devices.status(d.id)).running; } catch { s[d.id] = false; }
+  const fetchDeviceStatus = useCallback(async () => {
+    if (!device?.id) { setDeviceStatuses({}); return; }
+    try {
+      const s = await api.devices.status(device.id);
+      setDeviceStatuses({ [device.id]: s.running });
+    } catch {
+      setDeviceStatuses({ [device.id]: false });
     }
-    setDeviceStatuses(s);
-  }, [currentAgent?.devices]);
+  }, [device?.id]);
 
   useEffect(() => {
-    fetchDeviceStatuses();
-    const id = setInterval(fetchDeviceStatuses, 5000);
+    fetchDeviceStatus();
+    const id = setInterval(fetchDeviceStatus, 5000);
     return () => clearInterval(id);
-  }, [fetchDeviceStatuses]);
+  }, [fetchDeviceStatus]);
 
-  const devices: DeviceInfo[] = (currentAgent?.devices || []).map((device: Device) => {
-    const isRunning = deviceStatuses[device.id] || false;
-    if (isLinuxDevice(device))
-      return { id: device.id, type: 'linux' as const, name: device.name || 'Linux VM', isRunning };
-    const a = device as AndroidDeviceType;
-    return { id: device.id, type: 'android' as const, name: device.name || a.avd_name || 'Android', isRunning, serial: a.device_serial };
-  });
+  if (!currentAgentId) return null;
+  if (loading) return null;
+  if (error) {
+    console.warn('[DeviceFloatingPanel] Error:', error);
+    return null;
+  }
+  if (!binding || !device) return null;
 
-  const running = devices.filter(d =>  d.isRunning);
-  const stopped = devices.filter(d => !d.isRunning);
+  const isRunning = deviceStatuses[device.id] ?? false;
 
-  // Stack running cards from bottom up
+  const deviceInfo = {
+    id: device.id,
+    type: device.type as 'linux' | 'android',
+    name: binding.device_name || device.name || (device.type === 'linux' ? 'Linux VM' : 'Android'),
+    isRunning,
+    serial: isLinuxDevice(device) ? undefined : (device as AndroidDeviceType).device_serial,
+  };
+
+  const subjectCard: SubjectCardInfo = { device, binding, deviceInfo };
+
+  const running = isRunning ? [subjectCard] : [];
+  const stopped = !isRunning ? [subjectCard] : [];
+
   const runningOffsets: number[] = [];
   let cursor = STACK_BOTTOM;
-  for (const d of running) {
+  for (const sc of running) {
     runningOffsets.push(cursor);
-    cursor += PREVIEW_H[d.type] + HEADER_H + GAP;
+    cursor += PREVIEW_H[sc.deviceInfo.type] + HEADER_H + GAP;
   }
 
-  // Stack stopped chips above the running cards (or from STACK_BOTTOM if none running)
   const CHIP_H = 40;
   const stoppedOffsets: number[] = [];
   for (const _ of stopped) {
@@ -523,31 +551,62 @@ export function DeviceFloatingPanel() {
     cursor += CHIP_H + GAP;
   }
 
-  const hasAny      = devices.length > 0;
-  const spacerWidth = hasAny ? COL_WIDTH + RIGHT + 8 : 0;
+  const hasAny = running.length > 0 || stopped.length > 0;
+  const spacerWidth = inline ? 0 : (hasAny ? COL_WIDTH + RIGHT + 8 : 0);
+
+  const cardKey = `${binding.device_id}:${binding.subject_type}:${binding.subject_id}`;
+
+  if (inline) {
+    return (
+      <div className="shrink-0 w-auto h-[96px] flex flex-col justify-end gap-1.5 px-2 py-2 border-l border-nb-border/40 bg-nb-bg/60">
+        {running.map((sc, i) => (
+          <div
+            key={cardKey}
+            className={`h-full shrink-0 ${sc.deviceInfo.type === 'linux' ? 'aspect-[16/10]' : 'aspect-[9/19.5]'}`}
+          >
+            <DeviceCard
+              subjectCard={sc}
+              agentId={currentAgentId}
+              bottomOffset={runningOffsets[i]}
+              spacerWidth={spacerWidth}
+              inline
+            />
+          </div>
+        ))}
+        {stopped.map((sc, i) => (
+          <StoppedDeviceChip
+            key={cardKey}
+            subjectCard={sc}
+            bottomOffset={stoppedOffsets[i]}
+            inline
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <>
-      {/* Invisible flex spacer – causes ChatPanel to yield space */}
       <div
         className="shrink-0 h-full transition-[width] duration-300 ease-out"
         style={{ width: spacerWidth }}
         aria-hidden
       />
 
-      {running.map((device, i) => (
+      {running.map((sc, i) => (
         <DeviceCard
-          key={device.id}
-          device={device}
+          key={cardKey}
+          subjectCard={sc}
+          agentId={currentAgentId}
           bottomOffset={runningOffsets[i]}
           spacerWidth={spacerWidth}
         />
       ))}
 
-      {stopped.map((device, i) => (
+      {stopped.map((sc, i) => (
         <StoppedDeviceChip
-          key={device.id}
-          device={device}
+          key={cardKey}
+          subjectCard={sc}
           bottomOffset={stoppedOffsets[i]}
         />
       ))}

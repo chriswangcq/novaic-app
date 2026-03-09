@@ -8,11 +8,19 @@ import { useVNCConnection } from '../Visual/useVNCConnection';
 
 const RECENT_AGENTS_LIMIT = 5;
 
+type NarrowPage = 'sidebar' | 'chat' | 'devices';
+
 interface HeaderProps {
   onOpenSettings: () => void;
   onToggleDrawer: () => void;
   isDrawerOpen: boolean;
   onAgentCreated?: () => void;
+  /** 宽屏边栏布局：true 时隐藏三杠；窄屏一二级时 二级 显示返回 */
+  isSidebarLayout?: boolean;
+  narrowPage?: NarrowPage;
+  onBackToSidebar?: () => void;
+  /** 紧凑模式：用于第三栏，不显示 logo，不预留红绿灯空间 */
+  compact?: boolean;
 }
 
 // Status dot config
@@ -27,7 +35,9 @@ const STATUS_DOT: Record<string, { dot: string; label: string; pulse: boolean }>
 };
 
 export function Header(props: HeaderProps) {
-  const { onOpenSettings, onToggleDrawer, isDrawerOpen, onAgentCreated } = props;
+  const { onOpenSettings, onToggleDrawer, isDrawerOpen, onAgentCreated, isSidebarLayout = true, narrowPage = 'sidebar', onBackToSidebar, compact = false } = props;
+  const showBackButton = !isSidebarLayout && narrowPage !== 'sidebar' && onBackToSidebar;
+  const showHamburger = isSidebarLayout && !isDrawerOpen;
   const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);
   const { createModalOpen: createAgentModalOpen, setCreateModal, agents, currentAgentId, select: selectAgent } = useAgent();
   const setCreateAgentModalOpen = (open: boolean) => setCreateModal(open);
@@ -96,24 +106,34 @@ export function Header(props: HeaderProps) {
       <header
         className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
                     flex items-center pr-2 no-select shrink-0
-                    ${isMacOS ? 'pl-[76px]' : 'pl-2'}`}
+                    ${compact ? 'pl-2' : isMacOS ? 'pl-[76px]' : 'pl-2'}`}
         onMouseDown={handleHeaderMouseDown}
       >
-        {/* Logo + menu toggle */}
+        {/* Logo + 三杠(宽屏) / 返回(窄屏二级) — compact 时只显示三杠 */}
         <div className="flex items-center gap-1 shrink-0">
-          <img src="/logo.png" alt="NovAIC" className="w-5 h-5 opacity-90" />
-          <button
-            onClick={onToggleDrawer}
-            className={`w-7 h-7 flex items-center justify-center rounded-md transition-all
-                        ${isDrawerOpen ? 'bg-white/[0.08] text-nb-text' : 'text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text'}`}
-            title="Toggle sidebar"
-          >
-            <Menu size={15} strokeWidth={1.8} />
-          </button>
+          {!compact && <img src="/logo.png" alt="NovAIC" className="w-5 h-5 opacity-90" />}
+          {showBackButton ? (
+            <button
+              onClick={onBackToSidebar}
+              className="w-7 h-7 flex items-center justify-center rounded-md text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text transition-all"
+              title="返回"
+            >
+              <ChevronLeft size={15} strokeWidth={1.8} />
+            </button>
+          ) : showHamburger ? (
+            <button
+              onClick={onToggleDrawer}
+              className={`w-7 h-7 flex items-center justify-center rounded-md transition-all
+                          ${isDrawerOpen ? 'bg-white/[0.08] text-nb-text' : 'text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text'}`}
+              title="Toggle sidebar"
+            >
+              <Menu size={15} strokeWidth={1.8} />
+            </button>
+          ) : null}
         </div>
 
-        {/* Spacer */}
-        <div className="flex-1" />
+        {/* Spacer — 非按钮区域可拖动 */}
+        <div data-tauri-drag-region className="flex-1 cursor-default" />
 
         {/* Center — agent selector + status */}
         {currentAgent ? (
@@ -193,8 +213,8 @@ export function Header(props: HeaderProps) {
           </span>
         )}
 
-        {/* Spacer */}
-        <div className="flex-1" />
+        {/* Spacer — 非按钮区域可拖动 */}
+        <div data-tauri-drag-region className="flex-1 cursor-default" />
 
         {/* Settings */}
         <button

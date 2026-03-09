@@ -5,6 +5,7 @@ import { ChatInput } from './ChatInput';
 import { CollapsibleExecutionLog } from '../Visual/CollapsibleExecutionLog';
 import { ExecutionLog } from '../Visual/ExecutionLog';
 import { Resizer } from '../Layout/Resizer';
+import { DeviceFloatingPanel } from '../Layout/DeviceFloatingPanel';
 import { useAppStore } from '../../application/store';
 import { useMessages } from '../hooks/useMessages';
 import { useLogs } from '../hooks/useLogs';
@@ -111,11 +112,17 @@ export function ChatPanel() {
         )}
       </div>
 
-      <ChatInput
-        onSend={sendMessage}
-        unreadCount={unreadCount}
-        onScrollToBottom={handleScrollToBottom}
-      />
+      {/* 底部栏：输入框 + 设备预览（同排，设备挤占部分宽度，高度一致） */}
+      <div className="flex items-stretch shrink-0 border-t border-nb-border/40 bg-nb-bg/80">
+        <div className="flex-1 min-w-0 flex flex-col items-center">
+          <ChatInput
+            onSend={sendMessage}
+            unreadCount={unreadCount}
+            onScrollToBottom={handleScrollToBottom}
+          />
+        </div>
+        <DeviceFloatingPanel inline />
+      </div>
     </div>
   );
 }

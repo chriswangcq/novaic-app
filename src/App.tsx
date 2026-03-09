@@ -1,10 +1,10 @@
 import { useEffect, useCallback, useState, Component, ReactNode, ErrorInfo } from 'react';
-import { Header } from './components/Layout/Header';
 import { AgentDrawer } from './components/Layout/AgentDrawer';
 import { LayoutContainer } from './components/Layout/LayoutContainer';
 import { useAppStore } from './application/store';
 import { getAgentService, getSyncService, getLayoutService } from './application';
 import { LAYOUT_CONFIG } from './config';
+import { useIsSidebarLayout } from './hooks/useMediaQuery';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
@@ -133,6 +133,8 @@ function App() {
   const currentAgentId = useAppStore(s => s.currentAgentId);
   const drawerWidth = useAppStore(s => s.drawerWidth);
   const drawerOpen = useAppStore(s => s.drawerOpen);
+  const isSidebarLayout = useIsSidebarLayout();
+  const [narrowPage, setNarrowPage] = useState<'sidebar' | 'chat' | 'devices' | 'settings'>('sidebar');
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
@@ -395,30 +397,29 @@ function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-nb-bg">
-      {/* Header with Menu Button */}
-      <Header 
-        onOpenSettings={() => useAppStore.getState().patchState({ settingsOpen: true })} 
-        onToggleDrawer={() => getLayoutService().setDrawerOpen(!drawerOpen)}
-        isDrawerOpen={drawerOpen}
-        onAgentCreated={handleAgentCreated}
-      />
-      
-      {/* Main Container - LayoutContainer 提供 AgentDrawer + Resizer + main + DeviceFloatingPanel */}
+    <div className="h-screen flex flex-col bg-nb-bg overflow-hidden">
+      {/* LayoutContainer：PrimaryNav | AgentDrawer | main；agents tab 时 Header 在第三栏 */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
       <LayoutContainer
         drawerWidth={drawerWidth}
         drawerOpen={drawerOpen}
         onDrawerResize={(delta) => getLayoutService().setDrawerWidth(useAppStore.getState().drawerWidth + delta)}
         onDrawerClose={() => getLayoutService().setDrawerOpen(false)}
         onDrawerDoubleClick={() => getLayoutService().setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
+        onDrawerToggle={() => getLayoutService().setDrawerOpen(!drawerOpen)}
         onSelectAgent={handleSelectAgent}
         onCreateNew={() => useAppStore.getState().patchState({ createAgentModalOpen: true })}
+        narrowPage={narrowPage}
+        onNarrowPageChange={setNarrowPage}
+        onOpenSettings={() => useAppStore.getState().patchState({ settingsOpen: true })}
+        onAgentCreated={handleAgentCreated}
       />
+      </div>
 
       <SettingsModal open={settingsOpen} onClose={() => useAppStore.getState().patchState({ settingsOpen: false })} />
       
       {/* Status bar */}
-      <footer className="h-6 bg-nb-surface border-t border-nb-border px-4 flex items-center text-xs text-nb-text-muted">
+      <footer className="h-6 shrink-0 bg-nb-surface border-t border-nb-border px-4 flex items-center text-xs text-nb-text-muted">
         <span className={`w-2 h-2 rounded-full mr-2 ${isInitialized ? 'bg-nb-success' : 'bg-nb-warning'}`} />
         <span>{isInitialized ? 'Connected' : 'Connecting...'}</span>
         <span className="ml-auto flex items-center gap-3">

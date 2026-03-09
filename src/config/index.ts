@@ -270,6 +270,9 @@ export const DEFAULT_PORTS = {
 
 /** 布局配置 */
 export const LAYOUT_CONFIG = {
+  /** 边栏布局宽度阈值（px）：>= 此宽度时边栏固定打开，< 时采用一二级页面形式 */
+  SIDEBAR_WIDTH_THRESHOLD: 1024,
+
   /** 默认左侧面板宽度（像素） */
   DEFAULT_LEFT_WIDTH: 400,
 

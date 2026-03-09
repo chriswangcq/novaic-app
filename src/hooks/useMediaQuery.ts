@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { LAYOUT_CONFIG } from '../config';
 
 /**
  * Hook to match a media query. Returns true when the query matches.
@@ -44,4 +45,10 @@ export function useIsLgOrAbove(): boolean {
 /** xl breakpoint and above (>= 1280px) */
 export function useIsXlOrAbove(): boolean {
   return useMediaQuery('(min-width: 1280px)');
+}
+
+/** 边栏布局模式：宽度 >= SIDEBAR_WIDTH_THRESHOLD 时为 true，边栏固定打开；否则一二级页面形式 */
+export function useIsSidebarLayout(): boolean {
+  const t = LAYOUT_CONFIG.SIDEBAR_WIDTH_THRESHOLD;
+  return useMediaQuery(`(min-width: ${t}px)`);
 }

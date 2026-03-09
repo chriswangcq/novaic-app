@@ -21,8 +21,10 @@ import {
 import { vmService } from '../../services/vm';
 
 interface VNCViewSharedProps {
-  /** Agent ID，如果不传则使用 store 中的 currentAgentId */
+  /** Agent ID，用于 Start VM 等操作；若不传则使用 store 中的 currentAgentId */
   agentId?: string;
+  /** Device ID，主桌面时使用（与 devices.start 一致，VNC socket 为 novaic-vnc-{deviceId}.sock） */
+  deviceId?: string;
   /** 是否为缩略图模式 */
   isThumbnail?: boolean;
   /** 自定义 className */
@@ -31,13 +33,13 @@ interface VNCViewSharedProps {
 
 function VNCViewSharedComponent({ 
   agentId: propAgentId,
+  deviceId: propDeviceId,
   isThumbnail = false,
   className,
 }: VNCViewSharedProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // 从 store 获取 agentId（如果没有传入 prop）
   const storeAgentId = useAppStore(state => state.currentAgentId);
   const vncLocked = useAppStore(state => state.vncLocked);
   const setVncConnected = useCallback((v: boolean) => {
@@ -45,6 +47,8 @@ function VNCViewSharedComponent({
   }, []);
   
   const agentId = propAgentId || storeAgentId;
+  /** 主桌面用 deviceId 作为 VNC 流 key（与 devices.start / vm/start 一致） */
+  const streamKey = propDeviceId || agentId || '';
   
   const [status, setStatus] = useState<StreamStatus>('disconnected');
   const [errorMsg, setErrorMsg] = useState('');
@@ -78,13 +82,13 @@ function VNCViewSharedComponent({
     }
   }, [isThumbnail]);
   
-  // 订阅流
+  // 订阅流（主桌面用 deviceId，否则用 agentId）
   useEffect(() => {
-    if (!agentId) return;
+    if (!streamKey) return;
     
-    console.log(`[VNCViewShared] Subscribing to stream for ${agentId}, thumbnail=${isThumbnail}`);
+    console.log(`[VNCViewShared] Subscribing to stream for ${streamKey}, thumbnail=${isThumbnail}`);
     
-    const unsubscribe = subscribeToVNCStream(agentId, {
+    const unsubscribe = subscribeToVNCStream(streamKey, {
       onFrame: copyFrame,
       onStatusChange: (newStatus) => {
         setStatus(newStatus);
@@ -101,19 +105,19 @@ function VNCViewSharedComponent({
     });
     
     return () => {
-      console.log(`[VNCViewShared] Unsubscribing from stream for ${agentId}`);
+      console.log(`[VNCViewShared] Unsubscribing from stream for ${streamKey}`);
       unsubscribe();
     };
-  }, [agentId, copyFrame, setVncConnected, isThumbnail]);
+  }, [streamKey, copyFrame, setVncConnected, isThumbnail]);
   
   // 更新 viewOnly 模式
   useEffect(() => {
-    if (agentId) {
-      setVNCViewOnly(agentId, vncLocked);
+    if (streamKey) {
+      setVNCViewOnly(streamKey, vncLocked);
     }
-  }, [agentId, vncLocked]);
+  }, [streamKey, vncLocked]);
   
-  // 启动 VM
+  // 启动 VM（仍用 agentId，Gateway 会解析为 device_id）
   const startVm = useCallback(async () => {
     if (!agentId || isStarting) return;
     
@@ -122,40 +126,36 @@ function VNCViewSharedComponent({
     
     try {
       await vmService.start(agentId);
-      // 等待一下再重新连接
       await new Promise(r => setTimeout(r, 2000));
-      reconnectVNCStream(agentId);
+      reconnectVNCStream(streamKey);
     } catch (e: any) {
       const msg = e?.message || '';
       if (!msg.includes('already running')) {
         setErrorMsg(msg || 'Failed to start VM');
       } else {
-        // 已经在运行，重新连接
-        reconnectVNCStream(agentId);
+        reconnectVNCStream(streamKey);
       }
     } finally {
       setIsStarting(false);
     }
-  }, [agentId, isStarting]);
+  }, [agentId, streamKey, isStarting]);
   
   
   // 全屏模式：将 RFB 容器附加到我们的容器中
   useEffect(() => {
-    if (isThumbnail || !agentId || status !== 'connected') return;
+    if (isThumbnail || !streamKey || status !== 'connected') return;
     
     const container = containerRef.current;
     if (!container) return;
     
-    // 附加 RFB 容器
-    const attached = attachVNCContainer(agentId, container);
+    const attached = attachVNCContainer(streamKey, container);
     console.log(`[VNCViewShared] Attached RFB container: ${attached}`);
     
     return () => {
-      // 分离 RFB 容器
-      detachVNCContainer(agentId);
+      detachVNCContainer(streamKey);
       console.log(`[VNCViewShared] Detached RFB container`);
     };
-  }, [isThumbnail, agentId, status]);
+  }, [isThumbnail, streamKey, status]);
   
   // 渲染内容
   const renderContent = () => {

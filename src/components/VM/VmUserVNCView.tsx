@@ -15,12 +15,14 @@ interface VmUserVNCViewProps {
   deviceId: string;
   username: string;
   displayNum: number;
-  onClose: () => void;
+  onClose?: () => void;
+  /** When true, hide toolbar (for embedding in DeviceFloatingPanel) */
+  embedded?: boolean;
 }
 
 type ConnState = 'connecting' | 'connected' | 'error' | 'disconnected';
 
-export function VmUserVNCView({ deviceId, username, displayNum, onClose }: VmUserVNCViewProps) {
+export function VmUserVNCView({ deviceId, username, displayNum, onClose, embedded = false }: VmUserVNCViewProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const rfbRef    = useRef<RFB | null>(null);
   const [connState, setConnState] = useState<ConnState>('connecting');
@@ -82,41 +84,44 @@ export function VmUserVNCView({ deviceId, username, displayNum, onClose }: VmUse
 
   return (
     <div className="relative flex flex-col h-full bg-black select-none">
-      {/* ── Toolbar ── */}
-      <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between
-                      px-3 py-1.5 bg-nb-surface/90 backdrop-blur-sm border-b border-nb-border/50">
-        <div className="flex items-center gap-2 min-w-0">
-          <Users size={13} className="text-nb-text-secondary shrink-0" />
-          <span className="text-xs font-medium text-nb-text truncate">{username}</span>
-          <span className="text-[11px] text-nb-text-secondary">· display :{displayNum}</span>
-          <StatusDot state={connState} />
+      {!embedded && (
+        <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between
+                        px-3 py-1.5 bg-nb-surface/90 backdrop-blur-sm border-b border-nb-border/50">
+          <div className="flex items-center gap-2 min-w-0">
+            <Users size={13} className="text-nb-text-secondary shrink-0" />
+            <span className="text-xs font-medium text-nb-text truncate">{username}</span>
+            <span className="text-[11px] text-nb-text-secondary">· display :{displayNum}</span>
+            <StatusDot state={connState} />
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={connect}
+              title="Reconnect"
+              className="w-6 h-6 flex items-center justify-center rounded text-nb-text-secondary
+                         hover:text-nb-text hover:bg-white/[0.06] transition-colors"
+            >
+              <RefreshCw size={11} />
+            </button>
+            {onClose && (
+              <button
+                onClick={onClose}
+                title="Close"
+                className="w-6 h-6 flex items-center justify-center rounded text-nb-text-secondary
+                           hover:text-red-400 hover:bg-white/[0.06] transition-colors"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={connect}
-            title="Reconnect"
-            className="w-6 h-6 flex items-center justify-center rounded text-nb-text-secondary
-                       hover:text-nb-text hover:bg-white/[0.06] transition-colors"
-          >
-            <RefreshCw size={11} />
-          </button>
-          <button
-            onClick={onClose}
-            title="Close"
-            className="w-6 h-6 flex items-center justify-center rounded text-nb-text-secondary
-                       hover:text-red-400 hover:bg-white/[0.06] transition-colors"
-          >
-            <X size={12} />
-          </button>
-        </div>
-      </div>
+      )}
 
       {/* ── VNC canvas ── */}
-      <div ref={canvasRef} className="flex-1 mt-8 overflow-hidden" />
+      <div ref={canvasRef} className={`flex-1 overflow-hidden ${!embedded ? 'mt-8' : ''}`} />
 
       {/* ── Overlay states ── */}
       {connState !== 'connected' && (
-        <div className="absolute inset-0 mt-8 flex items-center justify-center bg-black/70 z-20">
+        <div className={`absolute inset-0 flex items-center justify-center bg-black/70 z-20 ${!embedded ? 'mt-8' : ''}`}>
           {connState === 'connecting' && (
             <div className="flex flex-col items-center gap-3 text-nb-text-secondary">
               <Loader2 size={28} className="animate-spin" />

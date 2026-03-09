@@ -11,7 +11,7 @@ import type { Device } from '../../types';
 
 // ==================== Tab Types ====================
 
-type SettingsTab = 'models' | 'agents' | 'skills' | 'agent-tools' | 'cache';
+export type SettingsTab = 'models' | 'agents' | 'skills' | 'agent-tools' | 'cache';
 
 // ==================== Types ====================
 
@@ -2309,8 +2309,20 @@ function AgentToolsTab() {
 
 // ==================== Main Component ====================
 
-export function SettingsModal(props: { open: boolean; onClose: () => void }) {
-  const { open, onClose } = props;
+export function SettingsModal(props: {
+  open: boolean;
+  onClose: () => void;
+  embedded?: boolean;
+  /** embedded 时：'list'=一级列表在第二栏，'content'=二级内容在第三栏 */
+  embeddedMode?: 'list' | 'content';
+  /** embeddedMode='content' 时指定显示哪个 tab */
+  embeddedTab?: SettingsTab;
+  /** embeddedMode='list' 时，点击 tab 的回调，由父组件在第三栏渲染内容 */
+  onEmbeddedSubTabSelect?: (tab: SettingsTab) => void;
+  /** embeddedMode='content' 时，点击返回 */
+  onEmbeddedBack?: () => void;
+}) {
+  const { open, onClose, embedded = false, embeddedMode = 'list', embeddedTab, onEmbeddedSubTabSelect, onEmbeddedBack } = props;
   const settings = useSettings();
 
   // Tab state
@@ -2359,19 +2371,19 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
   }, []);
 
   useEffect(() => {
-    if (open) {
+    if (open || embedded) {
       loadConfig();
     }
-  }, [open, loadConfig]);
+  }, [open, embedded, loadConfig]);
 
   // Get models for a specific API key
   const getModelsForKey = useCallback((apiKeyId: string) => {
     return config?.candidate_models?.filter(m => m.api_key_id === apiKeyId) || [];
   }, [config]);
 
-  const modalRef = useFocusTrap(open, onClose);
+  const modalRef = useFocusTrap(open && !embedded, onClose);
 
-  if (!open) return null;
+  if (!open && !embedded) return null;
 
   // Handlers
   const handleAddKey = async (data: Record<string, string>) => {
@@ -2536,33 +2548,75 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
   // Count total enabled models
   const totalEnabledModels = config?.candidate_models?.filter(m => m.enabled).length || 0;
 
-  return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+  const TAB_ITEMS: { id: SettingsTab; icon: typeof Database; label: string }[] = [
+    { id: 'models', icon: Database, label: 'Models' },
+    { id: 'agents', icon: Monitor, label: 'Agents' },
+    { id: 'skills', icon: Zap, label: 'Skills' },
+    { id: 'agent-tools', icon: Wrench, label: 'Agent Tools' },
+    { id: 'cache', icon: Trash2, label: '清理缓存' },
+  ];
 
-      <div
-        ref={modalRef}
-        className="absolute left-1/2 top-1/2 w-[720px] max-w-[95vw] max-h-[90vh] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-nb-border bg-nb-surface shadow-xl flex flex-col"
-      >
-        {/* Header */}
+  if (embedded && embeddedMode === 'list') {
+    return (
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-nb-surface">
         <div className="flex items-center justify-between border-b border-nb-border px-4 py-3 flex-shrink-0">
-          <div id="settings-modal-title" className="text-sm font-semibold text-nb-text">Settings</div>
+          <div data-tauri-drag-region className="flex-1 text-sm font-semibold text-nb-text cursor-default">Settings</div>
+        </div>
+        <div className="flex-1 overflow-y-auto py-2">
+          {TAB_ITEMS.map(({ id, icon: Icon, label }) => {
+            const isSelected = embeddedTab === id;
+            return (
+              <button
+                key={id}
+                onClick={() => { setActiveTab(id); onEmbeddedSubTabSelect?.(id); }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+                  isSelected ? 'bg-white/10 text-nb-text' : 'text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04]'
+                }`}
+              >
+                <Icon size={18} className={isSelected ? 'text-nb-text' : 'text-nb-text-muted'} />
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const effectiveTab = embedded && embeddedMode === 'content' && embeddedTab ? embeddedTab : activeTab;
+
+  const content = (
+    <div
+      ref={modalRef}
+      className={embedded
+        ? 'flex-1 flex flex-col min-h-0 overflow-hidden bg-nb-surface'
+        : 'absolute left-1/2 top-1/2 w-[720px] max-w-[95vw] max-h-[90vh] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-nb-border bg-nb-surface shadow-xl flex flex-col'
+    }
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-nb-border px-4 py-3 flex-shrink-0">
+        <div id="settings-modal-title" data-tauri-drag-region className={`text-sm font-semibold text-nb-text flex items-center gap-2 ${embedded ? 'flex-1 cursor-default' : ''}`}>
+          {embedded ? TAB_ITEMS.find(t => t.id === effectiveTab)?.label ?? 'Settings' : 'Settings'}
+        </div>
+        {!embedded && (
           <button
             onClick={onClose}
             className="text-nb-text-muted hover:text-nb-text"
           >
             <X size={18} />
           </button>
-        </div>
+        )}
+      </div>
 
         {/* Main Content with Sidebar */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Left Sidebar - Tab Navigation */}
+          {!embedded && (
+          /* Left Sidebar - Tab Navigation (modal only) */
           <div className="w-40 border-r border-nb-border flex flex-col py-2 flex-shrink-0">
             <button
               onClick={() => setActiveTab('models')}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
-                activeTab === 'models'
+                effectiveTab === 'models'
                   ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
                   : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
               }`}
@@ -2573,7 +2627,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
             <button
               onClick={() => setActiveTab('agents')}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
-                activeTab === 'agents'
+                effectiveTab === 'agents'
                   ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
                   : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
               }`}
@@ -2584,7 +2638,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
             <button
               onClick={() => setActiveTab('skills')}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
-                activeTab === 'skills'
+                effectiveTab === 'skills'
                   ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
                   : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
               }`}
@@ -2595,7 +2649,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
             <button
               onClick={() => setActiveTab('agent-tools')}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
-                activeTab === 'agent-tools'
+                effectiveTab === 'agent-tools'
                   ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
                   : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
               }`}
@@ -2606,7 +2660,7 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
             <button
               onClick={() => setActiveTab('cache')}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
-                activeTab === 'cache'
+                effectiveTab === 'cache'
                   ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
                   : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
               }`}
@@ -2615,11 +2669,12 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
               <span>清理缓存</span>
             </button>
           </div>
+          )}
 
           {/* Right Content Area */}
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Models Tab */}
-            {activeTab === 'models' && (
+            {effectiveTab === 'models' && (
               <>
                 {/* Tab Header */}
                 <div className="px-4 py-3 border-b border-nb-border flex-shrink-0">
@@ -2733,22 +2788,22 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
             )}
 
             {/* Agents Tab */}
-            {activeTab === 'agents' && (
+            {effectiveTab === 'agents' && (
               <AgentsTab />
             )}
 
             {/* Skills Tab */}
-            {activeTab === 'skills' && (
+            {effectiveTab === 'skills' && (
               <SkillsTab />
             )}
 
             {/* Agent Tools Tab */}
-            {activeTab === 'agent-tools' && (
+            {effectiveTab === 'agent-tools' && (
               <AgentToolsTab />
             )}
 
             {/* Cache Cleanup Tab */}
-            {activeTab === 'cache' && (
+            {effectiveTab === 'cache' && (
               <>
                 {/* Tab Header */}
                 <div className="px-4 py-3 border-b border-nb-border flex-shrink-0">
@@ -2863,6 +2918,14 @@ export function SettingsModal(props: { open: boolean; onClose: () => void }) {
           </div>
         </div>
       </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      {content}
     </div>
   );
 }

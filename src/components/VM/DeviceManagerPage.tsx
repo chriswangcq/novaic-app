@@ -12,7 +12,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Monitor, Smartphone, Plus, Play, Square, Trash2,
-  RefreshCw, ChevronDown, Loader2, AlertCircle,
+  RefreshCw, ChevronDown, ChevronLeft, Loader2, AlertCircle,
   Users, UserPlus, UserMinus, Home, RotateCcw, HardDrive,
 } from 'lucide-react';
 import { api } from '../../services/api';
@@ -608,7 +608,14 @@ function VmUsersSection({ device, selectedUser, onSelectUser, embedded = false }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function DeviceManagerPage() {
+interface DeviceManagerPageProps {
+  /** 一二级页面模式（窄屏）：显示返回按钮 */
+  isPageMode?: boolean;
+  /** 返回一级页面（边栏） */
+  onBackToChat?: () => void;
+}
+
+export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceManagerPageProps) {
   const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
   const sharedSelectedVmUser = useAppStore(s => s.selectedVmUser);
   const addLinuxOpen = useAppStore(s => s.addLinuxDeviceModalOpen);
@@ -660,11 +667,27 @@ export function DeviceManagerPage() {
     setSelectedVmUser(sharedSelectedVmUser);
   }, [sharedSelectedVmUser]);
 
+  const backBar = isPageMode && onBackToChat ? (
+    <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-nb-border bg-nb-surface/60">
+      <button
+        onClick={onBackToChat}
+        className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm text-nb-text-secondary
+                   hover:text-nb-text hover:bg-white/[0.06] transition-colors shrink-0"
+      >
+        <ChevronLeft size={16} />
+            返回
+      </button>
+      <div data-tauri-drag-region className="flex-1 cursor-default" />
+    </div>
+  ) : null;
+
   return (
-    <>
+    <div className="flex flex-col flex-1 min-h-0">
+      {backBar}
+      {!isPageMode && <div data-tauri-drag-region className="h-3 shrink-0 cursor-default" />}
       {selectedDevice ? (
-        <div className="flex h-full">
-          <div className="flex-1 min-w-0 h-full overflow-hidden">
+        <div className="flex flex-1 min-h-0 min-w-0">
+          <div className="flex-1 min-w-0 overflow-hidden">
             {selectedVmUser ? (
               <VmUserVNCView
                 deviceId={selectedDevice.id}
@@ -687,12 +710,14 @@ export function DeviceManagerPage() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center h-full bg-nb-bg min-w-0 gap-4 text-center px-6">
+        <div className="flex flex-col flex-1 min-h-0 items-center justify-center bg-nb-bg min-w-0 gap-4 text-center px-6">
           <HardDrive size={28} className="text-nb-text-secondary/30" />
           <div>
-            <p className="text-sm font-medium text-nb-text">从左侧 Devices 区选择一个设备</p>
+            <p className="text-sm font-medium text-nb-text">
+              {isPageMode ? '点击左上角菜单，在 Devices 区选择设备' : '从左侧 Devices 区选择一个设备'}
+            </p>
             <p className="text-xs text-nb-text-secondary mt-1">
-              上半是 agents，下半是 devices；选中后会在这里显示主桌面或子用户桌面
+              选中后会在这里显示主桌面或子用户桌面
             </p>
             {loading && <p className="text-xs text-nb-text-secondary mt-2">正在加载 devices…</p>}
             {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
@@ -714,7 +739,7 @@ export function DeviceManagerPage() {
         </div>
       )}
 
-      {/* Sub-modals */}
+      {/* Sub-modals - render outside flex wrapper for portal stacking */}
       <AddLinuxVMUserModal
         isOpen={addLinuxOpen}
         onClose={() => patchState({ addLinuxDeviceModalOpen: false })}
@@ -735,6 +760,6 @@ export function DeviceManagerPage() {
           }}
         />
       )}
-    </>
+    </div>
   );
 }
