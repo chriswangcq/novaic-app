@@ -14,6 +14,7 @@ use std::time::Duration;
 /// Default timeout for VMUSE requests (60 seconds)
 const VMUSE_TIMEOUT_SECS: u64 = 60;
 const GUEST_VMUSE_ROOT: &str = "/opt/novaic/novaic-mcp-vmuse/src/novaic_mcp_vmuse";
+const GUEST_VMUSE_SERVICE_PATH: &str = "/etc/systemd/system/novaic-vmuse.service";
 
 /// Generic VMUSE proxy - forwards all requests to VM's HTTP server
 /// This supports all VMUSE tools: Browser, Desktop, Shell, Files, Windows, Context
@@ -237,12 +238,27 @@ pub async fn sync_vmuse_to_guest(
         })?;
     }
 
+    client
+        .write_file(GUEST_VMUSE_SERVICE_PATH, vmuse_service_unit().as_bytes())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                AxumJson(ApiError {
+                    error: format!("Failed to write guest service file {}: {}", GUEST_VMUSE_SERVICE_PATH, e),
+                }),
+            )
+        })?;
+
     guest_exec_checked(
         &mut client,
         "/bin/sh",
         vec![
             "-lc".to_string(),
-            "systemctl daemon-reload && systemctl restart novaic-vmuse".to_string(),
+            format!(
+                "chown -R ubuntu:ubuntu {root} && systemctl daemon-reload && systemctl enable novaic-vmuse && systemctl restart novaic-vmuse",
+                root = shell_quote("/opt/novaic/novaic-mcp-vmuse")
+            ),
         ],
         "restart novaic-vmuse",
     )
@@ -253,7 +269,7 @@ pub async fn sync_vmuse_to_guest(
         "/bin/sh",
         vec![
             "-lc".to_string(),
-            "curl -sf http://127.0.0.1:8080/health".to_string(),
+            "for _ in $(seq 1 20); do curl -sf http://127.0.0.1:8080/health && exit 0; sleep 1; done; exit 1".to_string(),
         ],
         "check novaic-vmuse health",
     )
@@ -593,6 +609,30 @@ fn decode_guest_output(data: Option<String>) -> String {
     data.and_then(|encoded| general_purpose::STANDARD.decode(encoded).ok())
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .unwrap_or_default()
+}
+
+fn vmuse_service_unit() -> &'static str {
+    r#"[Unit]
+Description=NovAIC VMUSE HTTP Server
+After=network.target lightdm.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/novaic/novaic-mcp-vmuse
+Environment="DISPLAY=:0"
+Environment="PATH=/opt/novaic/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/opt/novaic/novaic-mcp-vmuse/src"
+ExecStart=/opt/novaic/venv/bin/python3 -m novaic_mcp_vmuse.http_server
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=novaic-vmuse
+
+[Install]
+WantedBy=multi-user.target
+"#
 }
 
 fn shell_quote(value: &str) -> String {
