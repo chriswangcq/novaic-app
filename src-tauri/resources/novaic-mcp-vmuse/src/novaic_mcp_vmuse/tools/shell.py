@@ -7,6 +7,7 @@ For long-running commands (>30s), use subagent_spawn to run in background.
 
 import asyncio
 import os
+import shlex
 from typing import Dict, Any, Optional
 
 from ..config import settings
@@ -26,7 +27,8 @@ class ShellTools:
         command: str,
         cwd: Optional[str] = None,
         timeout: Optional[int] = None,
-        visible: bool = False
+        visible: bool = False,
+        runtime_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute shell command synchronously with timeout protection.
@@ -64,13 +66,13 @@ class ShellTools:
             Dictionary with success, stdout, stderr, exit_code, truncated, warning
         """
         try:
-            work_dir = cwd or settings.work_dir
+            work_dir = cwd or ShellTools._default_work_dir(runtime_context)
             os.makedirs(work_dir, exist_ok=True)
             
             if visible:
-                return await ShellTools._run_visible(command, work_dir, timeout or 60)
+                return await ShellTools._run_visible(command, work_dir, timeout or 60, runtime_context)
             
-            return await ShellTools._run_sync(command, work_dir, timeout or DEFAULT_TIMEOUT)
+            return await ShellTools._run_sync(command, work_dir, timeout or DEFAULT_TIMEOUT, runtime_context)
             
         except Exception as e:
             return {
@@ -85,21 +87,15 @@ class ShellTools:
     async def _run_sync(
         command: str,
         cwd: str,
-        timeout: int
+        timeout: int,
+        runtime_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Run command synchronously with timeout.
         If timeout occurs, returns partial output and warning.
         """
-        env = ShellTools._get_env_with_display()
-        
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            env=env
-        )
+        env = ShellTools._get_env_with_display(runtime_context)
+        process = await ShellTools._spawn_shell_process(command, cwd, env, runtime_context)
         
         try:
             # Wait for command to complete with timeout
@@ -197,15 +193,28 @@ class ShellTools:
         return f"[... {total - MAX_OUTPUT_LINES} lines truncated ...]\n{truncated}", total
     
     @staticmethod
-    def _get_env_with_display() -> Dict[str, str]:
+    def _get_env_with_display(runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
         """Get environment variables with DISPLAY set for GUI apps"""
         env = os.environ.copy()
-        
-        # Ensure DISPLAY is set for GUI applications
+
+        if runtime_context:
+            display = runtime_context.get("display")
+            if display:
+                env["DISPLAY"] = str(display)
+
+            home_path = runtime_context.get("home_path")
+            if home_path:
+                env["HOME"] = str(home_path)
+
+            linux_user = runtime_context.get("linux_user")
+            if linux_user:
+                env["USER"] = str(linux_user)
+                env["LOGNAME"] = str(linux_user)
+                env["XDG_RUNTIME_DIR"] = f"/tmp/runtime-{linux_user}"
+
         if "DISPLAY" not in env:
             env["DISPLAY"] = ":0"
-        
-        # Set XAUTHORITY if not set
+
         if "XAUTHORITY" not in env:
             xauth_path = os.path.expanduser("~/.Xauthority.x0")
             if os.path.exists(xauth_path):
@@ -216,18 +225,105 @@ class ShellTools:
                     env["XAUTHORITY"] = xauth_default
         
         return env
+
+    @staticmethod
+    def _default_work_dir(runtime_context: Optional[Dict[str, Any]] = None) -> str:
+        if runtime_context and runtime_context.get("home_path"):
+            return str(runtime_context["home_path"])
+        return settings.work_dir
+
+    @staticmethod
+    def _target_user(runtime_context: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        if runtime_context:
+            user = runtime_context.get("linux_user")
+            if user:
+                return str(user)
+        return None
+
+    @staticmethod
+    def _should_sudo(runtime_context: Optional[Dict[str, Any]] = None) -> bool:
+        user = ShellTools._target_user(runtime_context)
+        if not user:
+            return False
+        return user != os.environ.get("USER", "")
+
+    @staticmethod
+    async def _spawn_shell_process(
+        command: str,
+        cwd: str,
+        env: Dict[str, str],
+        runtime_context: Optional[Dict[str, Any]] = None,
+    ):
+        if not ShellTools._should_sudo(runtime_context):
+            return await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env
+            )
+
+        target_user = ShellTools._target_user(runtime_context)
+        wrapped_command = command
+        if cwd:
+            wrapped_command = f"cd {shlex.quote(cwd)} && {command}"
+
+        env_args = [
+            "env",
+            f"DISPLAY={env.get('DISPLAY', ':0')}",
+            f"HOME={env.get('HOME', cwd)}",
+            f"USER={target_user}",
+            f"LOGNAME={target_user}",
+            f"XDG_RUNTIME_DIR={env.get('XDG_RUNTIME_DIR', f'/tmp/runtime-{target_user}')}",
+            f"PATH={env.get('PATH', os.environ.get('PATH', ''))}",
+        ]
+        if env.get("XAUTHORITY"):
+            env_args.append(f"XAUTHORITY={env['XAUTHORITY']}")
+
+        return await asyncio.create_subprocess_exec(
+            "sudo",
+            "-u",
+            str(target_user),
+            "-H",
+            *env_args,
+            "bash",
+            "-lc",
+            wrapped_command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
     
     @staticmethod
     async def _run_visible(
         command: str, 
         cwd: str, 
-        timeout: int
+        timeout: int,
+        runtime_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run command in visible terminal (for GUI apps)"""
+        env = ShellTools._get_env_with_display(runtime_context)
+        target_user = ShellTools._target_user(runtime_context)
+        wrapped_command = command
+        if ShellTools._should_sudo(runtime_context):
+            env_exports = " ".join([
+                f"{key}={shlex.quote(value)}"
+                for key, value in {
+                    "DISPLAY": env.get("DISPLAY", ":0"),
+                    "HOME": env.get("HOME", cwd),
+                    "USER": target_user or "",
+                    "LOGNAME": target_user or "",
+                    "XDG_RUNTIME_DIR": env.get("XDG_RUNTIME_DIR", f"/tmp/runtime-{target_user}"),
+                    "PATH": env.get("PATH", os.environ.get("PATH", "")),
+                }.items()
+                if value
+            ])
+            wrapped_command = f"sudo -u {shlex.quote(str(target_user))} -H env {env_exports} bash -lc {shlex.quote(command)}"
+
         # Create a wrapper script
         script_content = f"""#!/bin/bash
-cd {cwd}
-{command}
+cd {shlex.quote(cwd)}
+{wrapped_command}
 echo ""
 echo "=== Command finished (exit code: $?) ==="
 sleep 3
@@ -248,7 +344,8 @@ sleep 3
         process = await asyncio.create_subprocess_exec(
             *xterm_cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         
         # Wait for terminal to close or timeout
@@ -273,7 +370,8 @@ sleep 3
     async def run_python(
         code: str,
         timeout: Optional[int] = None,
-        visible: bool = False
+        visible: bool = False,
+        runtime_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute Python code.
@@ -292,7 +390,8 @@ sleep 3
             result = await ShellTools.run_command(
                 f"python3 {script_path}",
                 timeout=timeout,
-                visible=visible
+                visible=visible,
+                runtime_context=runtime_context,
             )
             return result
         finally:

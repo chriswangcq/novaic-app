@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import base64
+from contextlib import contextmanager
 from typing import Dict, Any, Optional, List, Union
 from aiohttp import web
 
@@ -26,6 +27,52 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+
+def _get_runtime_context(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    runtime_context = data.get("runtime_context")
+    return runtime_context if isinstance(runtime_context, dict) else None
+
+
+def _get_desktop_env(runtime_context: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    if not runtime_context:
+        return {}
+
+    env: Dict[str, str] = {}
+    display = runtime_context.get("display")
+    if display:
+        env["DISPLAY"] = str(display)
+
+    home_path = runtime_context.get("home_path")
+    if home_path:
+        env["HOME"] = str(home_path)
+
+    linux_user = runtime_context.get("linux_user")
+    if linux_user:
+        env["USER"] = str(linux_user)
+        env["LOGNAME"] = str(linux_user)
+        env["XDG_RUNTIME_DIR"] = f"/tmp/runtime-{linux_user}"
+
+    return env
+
+
+@contextmanager
+def _patched_environ(overrides: Dict[str, str]):
+    if not overrides:
+        yield
+        return
+
+    original = {key: os.environ.get(key) for key in overrides}
+    try:
+        for key, value in overrides.items():
+            os.environ[key] = value
+        yield
+    finally:
+        for key, old_value in original.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
 
 
 class VMUSEServer:
@@ -97,6 +144,7 @@ class VMUSEServer:
         """桌面截图"""
         try:
             data = await request.json() if request.body_exists else {}
+            runtime_context = _get_runtime_context(data)
             area = data.get('area', 'full')
             grid = data.get('grid', True)
             
@@ -107,12 +155,13 @@ class VMUSEServer:
             
             grid_density = "normal" if grid else None
             
-            result = await DesktopTools.screenshot(
-                region=region,
-                center=None,
-                zoom_factor=None,
-                grid_density=grid_density if grid else None
-            )
+            with _patched_environ(_get_desktop_env(runtime_context)):
+                result = await DesktopTools.screenshot(
+                    region=region,
+                    center=None,
+                    zoom_factor=None,
+                    grid_density=grid_density if grid else None
+                )
             
             return web.json_response(result)
         except Exception as e:
@@ -123,21 +172,23 @@ class VMUSEServer:
         """鼠标操作 - 两阶段：aim → execute"""
         try:
             data = await request.json()
+            runtime_context = _get_runtime_context(data)
             action = data.get('action')
             if not action:
                 return web.json_response({"success": False, "error": "Missing action"}, status=400)
             
-            result = await DesktopTools.mouse(
-                action=action,
-                x=data.get('x'),
-                y=data.get('y'),
-                zoom=data.get('zoom', 2.0),
-                delta_x=data.get('delta_x'),
-                delta_y=data.get('delta_y'),
-                aim_id=data.get('aim_id'),
-                direction=data.get('direction'),
-                amount=data.get('amount', 3)
-            )
+            with _patched_environ(_get_desktop_env(runtime_context)):
+                result = await DesktopTools.mouse(
+                    action=action,
+                    x=data.get('x'),
+                    y=data.get('y'),
+                    zoom=data.get('zoom', 2.0),
+                    delta_x=data.get('delta_x'),
+                    delta_y=data.get('delta_y'),
+                    aim_id=data.get('aim_id'),
+                    direction=data.get('direction'),
+                    amount=data.get('amount', 3)
+                )
             
             return web.json_response(result)
         except Exception as e:
@@ -148,6 +199,7 @@ class VMUSEServer:
         """键盘操作"""
         try:
             data = await request.json()
+            runtime_context = _get_runtime_context(data)
             action = data.get('action')
             
             # 智能推断 action：如果没有指定 action，根据参数自动推断
@@ -161,11 +213,12 @@ class VMUSEServer:
                 else:
                     return web.json_response({"success": False, "error": "Missing action or text/keys parameters"}, status=400)
             
-            result = await DesktopTools.keyboard(
-                action=action,
-                text=data.get('text'),
-                keys=data.get('keys')
-            )
+            with _patched_environ(_get_desktop_env(runtime_context)):
+                result = await DesktopTools.keyboard(
+                    action=action,
+                    text=data.get('text'),
+                    keys=data.get('keys')
+                )
             
             return web.json_response(result)
         except Exception as e:
@@ -311,7 +364,8 @@ class VMUSEServer:
                 command,
                 data.get('cwd'),
                 data.get('timeout'),
-                data.get('visible', False)
+                data.get('visible', False),
+                runtime_context=_get_runtime_context(data),
             )
             return web.json_response(result)
         except Exception as e:
@@ -329,7 +383,8 @@ class VMUSEServer:
             result = await ShellTools.run_python(
                 code,
                 data.get('timeout'),
-                data.get('visible', False)
+                data.get('visible', False),
+                runtime_context=_get_runtime_context(data),
             )
             return web.json_response(result)
         except Exception as e:
@@ -347,7 +402,11 @@ class VMUSEServer:
                 return web.json_response({"success": False, "error": "Missing path"}, status=400)
             
             binary = data.get('binary')  # True/False/None
-            result = await FileTools.read_file(path, binary=binary)
+            result = await FileTools.read_file(
+                path,
+                binary=binary,
+                runtime_context=_get_runtime_context(data),
+            )
             return web.json_response(result)
         except Exception as e:
             logger.error(f"Read file error: {e}")
@@ -359,10 +418,16 @@ class VMUSEServer:
             data = await request.json()
             path = data.get('path')
             content = data.get('content')
+            binary = data.get('binary', False)
             if not path or content is None:
                 return web.json_response({"success": False, "error": "Missing path or content"}, status=400)
             
-            result = await FileTools.write_file(path, content)
+            result = await FileTools.write_file(
+                path,
+                content,
+                binary=binary,
+                runtime_context=_get_runtime_context(data),
+            )
             return web.json_response(result)
         except Exception as e:
             logger.error(f"Write file error: {e}")
@@ -376,7 +441,10 @@ class VMUSEServer:
             if not path:
                 return web.json_response({"success": False, "error": "Missing path"}, status=400)
             
-            result = await FileTools.file_info(path)
+            result = await FileTools.file_info(
+                path,
+                runtime_context=_get_runtime_context(data),
+            )
             return web.json_response(result)
         except Exception as e:
             logger.error(f"File info error: {e}")
