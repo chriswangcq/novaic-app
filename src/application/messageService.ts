@@ -21,7 +21,7 @@ import {
   clearMessagePagination,
 } from './messagePaginationStore';
 import * as msgRepo from '../db/messageRepo';
-import { gateway } from '../gateway/client';
+import { api } from '../services/api';
 import {
   messagevmToRaw,
   serverHistoryToRaw,
@@ -66,7 +66,7 @@ export class MessageService {
     const STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
     if (count > 0 && lastSync && (Date.now() - new Date(lastSync).getTime()) < STALE_MS) {
-      const delta = await gateway.getChatHistory({ agent_id: agentId, updated_after: lastSync, limit: 500 });
+      const delta = await api.getChatHistory({ agent_id: agentId, updated_after: lastSync, limit: 500 });
       if (!isCurrent()) return;
       if (delta.success && delta.messages.length > 0) {
         const filtered = delta.messages.filter(m => !HIDDEN_TYPES.has(m.type));
@@ -74,7 +74,7 @@ export class MessageService {
       }
       setMessagePagination(agentId, { hasMore: delta.has_more ?? false });
     } else {
-      const history = await gateway.getChatHistory({
+      const history = await api.getChatHistory({
         agent_id: agentId,
         limit: PAGINATION_CONFIG.CHAT_HISTORY_LIMIT,
         summary_length: PAGINATION_CONFIG.CHAT_SUMMARY_LENGTH,
@@ -96,7 +96,7 @@ export class MessageService {
 
     let attachmentInfos: Array<{ url: string; filename: string; mime_type: string }> = [];
     if (attachments?.length) {
-      attachmentInfos = await Promise.all(attachments.map(f => gateway.uploadChatFile(f, agentId)));
+      attachmentInfos = await Promise.all(attachments.map(f => api.uploadChatFile(f, agentId)));
     }
 
     const msgAttachments: Attachment[] = attachmentInfos.map((a, i) => ({
@@ -123,7 +123,7 @@ export class MessageService {
 
     try {
       const result = await Promise.race([
-        gateway.sendChatMessage(content, {
+        api.sendChatMessage(content, {
           attachments: attachmentInfos.length ? attachmentInfos : undefined,
           agent_id: agentId, model: modelId, mode: 'agent', api_key_id: apiKeyId,
         }),
@@ -166,7 +166,7 @@ export class MessageService {
 
     setMessagePagination(agentId, { isLoading: true });
     try {
-      const history = await gateway.getChatHistory({
+      const history = await api.getChatHistory({
         agent_id: agentId,
         limit: PAGINATION_CONFIG.CHAT_HISTORY_PAGE_SIZE,
         before_id: beforeId,
@@ -186,7 +186,7 @@ export class MessageService {
 
   async expand(agentId: string, msgId: string): Promise<void> {
     try {
-      const result = await gateway.getChatMessage(msgId, agentId);
+      const result = await api.getChatMessage(msgId, agentId);
       if (!result.success || !result.content) return;
       const existing = await msgRepo.getMessage(this.userId, msgId);
       if (existing) {

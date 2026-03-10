@@ -3,7 +3,7 @@
  */
 
 import { useAppStore } from './store';
-import { gateway } from '../gateway/client';
+import { api } from '../services/api';
 import * as prefsRepo from '../db/prefsRepo';
 import type { CandidateModel, ApiKeyInfo } from '../types';
 
@@ -12,7 +12,7 @@ export class ModelService {
 
   async loadConfig(): Promise<void> {
     try {
-      const config = await gateway.getConfig();
+      const config = await api.getConfig();
       const enabled = (config.candidate_models ?? []).filter(m => m.enabled) as CandidateModel[];
       const apiKeys: ApiKeyInfo[] = (config.api_keys ?? []).map(k => ({
         id: k.id, name: k.name, provider: k.provider as ApiKeyInfo['provider'],
@@ -31,7 +31,7 @@ export class ModelService {
 
   async loadForAgent(agentId: string): Promise<void> {
     try {
-      const mc = await gateway.getAgentModel(agentId);
+      const mc = await api.getAgentModel(agentId);
       if (mc?.model_id && mc.model) {
         const composite = `${mc.model.api_key_id}:${mc.model_id}`;
         useAppStore.getState().patchState({ selectedModel: composite });
@@ -46,7 +46,7 @@ export class ModelService {
     if (agentId && model) {
       const idx = model.indexOf(':');
       const modelId = idx !== -1 ? model.slice(idx + 1) : model;
-      await gateway.setAgentModel(agentId, modelId).catch(() => {});
+      await api.setAgentModel(agentId, modelId).catch(() => {});
     }
   }
 }

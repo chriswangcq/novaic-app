@@ -7,7 +7,7 @@ import { clearMessagePagination } from './messagePaginationStore';
 import { clearLogPagination } from './logPaginationStore';
 import { clearLogFilter } from './logFilterStore';
 import { clearLogInputCache } from './logInputCacheStore';
-import { gateway } from '../gateway/client';
+import { api } from '../services/api';
 import * as prefsRepo from '../db/prefsRepo';
 import * as setup from '../services/setup';
 import { vmService } from '../services/vm';
@@ -53,7 +53,7 @@ export class AgentService {
 
   async loadAgents(): Promise<void> {
     try {
-      const response = await gateway.listAgents();
+      const response = await api.listAgents();
       const { agents: current, currentAgentId, isInitialized } = useAppStore.getState();
 
       const changed =
@@ -112,9 +112,9 @@ export class AgentService {
   // ── CRUD ──────────────────────────────────────────────────────────────────
 
   async create(data: CreateAgentRequest, modelId?: string): Promise<AICAgent> {
-    const agent = await gateway.createAgent(data);
+    const agent = await api.createAgent(data);
     if (modelId) {
-      await gateway.setAgentModel(agent.id, modelId).catch(e =>
+      await api.setAgentModel(agent.id, modelId).catch(e =>
         console.warn('[AgentService] setAgentModel failed (non-fatal):', e)
       );
     }
@@ -123,11 +123,11 @@ export class AgentService {
   }
 
   async setAgentModel(agentId: string, modelId: string): Promise<void> {
-    await gateway.setAgentModel(agentId, modelId);
+    await api.setAgentModel(agentId, modelId);
   }
 
   async delete(agentId: string): Promise<void> {
-    await gateway.deleteAgent(agentId);
+    await api.deleteAgent(agentId);
     await this.messageService.clear(agentId);
     await this.logService.clear(agentId);
     await this.loadAgents();
@@ -141,7 +141,7 @@ export class AgentService {
     cpus: number;
     source_image: string;
   }): Promise<AICAgent> {
-    return gateway.updateAgent(agentId, { vm_config: vmConfig });
+    return api.updateAgent(agentId, { vm_config: vmConfig });
   }
 
   // ── Setup flow (VM provisioning) ──────────────────────────────────────────
@@ -170,7 +170,7 @@ export class AgentService {
       await vmService.start(agentId);
       await new Promise(r => setTimeout(r, VM_CONFIG.START_WAIT_DELAY));
       await this.loadAgents();
-      await gateway.updateAgent(agentId, { setup_complete: true });
+      await api.updateAgent(agentId, { setup_complete: true });
       setComplete(true);
     } catch (error) {
       updateProgress({

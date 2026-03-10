@@ -6,7 +6,7 @@
  */
 
 import * as logRepo from '../db/logRepo';
-import { gateway } from '../gateway/client';
+import { api } from '../services/api';
 import type { LogEntry, LogData } from '../types';
 import type { RawLog } from '../db/logRepo';
 import type { SubAgentMeta } from '../types/subagent';
@@ -115,7 +115,7 @@ export class LogService {
 
     const { logSubagentId } = useLogFilterStore.getState();
     try {
-      const res = await gateway.getLogEntries(agentId, {
+      const res = await api.getLogEntries(agentId, {
         limit: PAGINATION_CONFIG.LOG_ENTRIES_INCREMENTAL,
         subagent_id: logSubagentId ?? undefined,
       });
@@ -142,7 +142,7 @@ export class LogService {
     if (maxId <= 0) return;
 
     try {
-      const res = await gateway.getLogEntries(agentId, {
+      const res = await api.getLogEntries(agentId, {
         after_id: maxId,
         limit: 200,
         subagent_id: logSubagentId ?? undefined,
@@ -172,7 +172,7 @@ export class LogService {
 
     setLogPagination(agentId, logSubagentId, { isLoading: true });
     try {
-      const res = await gateway.getLogEntries(agentId, {
+      const res = await api.getLogEntries(agentId, {
         limit: PAGINATION_CONFIG.LOG_ENTRIES_LIMIT,
         before_id: beforeId,
         subagent_id: logSubagentId ?? undefined,
@@ -195,7 +195,7 @@ export class LogService {
     setLogSubagentId(subagentId);
     setLogPagination(agentId, subagentId, { lastLogId: null, hasMore: true });
     try {
-      const res = await gateway.getLogEntries(agentId, {
+      const res = await api.getLogEntries(agentId, {
         limit: PAGINATION_CONFIG.LOG_ENTRIES_LIMIT,
         subagent_id: subagentId ?? undefined,
       });
@@ -217,7 +217,7 @@ export class LogService {
 
   async appendSubagentLogs(agentId: string, subagentId: string): Promise<void> {
     try {
-      const res = await gateway.getLogEntries(agentId, { limit: 100, subagent_id: subagentId });
+      const res = await api.getLogEntries(agentId, { limit: 100, subagent_id: subagentId });
       if (!res.success || !res.entries.length) return;
       const raws = res.entries.map((e) => rawLogFromApiEntry(agentId, e as Record<string, unknown>));
       await logRepo.putLogs(this.userId, raws);
@@ -235,7 +235,7 @@ export class LogService {
 
   async fetchSubagentTree(agentId: string): Promise<void> {
     try {
-      const res = await gateway.getSubagentTree(agentId);
+      const res = await api.getSubagentTree(agentId);
       if (res.success) setLogSubagents(res.subagents ?? []);
     } catch {}
   }
@@ -280,7 +280,7 @@ export class LogService {
     const cached = getLogInputFromCache(logId);
     if (cached !== undefined) return cached;
     try {
-      const res = await gateway.getLogInput(logId);
+      const res = await api.getLogInput(logId);
       if (res.success && res.input) {
         setLogInputCache(logId, res.input);
         await logRepo.updateLogInput(this.userId, logId, res.input);

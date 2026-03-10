@@ -3,7 +3,7 @@
  */
 import { useAppStore } from '../../application/store';
 import { getAgentService } from '../../application';
-import type { CreateAgentRequest, AICAgent } from '../../gateway/client';
+import type { CreateAgentRequest, AICAgent } from '../../services/api';
 import type { SetupProgressInfo } from '../../types';
 
 export function useAgent() {

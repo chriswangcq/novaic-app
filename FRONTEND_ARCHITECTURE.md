@@ -92,7 +92,7 @@ store.ts          ← 纯状态容器，只有 Services 写入
 
 | 文件 | 说明 |
 |------|------|
-| `src/gateway/client.ts` | re-export `services/api.ts` 的 `api` 单例；所有 HTTP REST 调用入口 |
+| ~~`src/gateway/client.ts`~~ | 已移除；Service 层直接 import `services/api` |
 | `src/gateway/sse.ts` | `SSEManager` 类：管理 Chat SSE 和 Logs SSE 两条连接的生命周期；零业务逻辑，只负责连接/断线/事件路由 |
 | `src/gateway/auth.ts` | Token 获取、URL 追加 token（用于 SSE EventSource） |
 
