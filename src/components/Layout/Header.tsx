@@ -6,7 +6,7 @@ import { useAppStore } from '../../application/store';
 import { useAgent } from '../hooks/useAgent';
 import { useVNCConnection } from '../Visual/useVNCConnection';
 
-type NarrowPage = 'sidebar' | 'chat' | 'devices';
+type NarrowPage = 'sidebar' | 'chat' | 'devices' | 'settings' | 'more';
 
 interface HeaderProps {
   onOpenSettings?: () => void;
@@ -24,7 +24,7 @@ interface HeaderProps {
 }
 
 export function Header(props: HeaderProps) {
-  const { onOpenSettings, onHeaderMore, onToggleDrawer, isDrawerOpen, onAgentCreated, isSidebarLayout = true, narrowPage = 'sidebar', onBackToSidebar, compact = false } = props;
+  const { onOpenSettings: _onOpenSettings, onHeaderMore, onToggleDrawer, isDrawerOpen, onAgentCreated, isSidebarLayout = true, narrowPage = 'sidebar', onBackToSidebar, compact = false } = props;
   const showBackButton = !isSidebarLayout && narrowPage !== 'sidebar' && onBackToSidebar;
   const showHamburger = isSidebarLayout && !isDrawerOpen;
   const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);

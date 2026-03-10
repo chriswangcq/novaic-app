@@ -17,6 +17,8 @@ import type { Device, VmUser } from '../../types';
 import { vmService, VmStatus } from '../../services/vm';
 import { getLastMessage } from '../../db/messageRepo';
 import { parseMessageContent } from '../../application/converters';
+import { useMessages } from '../hooks/useMessages';
+import { getCurrentUser } from '../../services/auth';
 import { POLL_CONFIG, LAYOUT_CONFIG } from '../../config';
 import { SettingsModal } from '../Settings/SettingsModal';
 
@@ -43,12 +45,12 @@ interface AgentDrawerProps {
   onSettingsSubTabSelect?: (tab: import('../Settings/SettingsModal').SettingsTab) => void;
 }
 
-export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal', activeView, onOpenDevices, asPrimaryPage = false, primaryTab = 'agents', onOpenSettings, settingsSubTab, onSettingsSubTabSelect }: AgentDrawerProps) {
+export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resizerPlacement = 'internal', activeView, onOpenDevices, asPrimaryPage = false, primaryTab = 'agents', onOpenSettings: _onOpenSettings, settingsSubTab, onSettingsSubTabSelect }: AgentDrawerProps) {
   const { agents, currentAgentId, loadAgents } = useAgent();
   const { drawerWidth, setDrawerWidth } = useLayout();
   const isOverlay = !useIsSidebarLayout() && !asPrimaryPage;
-  const userId = useAppStore(s => s.user?.user_id);
-  const storeMessages = useAppStore(s => s.messages);
+  const userId = getCurrentUser()?.user_id ?? null;
+  const { messages: currentAgentMessages } = useMessages();
   const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
   const selectedVmUser = useAppStore(s => s.selectedVmUser);
   const setSelectedDeviceId = (id: string | null) => useAppStore.getState().patchState({ selectedDeviceId: id });
@@ -57,7 +59,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
   const openLinuxDeviceModal = () => useAppStore.getState().patchState({ addLinuxDeviceModalOpen: true });
   const openAndroidDeviceModal = () => useAppStore.getState().patchState({ addAndroidDeviceModalOpen: true });
   const openVmSubuserModal = (deviceId: string) => useAppStore.getState().patchState({ addVmSubuserDeviceId: deviceId });
-  const [vmStatuses, setVmStatuses] = useState<Record<string, VmStatus>>({});
+  const [, setVmStatuses] = useState<Record<string, VmStatus>>({});
   const [lastMessages, setLastMessages] = useState<Record<string, string>>({});
   const [devices, setDevices] = useState<Device[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -161,15 +163,15 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 有意使用 agentIds 替代 agents
   }, [isOpen, agentIds, userId]);
 
-  // 当前 agent 的 store messages 更新时，实时更新 lastMessages
+  // 当前 agent 的 messages 更新时，实时更新 lastMessages（DB 订阅）
   useEffect(() => {
-    if (!currentAgentId || storeMessages.length === 0) return;
-    const last = storeMessages[storeMessages.length - 1];
+    if (!currentAgentId || currentAgentMessages.length === 0) return;
+    const last = currentAgentMessages[currentAgentMessages.length - 1];
     const text = (typeof last.content === 'string' ? last.content : '').trim();
     if (text) {
       setLastMessages(prev => ({ ...prev, [currentAgentId]: text.slice(0, 60) }));
     }
-  }, [currentAgentId, storeMessages]);
+  }, [currentAgentId, currentAgentMessages]);
 
   // Handle keyboard escape
   useEffect(() => {

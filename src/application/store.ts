@@ -10,13 +10,11 @@
 
 import { create } from 'zustand';
 import type {
-  Message,
   LogEntry,
   LayoutMode,
   LayoutPersistence,
   SidebarMode,
   ApiKeyInfo,
-  MessageStatus,
   CandidateModel,
   AICAgent,
 } from '../types';
@@ -110,11 +108,6 @@ export interface AppState {
   currentAgentId: string | null;
   createAgentModalOpen: boolean;
 
-  // Messages (View Models — rendered from DB data)
-  messages: Message[];
-  hasMoreMessages: boolean;
-  isLoadingMore: boolean;
-
   // Logs (View Models)
   logs: LogEntry[];
   hasMoreLogs: boolean;
@@ -165,14 +158,6 @@ export interface AppSetters {
   // General
   patchState: (partial: Partial<AppState>) => void;
 
-  // Messages
-  setMessages:     (msgs: Message[]) => void;
-  prependMessages: (older: Message[]) => void;
-  upsertMessage:   (msg: Message) => void;
-
-  // Message status
-  updateMessageStatus: (msgId: string, status: MessageStatus) => void;
-
   // Logs
   setLogs:     (logs: LogEntry[]) => void;
   prependLogs: (older: LogEntry[]) => void;
@@ -205,9 +190,6 @@ export const useAppStore = create<Store>((set) => ({
   agents:             [],
   currentAgentId:     null,
   createAgentModalOpen: false,
-  messages:           [],
-  hasMoreMessages:    true,
-  isLoadingMore:      false,
   logs:               [],
   hasMoreLogs:        true,
   isLoadingMoreLogs:  false,
@@ -233,20 +215,6 @@ export const useAppStore = create<Store>((set) => ({
 
   // ── Setters ────────────────────────────────────────────────────────────────
   patchState: (partial) => set(partial),
-
-  setMessages:     (msgs) => set({ messages: msgs }),
-  prependMessages: (older) => set(s => ({ messages: [...older, ...s.messages] })),
-  upsertMessage:   (msg) => set(s => {
-    const idx = s.messages.findIndex(m => m.id === msg.id);
-    if (idx === -1) return { messages: [...s.messages, msg] };
-    const next = [...s.messages];
-    next[idx] = { ...next[idx], ...msg };
-    return { messages: next };
-  }),
-
-  updateMessageStatus: (msgId, status) => set(s => ({
-    messages: s.messages.map(m => m.id === msgId ? { ...m, status } : m),
-  })),
 
   setLogs:     (logs) => set({ logs }),
   prependLogs: (older) => set(s => ({ logs: [...older, ...s.logs] })),

@@ -151,10 +151,13 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
   }, [getLastMessageVisibleHeight]);
 
   // messages.length 条消息对应最后一个虚拟 index = messages.length（header 在 0）
-  const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'smooth') => {
+  const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
     requestAnimationFrame(() => {
-      if (messages.length > 0) {
+      if (!parentRef.current || messages.length === 0) return;
+      try {
         virtualizer.scrollToIndex(messages.length, { align: 'end', behavior });
+      } catch {
+        // virtualizer may be torn down (e.g. agent switch) or targetWindow null
       }
     });
   }, [virtualizer, messages.length]);
@@ -164,7 +167,7 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
   // ── 暴露给父组件的函数 ────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (scrollToBottomRef) scrollToBottomRef.current = () => scrollToBottom('smooth');
+    if (scrollToBottomRef) scrollToBottomRef.current = () => scrollToBottom('auto');
     if (clearUnreadRef) clearUnreadRef.current = clearUnread;
   }, [scrollToBottom, scrollToBottomRef, clearUnread, clearUnreadRef]);
 
@@ -209,12 +212,12 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
 
       if (latestMessage.id !== prevMessageId && !isLoadingMore && !justFinishedLoadingMore) {
         if (latestMessage.role === 'user') {
-          scrollToBottom('smooth');
+          scrollToBottom('auto');
           setUnreadCount(0);
         } else {
           rafId = requestAnimationFrame(() => {
             if (shouldClearUnread()) {
-              scrollToBottom('smooth');
+              scrollToBottom('auto');
               setUnreadCount(0);
             } else {
               setUnreadCount(prev => prev + 1);

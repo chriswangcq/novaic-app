@@ -137,13 +137,21 @@ export function SubagentList({ className = '' }: SubagentListProps) {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const rafRef = { id: 0 };
     const ro = new ResizeObserver(([entry]) => {
-      const w = entry?.contentRect?.width ?? 0;
-      setContainerWidth(w);
+      if (rafRef.id) cancelAnimationFrame(rafRef.id);
+      rafRef.id = requestAnimationFrame(() => {
+        rafRef.id = 0;
+        const w = entry?.contentRect?.width ?? 0;
+        setContainerWidth(w);
+      });
     });
     ro.observe(el);
     setContainerWidth(el.clientWidth);
-    return () => ro.disconnect();
+    return () => {
+      if (rafRef.id) cancelAnimationFrame(rafRef.id);
+      ro.disconnect();
+    };
   }, []);
 
   const { tabs, groupedLogs } = useMemo(() => {
@@ -235,7 +243,7 @@ export function SubagentList({ className = '' }: SubagentListProps) {
         <AllSubagentsModal
           tabs={tabs}
           groupedLogs={groupedLogs}
-          logSubagents={logSubagents}
+          logSubagents={logSubagents.map(s => ({ subagent_id: s.subagent_id, task: s.task ?? undefined }))}
           onSelect={(tabId) => setModalSubagentId(tabId)}
           onClose={() => setShowAllModal(false)}
         />

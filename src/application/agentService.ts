@@ -3,6 +3,7 @@
  */
 
 import { useAppStore } from './store';
+import { clearMessagePagination } from './messagePaginationStore';
 import { gateway } from '../gateway/client';
 import * as prefsRepo from '../db/prefsRepo';
 import * as setup from '../services/setup';
@@ -59,9 +60,10 @@ export class AgentService {
       if (changed) useAppStore.getState().setAgents(response.agents);
 
       if (!response.agents.length) {
+        clearMessagePagination();
         useAppStore.getState().patchState({
-          currentAgentId: null, messages: [], logs: [], lastLogId: null,
-          hasMoreMessages: true, hasMoreLogs: true, logSubagentId: null, logSubagents: [],
+          currentAgentId: null, logs: [], lastLogId: null,
+          hasMoreLogs: true, logSubagentId: null, logSubagents: [],
         });
         await prefsRepo.setSelectedAgent(this.userId, null);
         this.syncService.disconnect();

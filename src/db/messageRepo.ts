@@ -1,9 +1,11 @@
 /**
  * db/messageRepo.ts — Message CRUD over IndexedDB.
  * Zero business logic. Takes userId explicitly for multi-user isolation.
+ * Notifies messageSubscription after writes (for DB-driven rendering).
  */
 
 import { getDb } from './index';
+import { notifyMessageChange } from './messageSubscription';
 
 export interface RawMessage {
   id: string;
@@ -28,6 +30,8 @@ export async function putMessages(userId: string, msgs: RawMessage[]): Promise<v
   const tx = db.transaction('messages', 'readwrite');
   await Promise.all(msgs.map(m => tx.store.put(m)));
   await tx.done;
+  const agentIds = [...new Set(msgs.map((m) => m.agentId))];
+  agentIds.forEach((agentId) => notifyMessageChange(userId, agentId));
 }
 
 /** Load messages for an agent, ascending by timestamp, up to limit. */
@@ -59,6 +63,7 @@ export async function updateMessageRead(
   const existing = await db.get('messages', msgId);
   if (existing) {
     await db.put('messages', { ...existing, read: true, updated_at: updatedAt });
+    notifyMessageChange(userId, (existing as RawMessage).agentId);
   }
 }
 
@@ -107,6 +112,7 @@ export async function replaceMessage(
   await tx.store.delete(oldId);
   await tx.store.put(newMsg);
   await tx.done;
+  notifyMessageChange(userId, newMsg.agentId);
 }
 
 /** Delete all messages for an agent (clear chat). */
@@ -117,4 +123,5 @@ export async function deleteAgentMessages(userId: string, agentId: string): Prom
   let cursor = await tx.store.index('by_agent_ts').openCursor(range);
   while (cursor) { await cursor.delete(); cursor = await cursor.continue(); }
   await tx.done;
+  notifyMessageChange(userId, agentId);
 }

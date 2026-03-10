@@ -3,8 +3,8 @@ import { AgentDrawer } from './components/Layout/AgentDrawer';
 import { LayoutContainer } from './components/Layout/LayoutContainer';
 import { useAppStore } from './application/store';
 import { getAgentService, getSyncService, getLayoutService } from './application';
+import { clearMessagePagination } from './application/messagePaginationStore';
 import { LAYOUT_CONFIG } from './config';
-import { useIsSidebarLayout } from './hooks/useMediaQuery';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
@@ -142,7 +142,6 @@ function App() {
   const currentAgentId = useAppStore(s => s.currentAgentId);
   const drawerWidth = useAppStore(s => s.drawerWidth);
   const drawerOpen = useAppStore(s => s.drawerOpen);
-  const isSidebarLayout = useIsSidebarLayout();
   const [narrowPage, setNarrowPage] = useState<'sidebar' | 'chat' | 'devices' | 'settings' | 'more'>('sidebar');
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
@@ -227,9 +226,9 @@ function App() {
           // 清空所有状态和 localStorage
           console.log('[App] No agents found, clearing state');
           getSyncService().disconnect();
-          useAppStore.getState().patchState({ 
+          clearMessagePagination();
+          useAppStore.getState().patchState({
             currentAgentId: null,
-            messages: [],
             logs: [],
             lastLogId: null,
             logSubagentId: null,

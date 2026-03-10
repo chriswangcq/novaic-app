@@ -168,7 +168,7 @@ function DeviceCard({
           {isConnecting ? (
             <>连接中...</>
           ) : isRunning ? (
-            <ExternalLink size={10} title="显示" />
+            <span title="显示"><ExternalLink size={10} aria-hidden /></span>
           ) : (
             <>
               <Play size={10} />

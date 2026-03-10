@@ -43,7 +43,7 @@ export function useScrollPagination(options: UseScrollPaginationOptions): UseScr
   // ── 同步滚动位置补偿（核心） ────────────────────────────────────────────
   //
   // 在 DOM 更新后、浏览器绘制前执行（useLayoutEffect）。
-  // 当 prependMessages 导致 totalSize 增大时，立刻把 scrollTop 加上相同的 delta，
+  // 当 loadMore 导致 totalSize 增大时，立刻把 scrollTop 加上相同的 delta，
   // 视口内容对用户来说纹丝不动。
   //
   // 依赖 [itemsLength, isLoading]：
