@@ -3,7 +3,7 @@
  * Zero business logic. Zero knowledge of Gateway or Zustand.
  */
 
-import { openDB, type IDBPDatabase } from 'idb';
+import { openDB, deleteDB, type IDBPDatabase } from 'idb';
 
 export const DB_VERSION = 3;
 
@@ -49,4 +49,18 @@ export async function getDb(userId: string): Promise<IDBPDatabase> {
 export function resetDb(): void {
   if (_db) { _db.close(); _db = null; }
   _dbUserId = null;
+}
+
+/**
+ * Clear local IndexedDB cache for the given user.
+ * Deletes messages, logs, prefs, files. Next getDb() will recreate an empty DB.
+ * Call resetDb() first so no open connections block deletion.
+ */
+export async function clearLocalDb(userId: string): Promise<void> {
+  resetDb();
+  await deleteDB(dbName(userId), {
+    blocked() {
+      console.warn('[DB] clearLocalDb blocked by open connections; retry after closing other tabs');
+    },
+  });
 }

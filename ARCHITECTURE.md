@@ -100,7 +100,7 @@ export async function deleteAgentLogs(agentId: string): Promise<void>
 // db/prefsRepo.ts —— 替代 localStorage，统一进 IndexedDB
 export async function getPref<T>(userId: string, key: string): Promise<T | null>
 export async function setPref<T>(userId: string, key: string, value: T): Promise<void>
-// 存储：selectedAgentId、selectedModel、layout、chatSyncTime、logSyncId
+// 存储：selectedAgentId、selectedModel、layout（delta 游标从 DB 派生）
 ```
 
 **RawMessage**（DB 存储格式，与 server 一致）：

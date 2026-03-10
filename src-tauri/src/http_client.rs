@@ -8,7 +8,7 @@
 
 use reqwest::{Client, ClientBuilder};
 use std::time::Duration;
-use crate::config::AppConfig;
+use crate::core::config::AppConfig;
 
 /// 判断 URL 是否为本地地址（不应该走代理）
 pub fn is_local_url(url: &str) -> bool {

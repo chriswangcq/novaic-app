@@ -1,0 +1,16 @@
+{
+  "app": {
+    "windows": []
+  },
+  "bundle": {
+    "resources": {
+      "resources/config": "config",
+      "resources/backends": "backends",
+      "resources/novaic-mcp-vmuse": "novaic-mcp-vmuse"
+    },
+    "android": {
+      "minSdkVersion": 30,
+      "targetSdkVersion": 34
+    }
+  }
+}

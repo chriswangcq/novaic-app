@@ -4,6 +4,7 @@
  */
 export {
   getCurrentUser,
+  getCachedUser,
   getAccessToken,
   appendTokenToUrl,
   fetchWithAuth,

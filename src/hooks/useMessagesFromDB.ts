@@ -37,6 +37,7 @@ export function useMessagesFromDB(
   const [error, setError] = useState<Error | null>(null);
   const latestRef = useRef({ userId, agentId });
   latestRef.current = { userId, agentId };
+  const refetchVersionRef = useRef(0);
 
   const refetch = useCallback(async () => {
     if (!userId || !agentId) {
@@ -45,6 +46,9 @@ export function useMessagesFromDB(
       setError(null);
       return;
     }
+    const myVersion = ++refetchVersionRef.current;
+    const isCurrent = () => refetchVersionRef.current === myVersion;
+
     setIsLoading(true);
     setError(null);
     const fetchFor = { userId, agentId };
@@ -52,15 +56,17 @@ export function useMessagesFromDB(
       const raw = await msgRepo.getMessages(userId, agentId, {
         limit: DB_DRIVEN_FETCH_LIMIT,
       });
+      if (!isCurrent()) return;
       if (latestRef.current.userId !== fetchFor.userId || latestRef.current.agentId !== fetchFor.agentId) return;
       const filtered = raw.filter((m) => !HIDDEN_TYPES.has(m.type));
       setMessages(filtered.map(rawToMessageVM));
     } catch (e) {
+      if (!isCurrent()) return;
       if (latestRef.current.userId !== fetchFor.userId || latestRef.current.agentId !== fetchFor.agentId) return;
       setError(e instanceof Error ? e : new Error(String(e)));
       setMessages([]);
     } finally {
-      if (latestRef.current.userId === fetchFor.userId && latestRef.current.agentId === fetchFor.agentId) {
+      if (isCurrent() && latestRef.current.userId === fetchFor.userId && latestRef.current.agentId === fetchFor.agentId) {
         setIsLoading(false);
       }
     }

@@ -1,9 +1,10 @@
 /**
  * db/logRepo.ts — Execution log CRUD over IndexedDB.
- * Zero business logic.
+ * Notifies logSubscription after writes (for DB-driven rendering).
  */
 
 import { getDb } from './index';
+import { notifyLogChange } from './logSubscription';
 import type { LogEntry, LogData, InputSummary } from '../types';
 
 export interface RawLog {
@@ -36,21 +37,26 @@ export async function putLogs(userId: string, logs: RawLog[]): Promise<void> {
   const tx = db.transaction('logs', 'readwrite');
   await Promise.all(logs.map(l => tx.store.put(l)));
   await tx.done;
+  const agentIds = [...new Set(logs.map((l) => l.agent_id))];
+  agentIds.forEach((agentId) => notifyLogChange(userId, agentId));
 }
 
-/** Load logs for an agent, ascending by id. */
+/** Load logs for an agent, ascending by id. Optionally filter by subagentId. */
 export async function getLogs(
   userId: string,
   agentId: string,
   opts: GetLogsOpts = {},
 ): Promise<RawLog[]> {
-  const { limit = 200, afterId, beforeId } = opts;
+  const { limit = 200, afterId, beforeId, subagentId } = opts;
   const db = await getDb(userId);
   const lower = afterId != null ? [agentId, afterId + 1] : [agentId, 0];
   const upper = beforeId != null ? [agentId, beforeId - 1] : [agentId, Infinity];
   const range = IDBKeyRange.bound(lower, upper);
-  const all = await db.getAllFromIndex('logs', 'by_agent_id', range);
-  return all.slice(0, limit) as RawLog[];
+  let all = (await db.getAllFromIndex('logs', 'by_agent_id', range)) as RawLog[];
+  if (subagentId != null) {
+    all = all.filter((l) => l.subagent_id === subagentId);
+  }
+  return all.slice(0, limit);
 }
 
 /** Highest log id stored for an agent — used as delta cursor. */
@@ -72,13 +78,15 @@ export async function deleteAgentLogs(userId: string, agentId: string): Promise<
   let cursor = await tx.store.index('by_agent_id').openCursor(range);
   while (cursor) { await cursor.delete(); cursor = await cursor.continue(); }
   await tx.done;
+  notifyLogChange(userId, agentId);
 }
 
 /** Update a single log entry's input field (on-demand full input load). */
 export async function updateLogInput(userId: string, logId: number, input: unknown): Promise<void> {
   const db = await getDb(userId);
   const tx = db.transaction('logs', 'readwrite');
-  const existing = await tx.store.get(logId);
+  const existing = (await tx.store.get(logId)) as RawLog | undefined;
   if (existing) await tx.store.put({ ...existing, input });
   await tx.done;
+  if (existing) notifyLogChange(userId, existing.agent_id);
 }

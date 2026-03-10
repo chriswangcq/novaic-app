@@ -153,23 +153,6 @@ class VmService {
   }
 
   /**
-   * 获取 VmControl 的 base URL（通过 Tauri command，动态端口）
-   * 缓存结果以避免每次都 invoke
-   */
-  private vmcontrolBaseUrl: string | null = null;
-
-  async getVmcontrolUrl(): Promise<string | null> {
-    if (this.vmcontrolBaseUrl) return this.vmcontrolBaseUrl;
-    try {
-      const url = await invoke<string>('get_vmcontrol_url');
-      this.vmcontrolBaseUrl = url;
-      return url;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * 获取 VNC WebSocket URL（统一代理，OS 动态端口）。
    *
    * 前端始终通过 Tauri VNC 代理连接，代理内部自动路由：
@@ -177,19 +160,9 @@ class VmService {
    *   远程设备 → QUIC P2P tunnel（Phase 3）
    */
   async getVncUrl(deviceId: string): Promise<string> {
-    try {
-      const url = await invoke<string>('get_vnc_proxy_url', { deviceId });
-      console.log(`[VM Service] VNC proxy URL: ${url}`);
-      return url;
-    } catch (error) {
-      console.warn('[VM Service] VNC proxy not ready, falling back to direct vmcontrol:', error);
-      // 降级：直接连 VmControl（proxy 还未就绪时的临时兜底）
-      const baseUrl = await this.getVmcontrolUrl();
-      if (baseUrl) {
-        return `${baseUrl.replace(/^http/, 'ws')}/api/vms/${deviceId}/vnc`;
-      }
-      return `ws://${LOCAL_ENDPOINTS.WS_HOST}:${DEFAULT_PORTS.WEBSOCKET}/websockify`;
-    }
+    const url = await invoke<string>('get_vnc_proxy_url', { deviceId });
+    console.log(`[VM Service] VNC proxy URL: ${url}`);
+    return url;
   }
 
   /**

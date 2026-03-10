@@ -1,15 +1,14 @@
 import { invoke } from '@tauri-apps/api/core';
+import { secureGet, secureSet, secureRemove } from './secureStorage';
 
 /**
  * Frontend auth helper — custom JWT edition.
  *
- * Tokens are stored in localStorage. On each request the access token is
- * checked for expiry; if within 5 min of expiry the refresh endpoint is
- * called automatically (token rotation).
+ * Tokens are stored in SecureStorage (Keychain/Keystore on Tauri) or localStorage (web).
  *
  *   login(email, password)    – POST /auth/login, stores tokens
  *   register(email, password) – POST /auth/register, stores tokens
- *   logout()                  – clears tokens from localStorage
+ *   logout()                  – clears tokens
  *   getAccessToken()          – returns current access token (auto-refreshes)
  *   fetchWithAuth(url, opts)  – drop-in fetch() that adds Authorization: Bearer
  *   appendTokenToUrl(url)     – for EventSource / WebSocket that can't set headers
@@ -71,29 +70,37 @@ async function gatewayPublicPost<T>(path: string, body: Record<string, unknown>)
 
 // ── Token storage ─────────────────────────────────────────────────────────────
 
-function saveSession(data: TokenResponse): void {
+/** Sync cache for application layer; updated by getStoredUser/saveSession/clearSession */
+let _cachedUser: (UserInfo & { expires_at: number }) | null = null;
+
+async function saveSession(data: TokenResponse): Promise<void> {
   const expiresAt = Date.now() + data.expires_in * 1000;
-  localStorage.setItem(STORAGE_ACCESS, data.access_token);
-  localStorage.setItem(STORAGE_REFRESH, data.refresh_token);
-  localStorage.setItem(STORAGE_USER, JSON.stringify({
+  await secureSet(STORAGE_ACCESS, data.access_token);
+  await secureSet(STORAGE_REFRESH, data.refresh_token);
+  await secureSet(STORAGE_USER, JSON.stringify({
     user_id: data.user_id,
     email: data.email,
     display_name: data.display_name,
     expires_at: expiresAt,
   }));
+  _cachedUser = { user_id: data.user_id, email: data.email, display_name: data.display_name, expires_at: expiresAt };
 }
 
-function clearSession(): void {
-  localStorage.removeItem(STORAGE_ACCESS);
-  localStorage.removeItem(STORAGE_REFRESH);
-  localStorage.removeItem(STORAGE_USER);
+async function clearSession(): Promise<void> {
+  await secureRemove(STORAGE_ACCESS);
+  await secureRemove(STORAGE_REFRESH);
+  await secureRemove(STORAGE_USER);
+  _cachedUser = null;
 }
 
-function getStoredUser(): (UserInfo & { expires_at: number }) | null {
+async function getStoredUser(): Promise<(UserInfo & { expires_at: number }) | null> {
   try {
-    const raw = localStorage.getItem(STORAGE_USER);
-    return raw ? JSON.parse(raw) : null;
+    const raw = await secureGet(STORAGE_USER);
+    const u = raw ? JSON.parse(raw) : null;
+    _cachedUser = u;
+    return u;
   } catch {
+    _cachedUser = null;
     return null;
   }
 }
@@ -101,18 +108,20 @@ function getStoredUser(): (UserInfo & { expires_at: number }) | null {
 // ── Token refresh ─────────────────────────────────────────────────────────────
 
 let _refreshPromise: Promise<string | null> | null = null;
+let _logoutRequested = false;
 
 async function _doRefresh(): Promise<string | null> {
-  const refreshToken = localStorage.getItem(STORAGE_REFRESH);
-  if (!refreshToken) return null;
+  const refreshToken = await secureGet(STORAGE_REFRESH);
+  if (!refreshToken || _logoutRequested) return null;
   try {
     const data = await gatewayPublicPost<TokenResponse>('/auth/refresh', {
       refresh_token: refreshToken,
     });
-    saveSession(data);
+    if (_logoutRequested) return null;
+    await saveSession(data);
     return data.access_token;
   } catch {
-    clearSession();
+    if (!_logoutRequested) await clearSession();
     return null;
   }
 }
@@ -120,7 +129,7 @@ async function _doRefresh(): Promise<string | null> {
 // ── Public: Get Access Token (auto-refresh within 5 min of expiry) ───────────
 
 export async function getAccessToken(): Promise<string | null> {
-  const user = getStoredUser();
+  const user = await getStoredUser();
   if (!user) return null;
 
   const fiveMinMs = 5 * 60 * 1000;
@@ -134,26 +143,21 @@ export async function getAccessToken(): Promise<string | null> {
     return _refreshPromise;
   }
 
-  return localStorage.getItem(STORAGE_ACCESS);
-}
-
-/** @deprecated alias kept for backward compat */
-export async function getApiKey(): Promise<string> {
-  return (await getAccessToken()) ?? '';
+  return secureGet(STORAGE_ACCESS);
 }
 
 // ── Public: Auth Status ───────────────────────────────────────────────────────
 
-export function isAuthenticated(): boolean {
-  const user = getStoredUser();
+export async function isAuthenticated(): Promise<boolean> {
+  const user = await getStoredUser();
   if (!user) return false;
   return user.expires_at > Date.now();
 }
 
 // ── Public: User Info ─────────────────────────────────────────────────────────
 
-export function getCurrentUser(): UserInfo | null {
-  const user = getStoredUser();
+export async function getCurrentUser(): Promise<UserInfo | null> {
+  const user = await getStoredUser();
   if (!user || user.expires_at <= Date.now()) return null;
   return {
     user_id: user.user_id,
@@ -162,11 +166,21 @@ export function getCurrentUser(): UserInfo | null {
   };
 }
 
+/** Sync; use when cache is already populated (e.g. after restoreSession). */
+export function getCachedUser(): UserInfo | null {
+  if (!_cachedUser || _cachedUser.expires_at <= Date.now()) return null;
+  return {
+    user_id: _cachedUser.user_id,
+    email: _cachedUser.email,
+    display_name: _cachedUser.display_name,
+  };
+}
+
 // ── Public: Login ─────────────────────────────────────────────────────────────
 
 export async function login(email: string, password: string): Promise<UserInfo> {
   const data = await gatewayPublicPost<TokenResponse>('/auth/login', { email, password });
-  saveSession(data);
+  await saveSession(data);
   return { user_id: data.user_id, email: data.email, display_name: data.display_name };
 }
 
@@ -182,19 +196,20 @@ export async function register(
     password,
     display_name: displayName ?? '',
   });
-  saveSession(data);
+  await saveSession(data);
   return { user_id: data.user_id, email: data.email, display_name: data.display_name };
 }
 
 // ── Public: Logout ────────────────────────────────────────────────────────────
 
 export async function logout(): Promise<void> {
-  const refreshToken = localStorage.getItem(STORAGE_REFRESH);
+  _logoutRequested = true;
+  const refreshToken = await secureGet(STORAGE_REFRESH);
   if (refreshToken) {
-    // Best-effort server-side revocation
     gatewayPublicPost('/auth/logout', { refresh_token: refreshToken }).catch(() => {});
   }
-  clearSession();
+  await clearSession();
+  _logoutRequested = false;
 }
 
 // ── Public: fetchWithAuth ─────────────────────────────────────────────────────

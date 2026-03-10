@@ -21,7 +21,6 @@ import {
   clearMessagePagination,
 } from './messagePaginationStore';
 import * as msgRepo from '../db/messageRepo';
-import * as prefsRepo from '../db/prefsRepo';
 import { gateway } from '../gateway/client';
 import {
   messagevmToRaw,
@@ -73,6 +72,7 @@ export class MessageService {
         const filtered = delta.messages.filter(m => !HIDDEN_TYPES.has(m.type));
         await msgRepo.putMessages(this.userId, filtered.map(m => serverHistoryToRaw(agentId, m)));
       }
+      setMessagePagination(agentId, { hasMore: delta.has_more ?? false });
     } else {
       const history = await gateway.getChatHistory({
         agent_id: agentId,
@@ -86,9 +86,7 @@ export class MessageService {
         setMessagePagination(agentId, { hasMore: history.has_more });
       }
     }
-    if (isCurrent()) {
-      await prefsRepo.setChatSyncTime(this.userId, agentId, new Date().toISOString());
-    }
+    // Delta cursor is derived from DB (msgRepo.getLastSyncTime), not from prefs.
   }
 
   // ── Send message ──────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@
 
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentUser } from '../../services/auth';
+import { getCachedUser } from '../../services/auth';
 import { getCachedFile, setCachedFile } from '../../db/fileRepo';
 
 // 模块级去重 Map：key = `${userId}:${cacheKey}`，value = 进行中的 fetch Promise
@@ -74,7 +74,7 @@ export function useAuthenticatedImage(
     let cancelled = false;
 
     const load = async () => {
-      const userId = getCurrentUser()?.user_id ?? 'anonymous';
+      const userId = getCachedUser()?.user_id ?? 'anonymous';
       try {
         const blob = await fetchAndCache(userId, key, url, mimeType);
         if (cancelled) return;

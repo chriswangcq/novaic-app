@@ -8,7 +8,8 @@ import { useModels } from '../hooks/useModels';
 import { getModelService } from '../../application';
 import { vmService } from '../../services/vm';
 import { api, type AgentDeviceBinding, type DeviceSubject, type DeviceSubjectType, type MountedToolsByCategory } from '../../services/api';
-import { getCurrentUser } from '../../services/auth';
+import { getCachedUser } from '../../services/auth';
+import { clearLocalDb } from '../../db';
 import { Markdown } from '../Chat/Markdown';
 import type { Device } from '../../types';
 
@@ -2401,6 +2402,7 @@ export function SettingsModal(props: {
 
   // Cleanup state
   const [cleaning, setCleaning] = useState(false);
+  const [clearingLocalDb, setClearingLocalDb] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<{
     logs: number;
     metadata_files: number;
@@ -2584,6 +2586,25 @@ export function SettingsModal(props: {
     }
   };
 
+  const handleClearLocalDb = async () => {
+    const user = getCachedUser();
+    if (!user?.user_id) {
+      setError('请先登录');
+      return;
+    }
+    setClearingLocalDb(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await clearLocalDb(user.user_id);
+      setInfo('本地 DB 缓存已清空，请刷新页面以生效');
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setClearingLocalDb(false);
+    }
+  };
+
   // Cleanup handlers
   const handleCleanup = async (deep: boolean, cleanVmCache: boolean) => {
     setCleaning(true);
@@ -2619,14 +2640,14 @@ export function SettingsModal(props: {
         <div className="flex items-center justify-center border-b border-nb-border px-4 py-3 flex-shrink-0">
           <div data-tauri-drag-region className="text-sm font-semibold text-nb-text cursor-default">Settings</div>
         </div>
-        <div className="flex-1 overflow-y-auto py-2">
+        <div className="flex-1 overflow-y-auto py-2.5">
           {TAB_ITEMS.map(({ id, icon: Icon, label }) => {
             const isSelected = embeddedTab === id;
             return (
               <button
                 key={id}
                 onClick={() => { setActiveTab(id); onEmbeddedSubTabSelect?.(id); }}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors rounded-lg mx-2 ${
                   isSelected ? 'bg-white/10 text-nb-text' : 'text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04]'
                 }`}
               >
@@ -2657,10 +2678,10 @@ export function SettingsModal(props: {
             <button
               type="button"
               onClick={onEmbeddedBack}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text transition-all shrink-0"
+              className="w-8 h-8 flex items-center justify-center rounded-md text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text transition-all shrink-0"
               title="返回"
             >
-              <ChevronLeft size={15} strokeWidth={1.8} />
+              <ChevronLeft size={16} strokeWidth={1.8} />
             </button>
           )}
         </div>
@@ -2889,12 +2910,34 @@ export function SettingsModal(props: {
                 {/* Tab Header */}
                 <div className="px-4 py-3 border-b border-nb-border flex-shrink-0">
                   <div className="text-xs text-nb-text-muted">
-                    Clear temp files, logs and VM cache
+                    Clear temp files, logs, VM cache and local DB
                   </div>
                 </div>
 
                 {/* Tab Content */}
                 <div className="p-4 overflow-y-auto flex-1 space-y-4">
+                  {/* Local DB Cache Card */}
+                  <div className="border border-nb-border rounded-lg p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 rounded-lg bg-nb-surface-2">
+                        <Database size={20} className="text-nb-text-muted" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-nb-text">本地 DB 缓存</div>
+                        <div className="text-xs text-nb-text-muted mt-1">
+                          清空 IndexedDB 中的消息、日志、偏好和附件缓存，下次打开会从服务端重新拉取
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleClearLocalDb}
+                      disabled={clearingLocalDb}
+                      className="w-full py-2 rounded-lg border border-nb-border text-sm text-nb-text hover:bg-nb-surface-2 transition-colors disabled:opacity-50"
+                    >
+                      {clearingLocalDb ? '清空中...' : '清空本地 DB 缓存'}
+                    </button>
+                  </div>
+
                   {/* Quick Cleanup Card */}
                   <div className="border border-nb-border rounded-lg p-4 space-y-3">
                     <div className="flex items-start gap-3">
@@ -3005,7 +3048,7 @@ export function SettingsModal(props: {
                 </div>
                 <div className="p-4 overflow-y-auto flex-1 space-y-4">
                   {(() => {
-                    const user = getCurrentUser();
+                    const user = getCachedUser();
                     return (
                       <div className="space-y-4">
                         <div className="rounded-lg border border-nb-border/60 bg-nb-surface/40 p-4 space-y-3">

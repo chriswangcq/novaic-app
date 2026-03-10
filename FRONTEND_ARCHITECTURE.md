@@ -44,8 +44,10 @@
 |------|------|
 | `src/db/index.ts` | `openDB` 初始化，schema 版本管理，`getDb(userId)` 工厂 |
 | `src/db/messageRepo.ts` | 消息 CRUD：`putMessages` / `getMessages` / `getMessage` / `getLastMessage` / `updateMessageRead` / `replaceMessage` / `countMessages` / `getLastSyncTime` / `deleteAgentMessages` |
-| `src/db/logRepo.ts` | 日志 CRUD：`putLogs` / `getLogs` / `countLogs` / `getLastLogId` |
-| `src/db/prefsRepo.ts` | 偏好持久化：`getSelectedAgent` / `setSelectedAgent` / `getChatSyncTime` / `setChatSyncTime` |
+| `src/db/messageSubscription.ts` | 消息变更通知：`subscribe(userId, agentId, callback)` / `notifyMessageChange`（DB 驱动渲染） |
+| `src/db/logRepo.ts` | 日志 CRUD：`putLogs` / `getLogs` / `getMaxLogId` / `deleteAgentLogs` / `updateLogInput` |
+| `src/db/logSubscription.ts` | 日志变更通知：`subscribe(userId, agentId, callback)` / `notifyLogChange` |
+| `src/db/prefsRepo.ts` | 偏好持久化：`getSelectedAgent` / `setSelectedAgent` / `getLayout` / `setLayout` |
 | `src/db/fileRepo.ts` | 附件缓存：`getCachedFile` / `setCachedFile` / `deleteCachedFile`（图片存 Blob，文件存 local_path） |
 
 ### IndexedDB Schema（v2）
@@ -94,13 +96,13 @@ store.ts          ← 纯状态容器，只有 Services 写入
 | `src/gateway/sse.ts` | `SSEManager` 类：管理 Chat SSE 和 Logs SSE 两条连接的生命周期；零业务逻辑，只负责连接/断线/事件路由 |
 | `src/gateway/auth.ts` | Token 获取、URL 追加 token（用于 SSE EventSource） |
 
-### 2.3 Zustand Store
+### 2.3 Zustand Store 与 DB 驱动模块
 
-**文件：`src/application/store.ts`**
+**主 Store：`src/application/store.ts`**
 
 - **纯状态容器**：只存 View Model，只有同步 setter
 - **绝不**包含 async 操作、API 调用、DB 调用
-- 所有写入均由 Services 从外部调用
+- 消息、日志已迁移至 DB 驱动，不再存于主 Store
 
 **Store 字段分组：**
 
@@ -108,21 +110,24 @@ store.ts          ← 纯状态容器，只有 Services 写入
 |------|------|
 | Bootstrap | `isInitialized`, `user`, `gatewayUrl` |
 | Agents | `agents`, `currentAgentId`, `createAgentModalOpen` |
-| Messages | `messages`, `hasMoreMessages`, `isLoadingMore` |
-| Logs | `logs`, `hasMoreLogs`, `isLoadingMoreLogs`, `lastLogId`, `logSubagentId`, `logSubagents` |
 | Models | `availableModels`, `apiKeys`, `selectedModel` |
 | Device | `vncConnected`, `vncInteractive`, `vncLocked`, `androidConnected` |
 | UI | `settingsOpen` |
 | Layout | `layoutMode`, `leftPanelWidth`, `drawerOpen/Width`, `sidebarWidth/Collapsed/Mode`, `logExpanded/HeightRatio`, `expandedCapsules` |
-| Cache | `logInputCache` |
 
-**Setters（同步，无副作用）：**
+**DB 驱动专用 Store（消息、日志已从主 Store 剥离）：**
+
+| 文件 | 职责 |
+|------|------|
+| `messagePaginationStore.ts` | 消息分页：`hasMore`, `isLoading`（按 agentId） |
+| `logPaginationStore.ts` | 日志分页：`hasMore`, `isLoading`, `lastLogId`（按 agentId + logSubagentId） |
+| `logFilterStore.ts` | 日志过滤：`logSubagentId`, `logSubagents` |
+| `logInputCacheStore.ts` | 日志 input 按需加载缓存 |
+
+**主 Store Setters：**
 
 ```
 patchState       — 通用 partial patch
-setMessages / prependMessages / upsertMessage
-updateMessageStatus(msgId, status)
-setLogs / prependLogs / upsertLog
 setAgents / patchAgent / setCurrentAgentId
 setLayoutField
 ```
@@ -142,37 +147,43 @@ SyncService     ──┘
 LayoutService   （独立）
 ```
 
-#### MessageService（`messageService.ts`）
+#### MessageService（`messageService.ts`）— DB 驱动
 
-负责消息的完整生命周期：
+**只写 DB，不写 Store。** UI 通过 `useMessagesFromDB` 订阅 DB 变更。
 
 | 方法 | 说明 |
 |------|------|
-| `load(agentId)` | DB → store；内部串行调用 `_deltaSync`（epoch 保护防竞态） |
+| `load(agentId)` | 同步服务端 → DB；内部 `_deltaSync`（epoch 保护防竞态） |
 | `_deltaSync(agentId, isCurrent)` | 差量同步：有本地数据走 `updated_after` 增量，否则全量拉取 |
-| `send(agentId, content, attachments?)` | 乐观写入 → 发送 → `replaceMessage(tempId → realId)` → status='delivered' |
-| `handleIncoming(agentId, sseMsg)` | SSE 新消息 → DB → store |
-| `handleStatusUpdate(msgId, status)` | SSE 状态变更 → DB `updateMessageRead` → store `updateMessageStatus` |
-| `loadMore(agentId)` | 分页加载历史消息 |
-| `expand(agentId, msgId)` | 展开被截断的消息全文 |
-| `clear(agentId)` | 清空 DB + store |
+| `send(agentId, content, attachments?)` | 乐观写入 DB → 发送 → `replaceMessage(tempId → realId)` |
+| `handleIncoming(agentId, sseMsg)` | SSE 新消息 → DB（订阅通知 UI） |
+| `handleStatusUpdate(msgId, status)` | SSE 状态变更 → DB `updateMessageRead` |
+| `loadMore(agentId, beforeId?)` | 分页加载历史消息 → DB |
+| `expand(agentId, msgId)` | 展开被截断的消息全文 → DB |
+| `clear(agentId)` | 清空 DB + messagePaginationStore |
 | `deltaSync(agentId)` | SSE 断线重连后的补偿同步 |
 
 **关键设计：**
 - `loadEpoch` 单调递增，防止快速切 agent 时旧请求覆盖新数据
-- `send()` 确认成功后原子替换 DB 中的 tempId → realId，确保后续 `STATUS_UPDATE` 能正确命中
+- `send()` 确认成功后原子替换 DB 中的 tempId → realId
 
-#### LogService（`logService.ts`）
+#### LogService（`logService.ts`）— DB 驱动
+
+**只写 DB，不写 Store。** UI 通过 `useLogsFromDB` 订阅 DB 变更。
 
 | 方法 | 说明 |
 |------|------|
-| `load(agentId)` | DB → store（epoch 保护） |
-| `handleBatch(agentId, entries)` | SSE log_batch（连接时一次性）→ DB → store 合并 |
-| `handleIncoming(agentId, entry)` | SSE log_entry（单条新日志）→ DB → store upsert |
-| `fetchAndMerge(agentId)` | logs_updated 事件后全量拉取并合并 |
-| `fetchSubagentTree(agentId)` | 拉取 subagent 树状态 |
-| `handleSubagentUpdate(update)` | subagent_update SSE 事件 → store |
-| `loadMore(agentId)` | 分页加载历史日志 |
+| `load(agentId)` | 初始化分页/过滤状态；fetchSubagentTree → logFilterStore |
+| `handleBatch(agentId, entries)` | SSE log_batch → DB（订阅通知 UI） |
+| `handleIncoming(agentId, entry)` | SSE log_entry → DB |
+| `fetchAndMerge(agentId)` | logs_updated 事件后拉取 → DB |
+| `fetchSubagentTree(agentId)` | 拉取 subagent 树 → logFilterStore |
+| `handleSubagentUpdate(update)` | subagent_update SSE → logFilterStore |
+| `loadMore(agentId, beforeId?)` | 分页加载历史日志 → DB |
+| `filterBySubagent(agentId, subagentId)` | 切换 subagent 过滤 → API → DB |
+| `appendSubagentLogs(agentId, subagentId)` | 胶囊点击追加日志 → DB |
+| `fetchLogInput(logId)` | 按需加载完整 input → logInputCacheStore + DB |
+| `clear(agentId)` | 清空 DB + 各 log 专用 store |
 
 #### SyncService（`syncService.ts`）
 
@@ -250,10 +261,10 @@ RawLog (DB)      ←→  LogEntry VM (Store/UI)
 
 位于 `src/components/hooks/`，是 Render 与 Business 之间的唯一合法通道。
 
-| Hook | 读取 | 操作 |
-|------|------|------|
-| `useMessages()` | `messages`, `hasMoreMessages`, `isLoadingMore` | `send`, `loadMore`, `expand`, `clear` |
-| `useLogs()` | `logs`, `hasMoreLogs`, `logSubagentId`, `logSubagents` | `loadMore`, `fetchSubagentTree` |
+| Hook | 数据来源 | 操作 |
+|------|----------|------|
+| `useMessages()` | `useMessagesFromDB`（DB 订阅）+ `messagePaginationStore` | `send`, `loadMore`, `expand`, `clear` |
+| `useLogs()` | `useLogsFromDB`（DB 订阅）+ `logPaginationStore` + `logFilterStore` | `loadMore`, `filterBySubagent`, `appendSubagentLogs`, `fetchSubagentTree`, `fetchLogInput`, `clear` |
 | `useAgent()` | `agents`, `currentAgentId`, `currentAgent`, `isInitialized` | `initialize`, `select`, `create`, `setAgentModel`, `delete`, `setup`, `updateVmConfig`, `loadAgents` |
 | `useModels()` | `availableModels`, `apiKeys`, `selectedModel` | `setModel`, `loadConfig` |
 | `useLayout()` | 所有布局字段 | `setDrawerWidth`, `setSidebarWidth`, 等 |
@@ -284,7 +295,38 @@ src/components/
 
 ---
 
-## 四、完整数据流示例
+## 四、DB 驱动渲染数据流
+
+消息、日志模块采用 **DB 驱动渲染**：业务逻辑只写 DB，UI 通过订阅 DB 变更自动更新。
+
+```
+事件（用户操作 / SSE / API）
+  ↓
+Service 业务逻辑
+  ↓
+写 DB（messageRepo / logRepo）
+  ↓
+notifyMessageChange / notifyLogChange
+  ↓
+订阅者 callback 触发
+  ↓
+useMessagesFromDB / useLogsFromDB 执行 refetch
+  ↓
+UI 从 hook 读取最新数据并渲染
+```
+
+**已迁移模块：**
+
+| 模块 | 数据源 | 订阅 Hook |
+|------|--------|-----------|
+| 消息 | IndexedDB `messages` | `useMessagesFromDB`（内部 `messageSubscription`） |
+| 日志 | IndexedDB `logs` | `useLogsFromDB`（内部 `logSubscription`） |
+
+**仍为 Store 驱动：** Agents、Models、Layout、Device 等。
+
+---
+
+## 五、完整数据流示例
 
 ### 场景 A：切换 Agent
 
@@ -301,12 +343,10 @@ AgentService.selectAgent(agentId)
   ├─ SyncService.switchAgent(agentId)
   │    ├─ SSEManager.disconnect()           ← Gateway 层
   │    ├─ MessageService.load(agentId)
-  │    │    ├─ msgRepo.getMessages()        ← DB 层
-  │    │    ├─ store.setMessages()          ← Business 层写 Store
+  │    │    ├─ setMessagePagination()      ← 分页状态
   │    │    └─ _deltaSync()
   │    │         ├─ gateway.getChatHistory() ← Gateway 层
-  │    │         ├─ msgRepo.putMessages()    ← DB 层
-  │    │         └─ store.upsertMessage()   ← Business 层写 Store
+  │    │         └─ msgRepo.putMessages()    ← DB 层 → notifyMessageChange
   │    ├─ LogService.load(agentId)          ← 同上
   │    ├─ SSEManager.connectChat()          ← Gateway 层
   │    └─ SSEManager.connectLogs()          ← Gateway 层
@@ -315,7 +355,7 @@ AgentService.selectAgent(agentId)
        └─ store.patchState({ selectedModel })
 ```
 
-### 场景 B：用户发送消息
+### 场景 B：用户发送消息（DB 驱动）
 
 ```
 用户提交输入
@@ -324,15 +364,14 @@ useMessages().send(content, attachments?)
   ↓
 MessageService.send(agentId, content)
   ├─ gateway.uploadChatFile()              ← 上传附件（可选）
-  ├─ msgRepo.putMessages([tempId])         ← DB 乐观写入
-  ├─ store.upsertMessage(optimistic)       ← 立即显示"发送中"
+  ├─ msgRepo.putMessages([tempId])         ← DB 乐观写入 → notifyMessageChange
+  │    └─ useMessagesFromDB 订阅触发 refetch → UI 更新
   ├─ gateway.sendChatMessage()             ← HTTP 发送
   └─ on success:
-       ├─ msgRepo.replaceMessage(tempId → realId)  ← DB 原子替换
-       └─ store: tempId → realId, status='delivered'
+       └─ msgRepo.replaceMessage(tempId → realId)  ← DB 原子替换 → notifyMessageChange
 ```
 
-### 场景 C：Agent 回复（SSE 实时）
+### 场景 C：Agent 回复（SSE 实时，DB 驱动）
 
 ```
 Agent 处理消息 → 服务端
@@ -342,26 +381,27 @@ SSE AGENT_REPLY 推送
 SSEManager.onmessage → handlers.onAgentReply(msg)
   ↓
 SyncService → MessageService.handleIncoming(agentId, sseMsg)
-  ├─ msgRepo.putMessages([raw])   ← DB 落地
-  └─ store.upsertMessage(vm)      ← 实时显示
+  └─ msgRepo.putMessages([raw])   ← DB 落地 → notifyMessageChange
+       └─ useMessagesFromDB refetch → UI 实时显示
 
 Agent mark-read → 服务端
   ↓
 SSE STATUS_UPDATE 推送
   ↓
 MessageService.handleStatusUpdate(msgId, 'read')
-  ├─ msgRepo.updateMessageRead()  ← DB 更新 read=true
-  └─ store.updateMessageStatus()  ← UI 显示"已读"
+  └─ msgRepo.updateMessageRead()  ← DB 更新 read=true → notifyMessageChange
+       └─ useMessagesFromDB refetch → UI 显示"已读"
 ```
 
 ---
 
-## 五、关键约束汇总
+## 六、关键约束汇总
 
 | 约束 | 说明 |
 |------|------|
 | 单向依赖 | Render → Business → DB，禁止反向引用 |
 | Store 只有同步 setter | 所有 async/副作用在 Service 里完成，写完再调 store |
+| DB 驱动模块只写 DB | MessageService、LogService 只写 DB，不写主 Store；UI 通过订阅 DB 变更 |
 | tempId 立即替换 | `send()` 确认后原子替换 DB 中的 tempId，防止 STATUS_UPDATE 找不到消息 |
 | epoch 保护 | `MessageService` / `LogService` 的 `loadEpoch` 防止快速切 agent 的竞态覆盖 |
 | userId 隔离 | 所有 DB 操作和 Service 实例以 `userId` 为 scope |
@@ -370,39 +410,64 @@ MessageService.handleStatusUpdate(msgId, 'read')
 
 ---
 
-## 六、文件目录速查
+## 七、开发规范
+
+### 新功能优先采用 DB 驱动模式
+
+- 若新功能涉及持久化列表数据，优先：**Service 只写 DB → 订阅通知 → Hook 从 DB 订阅读**
+- 避免在 Service 中直接写主 Store 的列表数据
+
+### Code Review 检查点
+
+- 业务逻辑是否只写 DB（不写 Store 的 messages/logs）
+- UI 是否从 `useMessagesFromDB` / `useLogsFromDB` 或等价 hook 获取数据
+- 订阅是否在 `*Repo` 写操作后正确触发 `notify*Change`
+
+---
+
+## 八、文件目录速查
 
 ```
 src/
 ├── db/
-│   ├── index.ts          IndexedDB 初始化 / schema / getDb()
-│   ├── messageRepo.ts    消息 CRUD
-│   ├── logRepo.ts        日志 CRUD
-│   └── prefsRepo.ts      偏好 k/v
+│   ├── index.ts              IndexedDB 初始化 / schema / getDb()
+│   ├── messageRepo.ts        消息 CRUD
+│   ├── messageSubscription.ts  消息变更通知（DB 驱动）
+│   ├── logRepo.ts            日志 CRUD
+│   ├── logSubscription.ts    日志变更通知（DB 驱动）
+│   └── prefsRepo.ts          偏好 k/v
 │
 ├── gateway/
-│   ├── client.ts         re-export api 单例（HTTP REST）
-│   ├── sse.ts            SSEManager（Chat + Logs 两条 SSE）
-│   └── auth.ts           Token 获取 / URL 注入
+│   ├── client.ts             re-export api 单例（HTTP REST）
+│   ├── sse.ts                SSEManager（Chat + Logs 两条 SSE）
+│   └── auth.ts               Token 获取 / URL 注入
 │
 ├── application/
-│   ├── index.ts          Service 单例工厂（userId-scoped）
-│   ├── store.ts          Zustand Store（纯状态 + 同步 setter）
-│   ├── converters.ts     RawMessage ↔ VM ↔ ServerRow 纯函数转换
-│   ├── messageService.ts 消息业务逻辑
-│   ├── logService.ts     日志业务逻辑
-│   ├── syncService.ts    SSE 生命周期 + delta sync 协调
-│   ├── agentService.ts   Agent CRUD + 初始化 + setup 流程
-│   ├── modelService.ts   模型配置管理
-│   └── layoutService.ts  布局持久化
+│   ├── index.ts              Service 单例工厂（userId-scoped）
+│   ├── store.ts              Zustand 主 Store（agents、models、layout 等）
+│   ├── messagePaginationStore.ts  消息分页状态（DB 驱动）
+│   ├── logPaginationStore.ts      日志分页状态（DB 驱动）
+│   ├── logFilterStore.ts          日志过滤状态（DB 驱动）
+│   ├── logInputCacheStore.ts      日志 input 缓存（DB 驱动）
+│   ├── converters.ts         RawMessage ↔ VM ↔ ServerRow 纯函数转换
+│   ├── messageService.ts    消息业务逻辑（只写 DB）
+│   ├── logService.ts        日志业务逻辑（只写 DB）
+│   ├── syncService.ts       SSE 生命周期 + delta sync 协调
+│   ├── agentService.ts      Agent CRUD + 初始化 + setup 流程
+│   ├── modelService.ts      模型配置管理
+│   └── layoutService.ts     布局持久化
+│
+├── hooks/
+│   ├── useMessagesFromDB.ts 消息 DB 订阅 Hook（DB 驱动）
+│   └── useLogsFromDB.ts     日志 DB 订阅 Hook（DB 驱动）
 │
 └── components/
     ├── hooks/
-    │   ├── useMessages.ts  消息 hook（读 store + 调 messageService）
-    │   ├── useLogs.ts      日志 hook
-    │   ├── useAgent.ts     Agent hook（含 VM setup + updateVmConfig）
-    │   ├── useModels.ts    模型 hook
-    │   ├── useLayout.ts    布局 hook
-    │   └── useSettings.ts  设置 hook（API keys、models、skills、agent tools）
-    └── **/*.tsx            纯渲染，只通过 hooks 通信
+    │   ├── useMessages.ts   消息 hook（useMessagesFromDB + messageService）
+    │   ├── useLogs.ts       日志 hook（useLogsFromDB + logService）
+    │   ├── useAgent.ts      Agent hook（含 VM setup + updateVmConfig）
+    │   ├── useModels.ts     模型 hook
+    │   ├── useLayout.ts     布局 hook
+    │   └── useSettings.ts   设置 hook（API keys、models、skills、agent tools）
+    └── **/*.tsx             纯渲染，只通过 hooks 通信
 ```

@@ -1,4 +1,5 @@
 pub mod vm;
+pub mod vm_prep;
 pub mod setup;
 pub mod users;
 pub mod health;
@@ -114,6 +115,11 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>, process_state: 
     
     Router::new()
         .route("/health", get(health::health_check))
+        // VM 准备 API（环境检查、镜像、部署等待）— Gateway 经 Cloud Bridge 调用
+        .route("/api/vm/environment", get(vm_prep::environment_check))
+        .route("/api/vm/cloud-image/check", get(vm_prep::cloud_image_check))
+        .route("/api/vm/cloud-image/download", post(vm_prep::cloud_image_download))
+        .route("/api/vm/deploy-wait", post(vm_prep::deploy_wait))
         .route("/api/vms", get(vm::list_vms).post(vm::register_vm))
         .route("/api/vms/:id", get(vm::get_vm))
         .route("/api/vms/:id/setup", post(setup::setup_vm))

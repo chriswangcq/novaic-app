@@ -4,7 +4,10 @@ import { LayoutContainer } from './components/Layout/LayoutContainer';
 import { useAppStore } from './application/store';
 import { getAgentService, getSyncService, getLayoutService } from './application';
 import { clearMessagePagination } from './application/messagePaginationStore';
-import { LAYOUT_CONFIG } from './config';
+import { clearLogPagination } from './application/logPaginationStore';
+import { clearLogFilter } from './application/logFilterStore';
+import { clearLogInputCache } from './application/logInputCacheStore';
+import { API_CONFIG, LAYOUT_CONFIG } from './config';
 import { SettingsModal } from './components/Settings/SettingsModal';
 import { SetupWorkspace } from './components/Setup';
 import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
@@ -73,17 +76,29 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 
 
 function App() {
-  const [isSignedIn, setIsSignedIn] = useState(() => getCurrentUser() !== null);
-  const [currentUserInfo, setCurrentUserInfo] = useState<UserInfo | null>(() => getCurrentUser());
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [currentUserInfo, setCurrentUserInfo] = useState<UserInfo | null>(null);
 
-  // 应用启动时优先尝试恢复登录态：
-  // 即使 access token 已过期，也先让 auth.ts 用 refresh_token 换新，
-  // 避免 Rust CloudBridge 因拿不到新 token 而一直停在未登录状态。
+  // 启动时：1) 同步 Gateway URL（仅当 Rust 仍为默认云端时，避免覆盖用户配置）
+  // 2) 恢复登录态（access token 过期时用 refresh_token 换新）
   useEffect(() => {
     let cancelled = false;
 
     const restoreSession = async () => {
       try {
+        // 仅当 current 为 Rust 默认（云端）时同步，避免覆盖用户手动配置的本地/自定义 URL
+        const DEFAULT_CLOUD = 'https://api.gradievo.com';
+        try {
+          const current = (await invoke<string>('get_gateway_url')).trim();
+          const expected = API_CONFIG.GATEWAY_URL.replace(/\/$/, '');
+          if (current === DEFAULT_CLOUD && current !== expected) {
+            await invoke('set_gateway_url', { url: expected });
+            console.log('[App] Gateway URL synced to', expected);
+          }
+        } catch {
+          // Web 模式或无 Tauri 时忽略
+        }
+
         const token = await getAccessToken();
         if (cancelled) return;
 
@@ -94,7 +109,8 @@ function App() {
           return;
         }
 
-        const user = getCurrentUser();
+        const user = await getCurrentUser();
+        if (cancelled) return;
         if (!user) {
           setIsSignedIn(false);
           setCurrentUserInfo(null);
@@ -131,6 +147,16 @@ function App() {
   const handleLogout = useCallback(async () => {
     await logout();
     invoke('update_cloud_token', { token: '' }).catch(() => {});
+    // Clear all stores before resetting services
+    clearMessagePagination();
+    clearLogPagination();
+    clearLogFilter();
+    clearLogInputCache();
+    useAppStore.getState().patchState({
+      isInitialized: false,
+      agents: [],
+      currentAgentId: null,
+    });
     resetServices();
     setIsSignedIn(false);
     setCurrentUserInfo(null);
@@ -171,29 +197,37 @@ function App() {
       return null;
     };
 
-    // Push token first, then start gateway polling.
-    // Retry every 3 s until we get a token (handles edge cases on startup).
+    let cancelled = false;
     let fallbackInterval: ReturnType<typeof setInterval> | null = null;
+
     pushToken().then((token) => {
+      if (cancelled) return;
       if (token) {
         getAgentService().initialize();
       } else {
         fallbackInterval = setInterval(async () => {
+          if (cancelled) return;
           const t = await pushToken();
+          if (cancelled) return;
           if (t) {
             getAgentService().initialize();
-            if (fallbackInterval) clearInterval(fallbackInterval);
-            fallbackInterval = null;
+            if (fallbackInterval) {
+              clearInterval(fallbackInterval);
+              fallbackInterval = null;
+            }
           }
         }, 3000);
       }
     });
 
-    // Proactive refresh every 55 min (token TTL is 60 min; auth.ts handles the actual refresh call)
     const interval = setInterval(pushToken, 55 * 60 * 1000);
     return () => {
+      cancelled = true;
       clearInterval(interval);
-      if (fallbackInterval) clearInterval(fallbackInterval);
+      if (fallbackInterval) {
+        clearInterval(fallbackInterval);
+        fallbackInterval = null;
+      }
     };
   }, [isSignedIn]);
 
@@ -227,13 +261,10 @@ function App() {
           console.log('[App] No agents found, clearing state');
           getSyncService().disconnect();
           clearMessagePagination();
-          useAppStore.getState().patchState({
-            currentAgentId: null,
-            logs: [],
-            lastLogId: null,
-            logSubagentId: null,
-            logSubagents: [],
-          });
+          clearLogPagination();
+          clearLogFilter();
+          clearLogInputCache();
+          useAppStore.getState().patchState({ currentAgentId: null });
           localStorage.removeItem('novaic-current-agent-id');
           return;
         }

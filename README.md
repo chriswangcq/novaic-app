@@ -128,6 +128,22 @@ npm run tauri:build
 bash scripts/build-dmg.sh
 ```
 
+### Mobile (Android / iOS)
+
+**First-time init** (run once before first mobile build):
+```bash
+tauri android init   # Android: generates gen/android, configures signing
+tauri ios init       # iOS: generates gen/ios; set developmentTeam in tauri.ios.conf.json
+```
+
+**Build & dev**:
+```bash
+npm run tauri:build:android   # or tauri:dev:android
+npm run tauri:build:ios       # or tauri:dev:ios
+```
+
+**Prerequisites**: Android Studio + NDK for Android; Xcode for iOS. See [Tauri mobile docs](https://v2.tauri.app/develop/cross-platform/).
+
 ### Development vs Production
 
 | Mode | Backend Location | Config |
@@ -179,14 +195,16 @@ novaic-app/
 ├── src-tauri/                # Rust backend
 │   ├── src/
 │   │   ├── main.rs           # Entry point
-│   │   ├── app_config.rs     # App configuration
 │   │   ├── error.rs          # Error handling
 │   │   ├── http_client.rs    # HTTP utilities
 │   │   ├── commands/         # Tauri commands
 │   │   │   ├── mod.rs
-│   │   │   ├── vm_commands.rs
-│   │   │   ├── file_commands.rs
-│   │   │   └── config_commands.rs
+│   │   │   ├── gateway.rs
+│   │   │   ├── auth.rs
+│   │   │   ├── config.rs
+│   │   │   ├── file.rs
+│   │   │   └── desktop/
+│   │   │       └── urls.rs
 │   │   ├── vm/               # VM management
 │   │   │   ├── mod.rs
 │   │   │   └── manager.rs

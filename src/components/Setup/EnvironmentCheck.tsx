@@ -51,7 +51,7 @@ export function EnvironmentCheck({ onReady, onBack }: EnvironmentCheckProps) {
     setError(null);
     
     try {
-      const envResult = await invoke<EnvironmentCheckResult>('check_environment');
+      const envResult = await invoke<EnvironmentCheckResult>('gateway_get', { path: '/api/vm/environment' });
       setResult(envResult);
       
       // If environment is ready, auto-proceed after a short delay

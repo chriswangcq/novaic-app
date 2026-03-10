@@ -89,15 +89,13 @@
 **VNC (`vmService.getVncUrl(deviceId)`)**：
 ```ts
 invoke('get_vnc_proxy_url', { deviceId })
-// 降级：getVmcontrolUrl() + `/api/vms/${deviceId}/vnc`
-// 再降级：ws://127.0.0.1:20007/websockify
+// 无 fallback，代理失败则报错
 ```
 
 **Scrcpy (`getScrcpyProxyUrl(deviceSerial)`)**：
 ```ts
 invoke('get_scrcpy_proxy_url', { deviceSerial })
-// 降级：get_vmcontrol_url + `/api/android/scrcpy?device=${deviceSerial}`
-// 再降级：ws://127.0.0.1:19996/api/android/scrcpy?device=${deviceSerial}
+// 无 fallback，代理失败则报错
 ```
 
 ---

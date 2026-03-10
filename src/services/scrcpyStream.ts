@@ -9,18 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 /** 通过 Tauri 代理 URL 获取（走 QUIC P2P tunnel，与 VNC 共用同一条隧道）。 */
 async function getScrcpyProxyUrl(deviceSerial: string): Promise<string> {
-  try {
-    return await invoke<string>('get_scrcpy_proxy_url', { deviceSerial });
-  } catch (e) {
-    console.warn('[ScrcpyStream] get_scrcpy_proxy_url failed, falling back to direct VmControl:', e);
-    // fallback：直连 VmControl（仅在代理未就绪时使用）
-    try {
-      const url = await invoke<string>('get_vmcontrol_url');
-      return `${url.replace(/^http/, 'ws')}/api/android/scrcpy?device=${deviceSerial}`;
-    } catch {
-      return `ws://127.0.0.1:19996/api/android/scrcpy?device=${deviceSerial}`;
-    }
-  }
+  return await invoke<string>('get_scrcpy_proxy_url', { deviceSerial });
 }
 
 export interface DeviceInfo {

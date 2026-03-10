@@ -4,12 +4,17 @@
 
 import { useAppStore } from './store';
 import { clearMessagePagination } from './messagePaginationStore';
+import { clearLogPagination } from './logPaginationStore';
+import { clearLogFilter } from './logFilterStore';
+import { clearLogInputCache } from './logInputCacheStore';
 import { gateway } from '../gateway/client';
 import * as prefsRepo from '../db/prefsRepo';
 import * as setup from '../services/setup';
 import { vmService } from '../services/vm';
 import type { SyncService } from './syncService';
 import type { ModelService } from './modelService';
+import type { MessageService } from './messageService';
+import type { LogService } from './logService';
 import type { CreateAgentRequest, AICAgent } from '../services/api';
 import type { SetupProgressInfo } from '../types';
 import { VM_CONFIG } from '../config';
@@ -19,12 +24,15 @@ export class AgentService {
     private userId: string,
     private syncService: SyncService,
     private modelService: ModelService,
+    private messageService: MessageService,
+    private logService: LogService,
   ) {}
 
   // ── Bootstrap (app startup) ───────────────────────────────────────────────
 
   async initialize(): Promise<void> {
     try {
+      await this.syncService.connectUserStream();
       await this.loadAgents();
       await this.modelService.loadConfig();
 
@@ -61,10 +69,10 @@ export class AgentService {
 
       if (!response.agents.length) {
         clearMessagePagination();
-        useAppStore.getState().patchState({
-          currentAgentId: null, logs: [], lastLogId: null,
-          hasMoreLogs: true, logSubagentId: null, logSubagents: [],
-        });
+        clearLogPagination();
+        clearLogFilter();
+        clearLogInputCache();
+        useAppStore.getState().patchState({ currentAgentId: null });
         await prefsRepo.setSelectedAgent(this.userId, null);
         this.syncService.disconnect();
         return;
@@ -120,6 +128,8 @@ export class AgentService {
 
   async delete(agentId: string): Promise<void> {
     await gateway.deleteAgent(agentId);
+    await this.messageService.clear(agentId);
+    await this.logService.clear(agentId);
     await this.loadAgents();
   }
 

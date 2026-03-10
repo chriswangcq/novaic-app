@@ -11,7 +11,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { FileText, Download, Loader2, ExternalLink, Image as ImageIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { toFileUrl } from '../../services/trs';
-import { getCurrentUser } from '../../services/auth';
+import { getCachedUser } from '../../services/auth';
 import { getCachedFile, setCachedFile } from '../../db/fileRepo';
 import { useAuthenticatedImage } from '../hooks/useAuthenticatedImage';
 import type { Attachment } from '../../types';
@@ -89,7 +89,7 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
   // Restore download state from cache for non-image files
   useEffect(() => {
     if (isImage) return;
-    const userId = getCurrentUser()?.user_id ?? 'anonymous';
+    const userId = getCachedUser()?.user_id ?? 'anonymous';
     getCachedFile(userId, attachment.id)
       .then(cached => {
         if (cached?.local_path) {
@@ -118,7 +118,7 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
       if (result.success && result.path) {
         setLocalPath(result.path);
         setDownloadState('downloaded');
-        const userId = getCurrentUser()?.user_id ?? 'anonymous';
+        const userId = getCachedUser()?.user_id ?? 'anonymous';
         setCachedFile(userId, {
           id: attachment.id,
           filename,
@@ -179,7 +179,7 @@ export function FileAttachment({ attachment }: FileAttachmentProps) {
       if (result.success && result.path) {
         setLocalPath(result.path);
         setDownloadState('downloaded');
-        const userId = getCurrentUser()?.user_id ?? 'anonymous';
+        const userId = getCachedUser()?.user_id ?? 'anonymous';
         setCachedFile(userId, {
           id: attachment.id,
           filename,

@@ -1,0 +1,123 @@
+{
+  "paths": {
+    "data_dir": "/Users/wangchaoqun/.novaic",
+    "resource_dir": ""
+  },
+  "database": {
+    "gateway_db_file": "gateway.db",
+    "runtime_orchestrator_db_file": "runtime_orchestrator.db"
+  },
+  "services": {
+    "gateway": {
+      "host": "127.0.0.1",
+      "port": 19999,
+      "url": "http://127.0.0.1:19999"
+    },
+    "queue_service": {
+      "host": "127.0.0.1",
+      "port": 19997,
+      "url": "http://127.0.0.1:19997"
+    },
+    "tools_server": {
+      "host": "127.0.0.1",
+      "port": 19998,
+      "url": "http://127.0.0.1:19998"
+    },
+    "vmcontrol": {
+      "host": "127.0.0.1",
+      "port": 19996,
+      "url": "http://127.0.0.1:19996"
+    },
+    "file_service": {
+      "host": "127.0.0.1",
+      "port": 19995,
+      "url": "http://127.0.0.1:19995"
+    },
+    "tool_result_service": {
+      "host": "127.0.0.1",
+      "port": 19994,
+      "url": "http://127.0.0.1:19994"
+    },
+    "runtime_orchestrator": {
+      "host": "127.0.0.1",
+      "port": 19993,
+      "url": "http://127.0.0.1:19993"
+    }
+  },
+  "tools_reliability": {
+    "request_timeout_seconds": 300.0,
+    "execution_timeout_seconds": null,
+    "global_timeout_seconds": 1800.0,
+    "max_concurrent_per_runtime": 4
+  },
+  "timeouts": {
+    "task_timeout": 300,
+    "saga_step_timeout": 1500,
+    "saga_timeout": 1800,
+    "http_timeout": 30.0,
+    "http_timeout_short": 10.0,
+    "llm_call_timeout": 60.0,
+    "mcp_call_timeout": 30.0,
+    "db_transaction_timeout": 10.0,
+    "db_transaction_timeout_long": 15.0,
+    "internal_http_trust_env": false
+  },
+  "worker": {
+    "heartbeat_interval": 10.0,
+    "poll_interval": 0.1,
+    "num_workers": 5,
+    "max_concurrent_sagas": 10
+  },
+  "runtime": {
+    "hrl_trigger_length": 15,
+    "hrl_keep_recent": 5,
+    "summary_last_rounds_full": 3,
+    "summary_last_rounds_hot": 5,
+    "max_messages_per_page": 100,
+    "max_execution_logs_per_page": 100,
+    "max_runtime_context_per_page": 50,
+    "default_chat_limit": 20,
+    "default_summary_length": 50,
+    "cleanup_keep_messages": 200,
+    "cleanup_keep_execution_logs": 500,
+    "stuck_awakening_timeout": 60,
+    "stuck_sending_timeout": 30,
+    "vm_mcp_timeout": 120,
+    "ssh_quick_timeout": 3,
+    "ssh_normal_timeout": 10,
+    "use_legacy_vmuse": false,
+    "vmuse_mcp_url": "http://127.0.0.1:8080/mcp"
+  },
+  "llm": {
+    "max_tokens_default": 2000,
+    "temperature_default": 0.3
+  },
+  "text_truncate": {
+    "think": 500,
+    "args": 200,
+    "result": 2000,
+    "llm_input": 1000,
+    "error": 200,
+    "reasoning": 500,
+    "message": 500
+  },
+  "auto_truncate": {
+    "enabled": true,
+    "threshold_small": 4096,
+    "threshold_large": 10240,
+    "head_size": 1536,
+    "tail_size": 1536,
+    "ttl_hours": 24
+  },
+  "image": {
+    "compress_enabled": true,
+    "max_size_kb": 500,
+    "max_dimension": 1920,
+    "quality": 85
+  },
+  "retry": {
+    "default_max_retries": 3,
+    "backoff_base": 2.0,
+    "backoff_max": 60.0
+  }
+}

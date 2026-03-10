@@ -1,5 +1,11 @@
 //! VNC WebSocket Proxy — 统一 VNC 连接入口
 //!
+//! # 打洞逻辑（统一）
+//!
+//! 本地与远端均使用 p2p::hole_punch + p2p::tunnel：
+//! - 本地（device_id == 本机）：connect_to_peer(127.0.0.1) → tunnel::open_vnc_stream
+//! - 远端：Gateway locate + punch_and_connect → tunnel::open_vnc_stream
+//!
 //! # URL 结构（统一使用 vmcontrol_device_id）
 //!
 //!   ws://127.0.0.1:{proxy_port}/vnc/{vmcontrol_device_id}/{agent_id}

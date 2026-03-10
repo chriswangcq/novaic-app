@@ -10,7 +10,6 @@
 
 import { create } from 'zustand';
 import type {
-  LogEntry,
   LayoutMode,
   LayoutPersistence,
   SidebarMode,
@@ -19,7 +18,6 @@ import type {
   AICAgent,
 } from '../types';
 import type { Device } from '../types';
-import type { SubAgentMeta } from '../types/subagent';
 import type { UserInfo } from '../services/auth';
 import {
   API_CONFIG,
@@ -108,14 +106,6 @@ export interface AppState {
   currentAgentId: string | null;
   createAgentModalOpen: boolean;
 
-  // Logs (View Models)
-  logs: LogEntry[];
-  hasMoreLogs: boolean;
-  isLoadingMoreLogs: boolean;
-  lastLogId: number | null;
-  logSubagentId: string | null;
-  logSubagents: SubAgentMeta[];
-
   // Models
   availableModels: CandidateModel[];
   apiKeys: ApiKeyInfo[];
@@ -147,9 +137,6 @@ export interface AppState {
   logExpanded: boolean;
   logHeightRatio: number;
   expandedCapsules: Set<string>;
-
-  // Log input cache (on-demand full input loading)
-  logInputCache: Map<number, unknown>;
 }
 
 // ── Setters (pure sync, no side-effects) ─────────────────────────────────────
@@ -157,11 +144,6 @@ export interface AppState {
 export interface AppSetters {
   // General
   patchState: (partial: Partial<AppState>) => void;
-
-  // Logs
-  setLogs:     (logs: LogEntry[]) => void;
-  prependLogs: (older: LogEntry[]) => void;
-  upsertLog:   (log: LogEntry) => void;
 
   // Agents
   setAgents:         (agents: AICAgent[]) => void;
@@ -190,12 +172,6 @@ export const useAppStore = create<Store>((set) => ({
   agents:             [],
   currentAgentId:     null,
   createAgentModalOpen: false,
-  logs:               [],
-  hasMoreLogs:        true,
-  isLoadingMoreLogs:  false,
-  lastLogId:          null,
-  logSubagentId:      null,
-  logSubagents:       [],
   availableModels:    [],
   apiKeys:            [],
   selectedModel:      '',
@@ -210,27 +186,10 @@ export const useAppStore = create<Store>((set) => ({
   addAndroidDeviceModalOpen: false,
   addVmSubuserDeviceId: null,
   settingsOpen:       false,
-  logInputCache:      new Map(),
   ...defaultLayout(),
 
   // ── Setters ────────────────────────────────────────────────────────────────
   patchState: (partial) => set(partial),
-
-  setLogs:     (logs) => set({ logs }),
-  prependLogs: (older) => set(s => ({ logs: [...older, ...s.logs] })),
-  upsertLog:   (log) => set(s => {
-    const MAX = 500;
-    const idx = s.logs.findIndex(l => l.id === log.id);
-    let next: LogEntry[];
-    if (idx === -1) {
-      next = [...s.logs, log];
-      if (next.length > MAX) next = next.slice(-MAX);
-    } else {
-      next = [...s.logs];
-      next[idx] = { ...next[idx], ...log };
-    }
-    return { logs: next };
-  }),
 
   setAgents:         (agents) => set({ agents }),
   patchAgent:        (id, patch) => set(s => ({

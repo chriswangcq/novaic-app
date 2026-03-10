@@ -11,7 +11,7 @@
  *   syncService + modelService ← agentService
  */
 
-import { getCurrentUser } from '../gateway/auth';
+import { getCachedUser } from '../gateway/auth';
 import { MessageService } from './messageService';
 import { LogService } from './logService';
 import { SyncService } from './syncService';
@@ -31,7 +31,7 @@ let _modelService: ModelService | null = null;
 let _layoutService: LayoutService | null = null;
 
 function userId(): string {
-  return getCurrentUser()?.user_id ?? 'anonymous';
+  return getCachedUser()?.user_id ?? 'anonymous';
 }
 
 function ensureServices(): void {
@@ -44,7 +44,7 @@ function ensureServices(): void {
   _logService     = new LogService(uid);
   _syncService    = new SyncService(_messageService, _logService);
   _modelService   = new ModelService(uid);
-  _agentService   = new AgentService(uid, _syncService, _modelService);
+  _agentService   = new AgentService(uid, _syncService, _modelService, _messageService, _logService);
   _layoutService  = new LayoutService(uid);
 }
 

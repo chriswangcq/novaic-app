@@ -31,7 +31,7 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
             }`}
           >
             <Icon size={22} strokeWidth={isActive ? 2 : 1.6} />
-            <span className="text-[10px]">{label}</span>
+            <span className="text-[11px]">{label}</span>
           </button>
         );
       })}

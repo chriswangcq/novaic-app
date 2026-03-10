@@ -1,6 +1,10 @@
 [package]
 name = "novaic"
 version = "0.1.0"
+
+[lib]
+name = "app"
+crate-type = ["staticlib", "rlib"]
 description = "NovAIC - Claude Code capabilities with GUI visualization"
 authors = ["NovAIC Team"]
 license = "MIT"
@@ -12,17 +16,20 @@ rust-version = "1.70"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "devtools"] }
+# Tauri: wry 全平台；tray-icon/devtools 仅桌面
+tauri = { version = "2", default-features = false, features = [ "wry"] }
 tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-tauri-plugin-process = "2"
+tauri-plugin-os = "2"
+tauri-plugin-process = { version = "2", optional = true }
+base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.35", features = ["full"] }
-# Use rustls instead of native-tls to avoid macOS sandbox issues
-# blocking feature needed for sync VM stop before Gateway shutdown
-reqwest = { version = "0.11", default-features = false, features = ["json", "multipart", "stream", "rustls-tls", "blocking"] }
+# rustls-tls for macOS sandbox; blocking only for desktop VM shutdown
+reqwest = { version = "0.11", default-features = false, features = ["json", "multipart", "stream", "rustls-tls"] }
 anyhow = "1.0"
 thiserror = "1.0"
 dirs = "5.0"
@@ -33,25 +40,43 @@ futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
-# VmControl 内嵌库（HTTP Server + VM/Android 管理）
-vmcontrol = { path = "vmcontrol" }
-# axum WS（VNC proxy 动态端口服务）
-axum = { version = "0.7", features = ["ws"] }
-# QUIC（VNC proxy P2P tunnel，与 p2p crate 同版本）
-quinn = { version = "0.11", features = ["rustls"] }
-# P2P 层：mDNS 广播 + LAN 发现（Phase 2）
-p2p = { path = "p2p" }
-# rustls 0.23 (used by tokio-tungstenite 0.24) requires an explicit crypto provider.
-# "ring" gives us a stable, well-tested backend; install_default() is called in main().
 rustls = { version = "0.23", features = ["ring"] }
+
+# 桌面专属（Android/iOS 构建时自动排除）
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+vmcontrol = { path = "vmcontrol" }
+axum = { version = "0.7", features = ["ws"] }
+quinn = { version = "0.11", features = ["rustls"] }
+p2p = { path = "p2p" }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-native-roots"] }
-# Future: Unix socket support (currently using TCP)
-# hyper = { version = "1.4", features = ["client", "http1"] }
-# hyperlocal = "0.9"
+reqwest = { version = "0.11", default-features = false, features = ["json", "multipart", "stream", "rustls-tls", "blocking"] }
+# 桌面端用加密文件，避免 Keychain 弹窗吓到用户
+aes-gcm = "0.10"
+rand = "0.8"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# 仅 iOS 用 Keychain（iOS 通常不弹密码窗）
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+aes-gcm = "0.10"
+rand = "0.8"
+
+# 移动端：VncProxy（P2P 连接远端 VNC/Scrcpy）需要 p2p/axum/quinn
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+axum = { version = "0.7", features = ["ws"] }
+quinn = { version = "0.11", features = ["rustls"] }
+p2p = { path = "p2p" }
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "desktop"]
 custom-protocol = ["tauri/custom-protocol"]
+# 桌面专属：托盘、devtools、进程管理
+desktop = ["tauri/tray-icon", "tauri/devtools", "tauri-plugin-process"]
+mobile = []
+
+[dev-dependencies]
+mockito = "1.5"
 
 [profile.release]
 panic = "abort"

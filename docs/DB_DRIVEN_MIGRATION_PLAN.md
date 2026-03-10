@@ -279,36 +279,42 @@ if (isDbDrivenMessagesEnabled()) { /* DB 驱动路径 */ } else { /* 旧路径 *
 
 **工期预估**：2–3 天
 
+**Phase 4 实施状态**：✅ 已完成
+
 ### Step 4.1：logRepo 订阅层
 
-- [ ] 新建 `logSubscription.ts`，实现 `subscribe(userId, agentId, callback)`
-- [ ] 在 `logRepo.putLogs`、`putLog` 等写操作后触发通知
-- [ ] 新建 `useLogsFromDB(userId, agentId)` Hook
+- [x] 新建 `logSubscription.ts`，实现 `subscribe(userId, agentId, callback)`
+- [x] 在 `logRepo.putLogs`、`deleteAgentLogs`、`updateLogInput` 后触发通知
+- [x] 新建 `useLogsFromDB(userId, agentId, logSubagentId)` Hook
 
 ### Step 4.2：LogService 停止写 Store
 
-- [ ] `handleBatch`、`handleIncoming`、`fetchAndMerge` 等只写 DB
-- [ ] ExecutionLog、MainAgentLogPreview、SubagentList 改为从 `useLogsFromDB` 读
+- [x] `handleBatch`、`handleIncoming`、`fetchAndMerge`、`loadMore`、`filterBySubagent` 等只写 DB
+- [x] useLogs 改为从 `useLogsFromDB` 读，ExecutionLog、MainAgentLogPreview、SubagentList 通过 useLogs 获取
 
 ### Step 4.3：Store 移除 logs 相关字段
 
-- [ ] 移除 `logs`、`hasMoreLogs`、`isLoadingMoreLogs`、`lastLogId`、`logSubagentId`、`logSubagents`
-- [ ] 全量回归
+- [x] 移除 `logs`、`hasMoreLogs`、`isLoadingMoreLogs`、`lastLogId`、`logSubagentId`、`logSubagents`、`logInputCache`
+- [x] 全局搜索确认无 Store 残留（useAppStore 无 logs/logSubagent 等引用）
+- [x] TypeScript 编译通过
+- [ ] 全量回归（需手动验证）
 
 ---
 
 ## 七、Phase 5：规范与文档
 
+**Phase 5 实施状态**：✅ 已完成
+
 ### 5.1 架构文档更新
 
-- [ ] 更新 `FRONTEND_ARCHITECTURE.md`，补充 DB 驱动渲染的说明
-- [ ] 新增「数据流」章节：事件 → 业务逻辑 → 写 DB → 订阅 → UI
-- [ ] 标注哪些模块已迁移、哪些仍为 Store 驱动
+- [x] 更新 `FRONTEND_ARCHITECTURE.md`，补充 DB 驱动渲染的说明
+- [x] 新增「数据流」章节：事件 → 业务逻辑 → 写 DB → 订阅 → UI
+- [x] 标注哪些模块已迁移、哪些仍为 Store 驱动
 
 ### 5.2 开发规范
 
-- [ ] 新功能优先采用 DB 驱动模式
-- [ ] Code Review 检查点：业务逻辑是否只写 DB、UI 是否从订阅读
+- [x] 新功能优先采用 DB 驱动模式
+- [x] Code Review 检查点：业务逻辑是否只写 DB、UI 是否从订阅读
 
 ---
 
@@ -341,8 +347,8 @@ Phase 0 前置条件     [x] 完成
 Phase 1 DB 订阅层    [x] 完成
 Phase 2 消息列表试点 [x] 完成
 Phase 3 Store 瘦身   [x] 完成
-Phase 4 日志迁移     [ ] 可选
-Phase 5 规范文档     [ ] 完成
+Phase 4 日志迁移     [x] 完成
+Phase 5 规范文档     [x] 完成
 ```
 
 ---
@@ -354,9 +360,16 @@ Phase 5 规范文档     [ ] 完成
 | 消息 DB | `db/messageRepo.ts` | `putMessages`, `getMessages`, `replaceMessage`, `updateMessageRead`, `deleteAgentMessages` |
 | 消息 Service | `application/messageService.ts` | `load`, `send`, `handleIncoming`, `handleStatusUpdate`, `loadMore`, `expand`, `clear` |
 | 消息 Hook | `components/hooks/useMessages.ts` | 返回 `messages`, `send`, `loadMore`, `expand`, `clear` |
-| Store | `application/store.ts` | `messages`, `hasMoreMessages`, `isLoadingMore`, `setMessages`, `upsertMessage`, `prependMessages` |
+| 消息分页 | `application/messagePaginationStore.ts` | `hasMore`, `isLoading`（按 agentId） |
+| 消息订阅 | `db/messageSubscription.ts` | `subscribe`, `notifyMessageChange` |
 | 消息列表 | `components/Chat/MessageList.tsx` | 使用 `useMessages().messages` |
-| 转换器 | `application/converters.ts` | `rawToMessageVM`, `messagevmToRaw`, `chatSseToRaw` |
+| 日志 DB | `db/logRepo.ts` | `putLogs`, `getLogs`, `deleteAgentLogs`, `updateLogInput` |
+| 日志 Service | `application/logService.ts` | `load`, `handleBatch`, `handleIncoming`, `loadMore`, `filterBySubagent`, `clear` |
+| 日志 Hook | `components/hooks/useLogs.ts` | 返回 `logs`, `loadMore`, `filterBySubagent` 等 |
+| 日志分页 | `application/logPaginationStore.ts` | `hasMore`, `isLoading`, `lastLogId`（按 agentId + logSubagentId） |
+| 日志过滤 | `application/logFilterStore.ts` | `logSubagentId`, `logSubagents` |
+| 日志订阅 | `db/logSubscription.ts` | `subscribe`, `notifyLogChange` |
+| 转换器 | `application/converters.ts` | `rawToMessageVM`, `rawToLogVM`, `chatSseToRaw` |
 
 ---
 

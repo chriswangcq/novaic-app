@@ -5,7 +5,6 @@ import path from 'path';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  
   // Prevent vite from obscuring rust errors
   clearScreen: false,
   

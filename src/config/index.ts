@@ -281,11 +281,11 @@ export const LAYOUT_CONFIG = {
   DEFAULT_LEFT_WIDTH: 400,
 
   /** Drawer 默认宽度（像素） */
-  DRAWER_WIDTH: 288,
+  DRAWER_WIDTH: 304,
 
   /** Drawer 最小/最大宽度（像素） */
-  DRAWER_MIN: 200,
-  DRAWER_MAX: 400,
+  DRAWER_MIN: 228,
+  DRAWER_MAX: 448,
 
   /** Sidebar 默认宽度（像素） */
   SIDEBAR_WIDTH: 208,

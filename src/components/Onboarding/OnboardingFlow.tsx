@@ -165,7 +165,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       // Deploy code to VM
-      await deployCode(agent.vm.ports.ssh);
+      await deployCode(agent.id, agent.vm.ports.ssh);
     } catch (err) {
       console.error('Create agent failed:', err);
       setError(err instanceof Error ? err.message : String(err));
@@ -174,12 +174,13 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   };
 
   // Deploy code to VM
-  const deployCode = async (port: number) => {
+  const deployCode = async (agentId: string, sshPort: number) => {
     setStep('deploying');
 
     try {
       await setup.deployAgent(
-        port,
+        agentId,
+        sshPort,
         useCnMirrors,
         (progress) => setDeployProgress(progress)
       );

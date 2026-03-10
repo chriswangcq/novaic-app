@@ -6,11 +6,11 @@ import { useAppStore } from '../../application/store';
 import { getMessageService } from '../../application';
 import { useMessagesFromDB } from '../../hooks/useMessagesFromDB';
 import { useMessagePagination } from '../../application/messagePaginationStore';
-import { getCurrentUser } from '../../services/auth';
+import { getCachedUser } from '../../services/auth';
 
 export function useMessages() {
   const currentAgentId = useAppStore(s => s.currentAgentId);
-  const userId = getCurrentUser()?.user_id ?? null;
+  const userId = getCachedUser()?.user_id ?? null;
   const { hasMore, isLoading } = useMessagePagination(currentAgentId);
   const dbResult = useMessagesFromDB(userId, currentAgentId);
   const svc = getMessageService();

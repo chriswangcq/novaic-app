@@ -1,0 +1,26 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "",
+        "width": 1280,
+        "height": 800
+      }
+    ]
+  },
+  "bundle": {
+    "resources": {
+      "resources/config": "config",
+      "resources/backends": "backends",
+      "resources/novaic-mcp-vmuse": "novaic-mcp-vmuse",
+      "resources/qemu": null,
+      "resources/android-sdk": null,
+      "resources/scrcpy-server": null
+    },
+    "iOS": {
+      "developmentTeam": "K9FF74JCRL",
+      "minimumSystemVersion": "15.0"
+    }
+  }
+}

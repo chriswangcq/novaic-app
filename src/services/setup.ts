@@ -1,13 +1,13 @@
 /**
  * VM Setup Service
  * 
- * Handles communication with Tauri backend for VM setup operations:
- * - Check/download cloud images
+ * Handles communication via Gateway API for VM setup operations:
+ * - Check/download cloud images (forwarded to vmcontrol via Cloud Bridge)
  * - Setup VM (disk creation, cloud-init)
  * - Wait for VM initialization (cloud-init installs all dependencies)
  */
 
-import { invoke, Channel } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 
 // Types for setup operations
 
@@ -120,20 +120,21 @@ export async function resolveSourceImagePath(
 }
 
 /**
- * Check if cloud image exists locally
+ * Check if cloud image exists locally (via Gateway → vmcontrol)
  */
 export async function checkCloudImage(
   osType: string,
   osVersion: string
 ): Promise<ImageCheckResult> {
-  return await invoke('check_cloud_image', {
-    osType,
-    osVersion,
+  const params = new URLSearchParams({ os_type: osType, os_version: osVersion });
+  return await invoke<ImageCheckResult>('gateway_get', {
+    path: `/api/vm/cloud-image/check?${params.toString()}`,
   });
 }
 
 /**
- * Download cloud image with progress reporting
+ * Download cloud image (via Gateway → vmcontrol).
+ * No progress streaming; onProgress called at start and completion.
  */
 export async function downloadCloudImage(
   osType: string,
@@ -141,15 +142,13 @@ export async function downloadCloudImage(
   useCnMirrors: boolean,
   onProgress: (progress: DownloadProgress) => void
 ): Promise<string> {
-  const channel = new Channel<DownloadProgress>();
-  channel.onmessage = onProgress;
-
-  return await invoke('download_cloud_image', {
-    osType,
-    osVersion,
-    useCnMirrors,
-    onProgress: channel,
+  onProgress({ downloaded: 0, total: 0, percent: 0, speed: 'Starting...' });
+  const result = await invoke<{ path: string }>('gateway_post', {
+    path: '/api/vm/cloud-image/download',
+    body: { os_type: osType, os_version: osVersion, use_cn_mirrors: useCnMirrors },
   });
+  onProgress({ downloaded: 1, total: 1, percent: 100, speed: 'Complete' });
+  return result.path;
 }
 
 /**
@@ -195,22 +194,21 @@ export async function setupVm(
 }
 
 /**
- * Wait for VM initialization to complete
+ * Wait for VM initialization to complete (via Gateway → vmcontrol).
  * (cloud-init installs all dependencies: xdotool, xclip, qemu-guest-agent, playwright, etc.)
  */
 export async function deployAgent(
+  agentId: string,
   sshPort: number,
-  useCnMirrors: boolean,
+  _useCnMirrors: boolean,
   onProgress: (progress: DeployProgress) => void
 ): Promise<void> {
-  const channel = new Channel<DeployProgress>();
-  channel.onmessage = onProgress;
-
-  return await invoke('deploy_agent', {
-    sshPort,
-    useCnMirrors,
-    onProgress: channel,
+  onProgress({ stage: 'Connecting', progress: 0, message: 'Waiting for SSH and cloud-init...' });
+  await invoke('gateway_post', {
+    path: '/api/vm/deploy-wait',
+    body: { agent_id: agentId, ssh_port: sshPort },
   });
+  onProgress({ stage: 'Complete', progress: 100, message: 'VM initialization complete' });
 }
 
 /**

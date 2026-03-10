@@ -18,7 +18,7 @@ import { vmService, VmStatus } from '../../services/vm';
 import { getLastMessage } from '../../db/messageRepo';
 import { parseMessageContent } from '../../application/converters';
 import { useMessages } from '../hooks/useMessages';
-import { getCurrentUser } from '../../services/auth';
+import { getCachedUser } from '../../services/auth';
 import { POLL_CONFIG, LAYOUT_CONFIG } from '../../config';
 import { SettingsModal } from '../Settings/SettingsModal';
 
@@ -49,7 +49,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
   const { agents, currentAgentId, loadAgents } = useAgent();
   const { drawerWidth, setDrawerWidth } = useLayout();
   const isOverlay = !useIsSidebarLayout() && !asPrimaryPage;
-  const userId = getCurrentUser()?.user_id ?? null;
+  const userId = getCachedUser()?.user_id ?? null;
   const { messages: currentAgentMessages } = useMessages();
   const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
   const selectedVmUser = useAppStore(s => s.selectedVmUser);
@@ -214,30 +214,30 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
           <div className={asPrimaryPage ? '' : 'hidden'} />
           <span
             data-tauri-drag-region
-            className={`flex items-center gap-2 text-sm font-medium text-nb-text cursor-default min-w-0 ${asPrimaryPage ? 'justify-center' : 'flex-1'}`}
+            className={`flex items-center gap-2.5 text-sm font-medium text-nb-text cursor-default min-w-0 ${asPrimaryPage ? 'justify-center' : 'flex-1'}`}
           >
-            <Bot size={14} strokeWidth={1.6} />
+            <Bot size={16} strokeWidth={1.6} />
             Agents
           </span>
           <div className={`flex justify-end ${asPrimaryPage ? '' : 'contents'}`}>
           <button
             type="button"
             onClick={onCreateNew}
-            className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
             title="Create new agent"
           >
-            <Plus size={12} />
+            <Plus size={14} />
           </button>
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+        <div className="flex-1 min-h-0 overflow-y-auto px-2.5 pb-2.5">
           {agents.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-nb-text-secondary/50">
+            <div className="px-4 py-4 text-sm text-nb-text-secondary/50">
               No agents yet
             </div>
           ) : (
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {agents.map(agent => {
                 const isSelected = agent.id === currentAgentId;
                 const lastMsg = lastMessages[agent.id];
@@ -246,18 +246,18 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
                   <div
                     key={agent.id}
                     onClick={() => handleSelect(agent)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
                       activeView === 'chat' && isSelected
                         ? 'bg-white/10 text-nb-text'
                         : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
                     }`}
                   >
-                    <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-white/5 border border-white/10">
-                      <Bot size={14} className="text-white/60" />
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-white/5 border border-white/10">
+                      <Bot size={16} className="text-white/60" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <span className="text-sm truncate block">{agent.name}</span>
-                      <span className="text-[10px] text-nb-text-muted truncate block mt-0.5">
+                      <span className="text-xs text-nb-text-muted truncate block mt-0.5">
                         {lastMsg || (agent.setup_complete ? 'No messages yet' : 'Needs setup')}
                       </span>
                     </div>
@@ -278,25 +278,25 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
           <div className={asPrimaryPage ? '' : 'hidden'} />
           <span
             data-tauri-drag-region
-            className={`flex items-center gap-2 text-sm font-medium cursor-default min-w-0 ${asPrimaryPage ? 'justify-center' : 'flex-1'} ${
+            className={`flex items-center gap-2.5 text-sm font-medium cursor-default min-w-0 ${asPrimaryPage ? 'justify-center' : 'flex-1'} ${
               activeView === 'devices' ? 'text-nb-text' : 'text-nb-text-secondary'
             }`}
           >
-            <HardDrive size={14} strokeWidth={1.6} />
+            <HardDrive size={16} strokeWidth={1.6} />
             Devices
           </span>
-          <div className={`flex items-center gap-1 ${asPrimaryPage ? 'justify-end shrink-0' : 'shrink-0'}`}>
+          <div className={`flex items-center gap-1.5 ${asPrimaryPage ? 'justify-end shrink-0' : 'shrink-0'}`}>
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setDeviceAddOpen(v => !v)}
-                className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
                 title="Add device"
               >
-                <Plus size={12} />
+                <Plus size={16} />
               </button>
               {deviceAddOpen && (
-                <div className="absolute right-0 top-full mt-1 w-36 py-1 rounded-lg bg-nb-surface border border-nb-border shadow-xl z-20">
+                <div className="absolute right-0 top-full mt-1.5 w-40 py-1.5 rounded-lg bg-nb-surface border border-nb-border shadow-xl z-20">
                   <button
                     type="button"
                     onClick={() => {
@@ -327,21 +327,21 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
             <button
               type="button"
               onClick={loadDevices}
-              className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
-              title="Refresh devices"
-            >
-              <RefreshCw size={12} className={devicesLoading ? 'animate-spin' : ''} />
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+            title="Refresh devices"
+          >
+            <RefreshCw size={14} className={devicesLoading ? 'animate-spin' : ''} />
             </button>
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+        <div className="flex-1 min-h-0 overflow-y-auto px-2.5 pb-2.5">
           {devices.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-nb-text-secondary/50">
+            <div className="px-4 py-4 text-sm text-nb-text-secondary/50">
               {devicesLoading ? 'Loading devices…' : 'No devices yet'}
             </div>
           ) : (
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {devices.map((device) => {
                 const isSelectedDevice = device.id === selectedDeviceId;
                 const isLinux = device.type === 'linux';
@@ -351,7 +351,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
                   <div key={device.id}>
                     <div
                       onClick={() => openDevice(device.id)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                      className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
                         activeView === 'devices' && isSelectedDevice
                           ? 'bg-white/10 text-nb-text'
                           : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
@@ -363,19 +363,19 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
                           e.stopPropagation();
                           if (isLinux) toggleExpanded(device.id);
                         }}
-                        className={`w-4 h-4 flex items-center justify-center rounded-sm ${isLinux ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                        className={`w-5 h-5 flex items-center justify-center rounded-sm ${isLinux ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                         aria-label="Toggle device tree"
                       >
-                        <ChevronDown size={11} className={`transition-transform ${isExpanded ? 'rotate-0' : '-rotate-90'}`} />
+                        <ChevronDown size={13} className={`transition-transform ${isExpanded ? 'rotate-0' : '-rotate-90'}`} />
                       </button>
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${isLinux ? 'bg-blue-500/10' : 'bg-green-500/10'}`}>
-                        {isLinux ? <Monitor size={14} className="text-blue-400" /> : <Smartphone size={14} className="text-green-400" />}
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isLinux ? 'bg-blue-500/10' : 'bg-green-500/10'}`}>
+                        {isLinux ? <Monitor size={16} className="text-blue-400" /> : <Smartphone size={16} className="text-green-400" />}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm truncate">{device.name || (isLinux ? 'Linux VM' : 'Android')}</div>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[10px] opacity-50 font-mono">{device.id.slice(0, 8)}…</span>
-                          <span className={`w-1.5 h-1.5 rounded-full ${
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs opacity-50 font-mono">{device.id.slice(0, 8)}…</span>
+                          <span className={`w-2 h-2 rounded-full ${
                             device.status === 'running' ? 'bg-emerald-400' :
                             device.status === 'setup' ? 'bg-amber-400 animate-pulse' :
                             device.status === 'error' ? 'bg-red-400' : 'bg-white/20'
@@ -390,29 +390,29 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
                             openDevice(device.id);
                             openVmSubuserModal(device.id);
                           }}
-                          className="w-6 h-6 flex items-center justify-center rounded-md text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
+                          className="w-7 h-7 flex items-center justify-center rounded-lg text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04] transition-colors"
                           title="Add sub-user"
                         >
-                          <Users size={12} />
+                          <Users size={14} />
                         </button>
                       )}
                     </div>
 
                     {isLinux && isExpanded && (
-                      <div className="ml-6 mr-2 mt-0.5 mb-1 pl-3 border-l border-white/10 space-y-0.5">
+                      <div className="ml-8 mr-3 mt-1 mb-1.5 pl-4 border-l border-white/10 space-y-1">
                         <div
                           onClick={() => {
                             openDevice(device.id);
                             setSelectedVmUser(null);
                           }}
-                          className={`flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer transition-colors ${
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-colors ${
                             activeView === 'devices' && isSelectedDevice && selectedVmUser === null
                               ? 'bg-white/8 text-nb-text'
                               : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
                           }`}
                         >
-                          <Home size={11} />
-                          <span className="text-[11px]">Main Desktop</span>
+                          <Home size={12} />
+                          <span className="text-xs">Main Desktop</span>
                         </div>
 
                         {users.map((user) => (
@@ -422,15 +422,15 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
                               openDevice(device.id);
                               setSelectedVmUser({ username: user.username, displayNum: user.display_num });
                             }}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer transition-colors ${
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-colors ${
                               activeView === 'devices' && isSelectedDevice && selectedVmUser?.username === user.username
                                 ? 'bg-white/8 text-nb-text'
                                 : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'
                             }`}
                           >
-                            <Users size={11} />
-                            <span className="text-[11px] truncate flex-1">{user.username}</span>
-                            <span className="text-[10px] opacity-50">:{user.display_num}</span>
+                            <Users size={12} />
+                            <span className="text-xs truncate flex-1">{user.username}</span>
+                            <span className="text-xs opacity-50">:{user.display_num}</span>
                           </div>
                         ))}
                       </div>
