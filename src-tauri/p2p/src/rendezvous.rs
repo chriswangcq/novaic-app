@@ -129,16 +129,36 @@ pub async fn heartbeat(
     jwt: &str,
     req: &HeartbeatRequest,
 ) -> anyhow::Result<HeartbeatResponse> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{}/api/p2p/heartbeat", gateway_url))
-        .bearer_auth(jwt)
-        .json(req)
-        .send()
-        .await?
-        .json::<HeartbeatResponse>()
-        .await?;
-    Ok(resp)
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .http1_only()
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let url = format!("{}/api/p2p/heartbeat", gateway_url);
+    for attempt in 1..=3 {
+        match client
+            .post(&url)
+            .bearer_auth(jwt)
+            .json(req)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let body = resp.json::<HeartbeatResponse>().await?;
+                return Ok(body);
+            }
+            Err(e) => {
+                if attempt < 3 {
+                    tracing::debug!("[Rendezvous] Heartbeat attempt {} failed: {}, retrying", attempt, e);
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+    unreachable!()
 }
 
 /// 查询目标设备的外网地址 + TLS 证书（手机侧调用）
@@ -156,15 +176,30 @@ pub async fn locate(
     jwt: &str,
     target_device_id: &str,
 ) -> anyhow::Result<LocateResponse> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{}/api/p2p/locate/{}", gateway_url, target_device_id))
-        .bearer_auth(jwt)
-        .send()
-        .await?
-        .json::<LocateResponse>()
-        .await?;
-    Ok(resp)
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .http1_only()
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let url = format!("{}/api/p2p/locate/{}", gateway_url, target_device_id);
+    for attempt in 1..=3 {
+        match client.get(&url).bearer_auth(jwt).send().await {
+            Ok(resp) => {
+                let body = resp.json::<LocateResponse>().await?;
+                return Ok(body);
+            }
+            Err(e) => {
+                if attempt < 3 {
+                    tracing::debug!("[Rendezvous] Locate attempt {} failed: {}, retrying", attempt, e);
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+    unreachable!()
 }
 
 // ─── 后台心跳循环（PC 侧） ────────────────────────────────────────────────────
