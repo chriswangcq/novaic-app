@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Plus, Monitor, HardDrive, Smartphone, ChevronDown, Home, Users, RefreshCw } from 'lucide-react';
+import { Plus, Bot, Monitor, HardDrive, Smartphone, ChevronDown, Home, Users, RefreshCw } from 'lucide-react';
 import { useAppStore } from '../../application/store';
 import { useAgent } from '../hooks/useAgent';
 import { useLayout } from '../hooks/useLayout';
@@ -16,6 +16,7 @@ import { api } from '../../services/api';
 import type { Device, VmUser } from '../../types';
 import { vmService, VmStatus } from '../../services/vm';
 import { getLastMessage } from '../../db/messageRepo';
+import { parseMessageContent } from '../../application/converters';
 import { POLL_CONFIG, LAYOUT_CONFIG } from '../../config';
 import { SettingsModal } from '../Settings/SettingsModal';
 
@@ -47,6 +48,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
   const { drawerWidth, setDrawerWidth } = useLayout();
   const isOverlay = !useIsSidebarLayout() && !asPrimaryPage;
   const userId = useAppStore(s => s.user?.user_id);
+  const storeMessages = useAppStore(s => s.messages);
   const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
   const selectedVmUser = useAppStore(s => s.selectedVmUser);
   const setSelectedDeviceId = (id: string | null) => useAppStore.getState().patchState({ selectedDeviceId: id });
@@ -131,7 +133,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
 
   // Load last messages for all agents from local DB (no gateway calls).
   // Data is populated by messageService whenever an agent is selected.
-  // Agents never visited will show empty until first selection.
+  // For current agent, prefer store.messages (real-time) over DB.
   const agentIds = agents.map((a) => a.id).join(',');
   useEffect(() => {
     if (!isOpen || agents.length === 0 || !userId) return;
@@ -143,8 +145,9 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
           try {
             const raw = await getLastMessage(userId, agent.id);
             if (raw?.summary) {
-              const text = typeof raw.summary === 'string' ? raw.summary : JSON.stringify(raw.summary);
-              msgs[agent.id] = text.slice(0, 60);
+              const { text } = parseMessageContent(raw.summary, raw.id);
+              const display = (text || '').trim();
+              if (display) msgs[agent.id] = display.slice(0, 60);
             }
           } catch {
             // ignore
@@ -157,6 +160,16 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     loadLastMessages();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 有意使用 agentIds 替代 agents
   }, [isOpen, agentIds, userId]);
+
+  // 当前 agent 的 store messages 更新时，实时更新 lastMessages
+  useEffect(() => {
+    if (!currentAgentId || storeMessages.length === 0) return;
+    const last = storeMessages[storeMessages.length - 1];
+    const text = (typeof last.content === 'string' ? last.content : '').trim();
+    if (text) {
+      setLastMessages(prev => ({ ...prev, [currentAgentId]: text.slice(0, 60) }));
+    }
+  }, [currentAgentId, storeMessages]);
 
   // Handle keyboard escape
   useEffect(() => {
@@ -192,28 +205,19 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     onOpenDevices?.();
   };
 
-  // Get status dot color
-  const getStatusColor = (agent: AICAgent) => {
-    const vmStatus = vmStatuses[agent.id];
-    
-    if (!agent.setup_complete) {
-      if (agent.setup_progress?.error) return 'bg-rose-400';
-      if (agent.setup_progress) return 'bg-amber-400 animate-pulse';
-      return 'bg-white/40';
-    }
-    
-    if (vmStatus?.running) return 'bg-emerald-400';
-    return 'bg-slate-400';
-  };
-
   const agentsContent = (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="shrink-0 border-b border-nb-border">
-        <div className="flex items-center justify-between px-3 py-2">
-          <span data-tauri-drag-region className="flex-1 flex items-center gap-2 text-sm font-medium text-nb-text cursor-default min-w-0">
-            <Monitor size={14} strokeWidth={1.6} />
+        <div className={`flex items-center px-3 py-2 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
+          <div className={asPrimaryPage ? '' : 'hidden'} />
+          <span
+            data-tauri-drag-region
+            className={`flex items-center gap-2 text-sm font-medium text-nb-text cursor-default min-w-0 ${asPrimaryPage ? 'justify-center' : 'flex-1'}`}
+          >
+            <Bot size={14} strokeWidth={1.6} />
             Agents
           </span>
+          <div className={`flex justify-end ${asPrimaryPage ? '' : 'contents'}`}>
           <button
             type="button"
             onClick={onCreateNew}
@@ -222,6 +226,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
           >
             <Plus size={12} />
           </button>
+          </div>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
@@ -246,19 +251,13 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
                     }`}
                   >
                     <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-white/5 border border-white/10">
-                      <Monitor size={14} className="text-white/60" />
+                      <Bot size={14} className="text-white/60" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm truncate">{agent.name}</span>
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusColor(agent)}`} />
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="text-[10px] opacity-50">{agent.vm.os_version}</span>
-                        <span className="text-[10px] text-nb-text-muted truncate">
-                          {lastMsg || (agent.setup_complete ? 'No messages yet' : 'Needs setup')}
-                        </span>
-                      </div>
+                      <span className="text-sm truncate block">{agent.name}</span>
+                      <span className="text-[10px] text-nb-text-muted truncate block mt-0.5">
+                        {lastMsg || (agent.setup_complete ? 'No messages yet' : 'Needs setup')}
+                      </span>
                     </div>
                   </div>
                 );
@@ -273,19 +272,18 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
   const devicesContent = (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="shrink-0 border-b border-nb-border">
-        <div className="flex items-center justify-between px-3 py-2">
-          <button
-            type="button"
-            onClick={onOpenDevices}
-            className={`flex items-center gap-2 text-sm shrink-0 ${
-              activeView === 'devices' ? 'text-nb-text' : 'text-nb-text-secondary hover:text-nb-text'
+        <div className={`flex items-center px-3 py-2 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
+          <div className={asPrimaryPage ? '' : 'hidden'} />
+          <span
+            data-tauri-drag-region
+            className={`flex items-center gap-2 text-sm font-medium cursor-default min-w-0 ${asPrimaryPage ? 'justify-center' : 'flex-1'} ${
+              activeView === 'devices' ? 'text-nb-text' : 'text-nb-text-secondary'
             }`}
           >
             <HardDrive size={14} strokeWidth={1.6} />
-            <span className="font-medium">Devices</span>
-          </button>
-          <div data-tauri-drag-region className="flex-1 min-w-0 cursor-default" />
-          <div className="flex items-center gap-1 shrink-0">
+            Devices
+          </span>
+          <div className={`flex items-center gap-1 ${asPrimaryPage ? 'justify-end shrink-0' : 'shrink-0'}`}>
             <div className="relative">
               <button
                 type="button"

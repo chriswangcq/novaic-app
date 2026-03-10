@@ -17,6 +17,7 @@ import {
   Play, 
   Square, 
   Trash2, 
+  Bot,
   Monitor, 
   Cpu, 
   HardDrive,
@@ -190,7 +191,7 @@ function AgentCard({ agent, status: agentStatus, isSelected, onSelect, onStart, 
               disabled={isStopping}
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white/15 hover:bg-white/20 disabled:bg-white/10 text-white rounded-lg transition-colors font-medium"
             >
-              <Monitor size={18} />
+              <Bot size={18} />
               Enter Workspace
             </button>
             <button
@@ -484,7 +485,7 @@ export function AgentDashboard({ onEnterWorkspace, onEnterSetup }: AgentDashboar
           {agents.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20">
               <div className="w-20 h-20 rounded-full bg-nb-surface flex items-center justify-center mb-6">
-                <Monitor size={40} className="text-nb-text-muted" />
+                <Bot size={40} className="text-nb-text-muted" />
               </div>
               <h3 className="text-xl font-semibold text-nb-text mb-2">No agents yet</h3>
               <p className="text-nb-text-secondary mb-6">Create your first AI agent to get started</p>

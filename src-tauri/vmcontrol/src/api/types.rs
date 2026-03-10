@@ -42,6 +42,10 @@ pub struct StartVmRequest {
     pub image_path: String,
     #[serde(default)]
     pub name: String,
+    /// Display numbers for existing vm_users (e.g. [11, 12]). Port = 5900 + display_num.
+    /// Used to add hostfwd for subuser VNC ports so they survive VM restart.
+    #[serde(default)]
+    pub vm_user_display_nums: Vec<u32>,
 }
 
 /// Response for VM start

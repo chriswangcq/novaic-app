@@ -47,8 +47,8 @@ export function useIsXlOrAbove(): boolean {
   return useMediaQuery('(min-width: 1280px)');
 }
 
-/** 边栏布局模式：宽度 >= SIDEBAR_WIDTH_THRESHOLD 时为 true，边栏固定打开；否则一二级页面形式 */
+/** PC 式布局：宽度 >= LAYOUT_THRESHOLD 时三栏展开；否则手机式（底 tab） */
 export function useIsSidebarLayout(): boolean {
-  const t = LAYOUT_CONFIG.SIDEBAR_WIDTH_THRESHOLD;
+  const t = LAYOUT_CONFIG.LAYOUT_THRESHOLD;
   return useMediaQuery(`(min-width: ${t}px)`);
 }

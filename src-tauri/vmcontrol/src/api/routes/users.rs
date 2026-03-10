@@ -31,6 +31,11 @@ pub struct CreateUserRequest {
     pub display_num: u32,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RestartRequest {
+    pub display_num: u32,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CreateUserResponse {
     pub status: String,
@@ -367,10 +372,24 @@ echo "=== Socket ===" && ls -la {vnc_socket_guest} 2>&1 || echo "SOCKET NOT FOUN
 /// POST /api/vms/:id/users/:username/restart — restart Xvnc service for a user
 pub async fn restart_vm_user_vnc(
     Path((vm_id, username)): Path<(String, String)>,
+    body: Option<Json<RestartRequest>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let mut ga = connect_ga(&vm_id).await?;
     let service_name = format!("novaic-vnc-{}.service", username);
     ensure_host_share_writable(&vm_id);
+
+    // Step 0: Add hostfwd for VNC port if display_num provided (needed after VM restart — QMP hostfwd is not persisted)
+    if let Some(ref b) = body {
+        let vnc_port = 5900u16 + b.display_num as u16;
+        let qmp_path = format!("/tmp/novaic/novaic-qmp-{}.sock", vm_id);
+        if let Ok(mut qmp) = QmpClient::connect(&qmp_path).await {
+            if let Err(e) = qmp.hostfwd_add(vnc_port, vnc_port).await {
+                tracing::warn!("[users/restart] QMP hostfwd_add port {} failed: {}", vnc_port, e);
+            } else {
+                tracing::info!("[users/restart] Added hostfwd for VNC port {} (display :{})", vnc_port, b.display_num);
+            }
+        }
+    }
 
     // Step 1: Ensure 9p share is mounted
     let mount_out = exec_ga_output(&mut ga, "/bin/bash", &[
@@ -399,13 +418,13 @@ pub async fn restart_vm_user_vnc(
     ]).await.unwrap_or_else(|e| e.to_string());
     tracing::info!("[users/restart] Service restart: {}", restart_out.trim());
 
-    // Step 4: Wait up to 15s for socket to appear on host side
-    let host_socket = format!("/tmp/novaic/share-{}/vnc-{}.sock", vm_id, username);
-    let mut socket_ready = false;
+    // Step 4: Wait up to 15s for port file to appear on host side (Xvnc uses TCP, writes vnc-{username}.port)
+    let host_port_file = format!("/tmp/novaic/share-{}/vnc-{}.port", vm_id, username);
+    let mut port_ready = false;
     for _ in 0..15 {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        if std::path::Path::new(&host_socket).exists() {
-            socket_ready = true;
+        if std::path::Path::new(&host_port_file).exists() {
+            port_ready = true;
             break;
         }
     }
@@ -415,16 +434,16 @@ pub async fn restart_vm_user_vnc(
         "-c", &format!("journalctl -u {} -n 30 --no-pager 2>&1", service_name),
     ]).await.unwrap_or_default();
 
-    if socket_ready {
-        tracing::info!("[users/restart] VNC socket ready at {}", host_socket);
+    if port_ready {
+        tracing::info!("[users/restart] VNC port file ready at {}", host_port_file);
     } else {
-        tracing::warn!("[users/restart] VNC socket still not ready after 15s. Journal:\n{}", journal);
+        tracing::warn!("[users/restart] VNC port file still not ready after 15s. Journal:\n{}", journal);
     }
 
     Ok(Json(serde_json::json!({
         "mount": mount_out.trim(),
         "restart": restart_out.trim(),
-        "socket_ready": socket_ready,
+        "port_ready": port_ready,
         "journal": journal,
     })))
 }

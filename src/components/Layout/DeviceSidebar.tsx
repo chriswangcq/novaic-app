@@ -151,7 +151,7 @@ function DeviceCard({
           {device.name}
         </div>
         
-        {/* 主按钮 */}
+        {/* 主按钮：连接态仅图标，不显示文字 */}
         <button
           onClick={handleMainAction}
           disabled={isConnecting}
@@ -168,10 +168,7 @@ function DeviceCard({
           {isConnecting ? (
             <>连接中...</>
           ) : isRunning ? (
-            <>
-              <ExternalLink size={10} />
-              显示
-            </>
+            <ExternalLink size={10} title="显示" />
           ) : (
             <>
               <Play size={10} />

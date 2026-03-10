@@ -22,20 +22,35 @@ import { Device, isLinuxDevice, AndroidDevice as AndroidDeviceType } from '../..
 import { setVNCViewOnly } from '../../services/vncStream';
 import type { AgentDeviceBinding } from '../../services/api';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── 浮窗布局配置（所有参数集中在此，修改此处即可）──────────────────────────────
 
-const COL_WIDTH    = 154;  // preview card width (px)
-const RIGHT        = 20;   // distance from viewport right edge (px)
-const GAP          = 10;   // vertical gap between stacked cards (px)
-const HEADER_H     = 0;    // no header bar
-const STACK_BOTTOM = 96;   // above input box (px)
+const FLOATING_PANEL_LAYOUT = {
+  right: 20,              // 距视口右边 (px)
+  gap: 10,                // 卡片间距 (px)
+  previewMaxH: 120,       // 预览最大高度 (px)
+  previewBaseW: 154,      // 高度计算基准宽度 (px)
+  deviceRatio: { linux: 16 / 10, android: 9 / 19.5 } as const,  // 宽高比 width/height
+  stackTop: 100,          // 顶部浮窗距顶 (px)
+  stackBottom: 96,        // 底部浮窗距底（输入框上方）(px)
+  overlayHPad: 32,
+  overlayTopPad: 16,
+  overlayBottomPad: 96,
+  headerH: 0,
+  chipH: 40,
+  spacerExtra: 8,
+} as const;
 
-const PREVIEW_H = {
-  linux:   Math.round(COL_WIDTH * (10 / 16)),   // ~96 px
-  android: Math.round(COL_WIDTH * (19.5 / 9)),  // ~334 px
-};
+/** 预览尺寸计算（唯一入口） */
+function getPreviewSize(type: 'linux' | 'android'): { width: number; height: number } {
+  const { previewMaxH, previewBaseW, deviceRatio } = FLOATING_PANEL_LAYOUT;
+  const ratio = deviceRatio[type];
+  const naturalH = previewBaseW / ratio;
+  const height = Math.min(Math.round(naturalH), previewMaxH);
+  const width = Math.round(height * ratio);
+  return { width, height };
+}
 
-const DEVICE_RATIO = { linux: 16 / 10, android: 9 / 19.5 };
+const COL_WIDTH = Math.max(getPreviewSize('linux').width, getPreviewSize('android').width);
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,34 +68,42 @@ interface SubjectCardInfo {
 
 interface Rect { left: number; top: number; width: number; height: number; }
 
-// ─── Geometry helpers ─────────────────────────────────────────────────────────
+// ─── Geometry helpers（均基于 FLOATING_PANEL_LAYOUT + getPreviewSize）────────────
 
 function previewRect(type: 'linux' | 'android', bottomOffset: number): Rect {
-  const h = PREVIEW_H[type] + HEADER_H;
+  const { width, height } = getPreviewSize(type);
   return {
-    left:   window.innerWidth - RIGHT - COL_WIDTH,
-    top:    window.innerHeight - bottomOffset - h,
-    width:  COL_WIDTH,
-    height: h,
+    left:   window.innerWidth - FLOATING_PANEL_LAYOUT.right - width,
+    top:    window.innerHeight - bottomOffset - height,
+    width,
+    height,
+  };
+}
+
+function previewRectTop(type: 'linux' | 'android', topOffset: number): Rect {
+  const { width, height } = getPreviewSize(type);
+  return {
+    left:   window.innerWidth - FLOATING_PANEL_LAYOUT.right - width,
+    top:    topOffset,
+    width,
+    height,
   };
 }
 
 function overlayRect(type: 'linux' | 'android', spacerWidth: number): Rect {
-  const H_PAD   = 32;
-  const TOP_PAD = 16;
-  const BOT_PAD = 96;
-  const availW       = window.innerWidth - spacerWidth - H_PAD;
-  const availH       = window.innerHeight - TOP_PAD - BOT_PAD;
-  const availContentH = availH - HEADER_H;
-  const ratio = DEVICE_RATIO[type];
+  const { overlayHPad, overlayTopPad, overlayBottomPad, headerH, deviceRatio } = FLOATING_PANEL_LAYOUT;
+  const availW = window.innerWidth - spacerWidth - overlayHPad;
+  const availH = window.innerHeight - overlayTopPad - overlayBottomPad;
+  const availContentH = availH - headerH;
+  const ratio = deviceRatio[type];
   let cW: number, cH: number;
   if (availW / availContentH > ratio) { cH = availContentH; cW = cH * ratio; }
   else                                 { cW = availW;        cH = cW / ratio; }
   const w = Math.floor(cW);
-  const h = Math.floor(cH) + HEADER_H;
+  const h = Math.floor(cH) + headerH;
   return {
     left: Math.floor(16 + (availW - w) / 2),
-    top:  Math.floor(TOP_PAD + (availH - h) / 2),
+    top:  Math.floor(overlayTopPad + (availH - h) / 2),
     width:  w,
     height: h,
   };
@@ -121,19 +144,29 @@ interface CardProps {
   subjectCard: SubjectCardInfo;
   agentId: string;
   bottomOffset: number;
+  topOffset?: number;
   spacerWidth: number;
   inline?: boolean;
 }
 
-function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = false }: CardProps) {
+function DeviceCard({ subjectCard, agentId, bottomOffset, topOffset, spacerWidth, inline = false }: CardProps) {
   const { device, binding, deviceInfo } = subjectCard;
   const [expanded,       setExpanded]       = useState(false);
   const [operating,      setOperating]      = useState(false);
   const [showPowerMenu,  setShowPowerMenu]  = useState(false);
 
-  const [rect, setRect] = useState<Rect>(() =>
-    inline ? { left: 0, top: 0, width: COL_WIDTH, height: 96 } : previewRect(deviceInfo.type, bottomOffset)
-  );
+  const getPreviewRect = useCallback(() => {
+    if (topOffset != null) return previewRectTop(deviceInfo.type, topOffset);
+    return previewRect(deviceInfo.type, bottomOffset);
+  }, [deviceInfo.type, bottomOffset, topOffset]);
+
+  const [rect, setRect] = useState<Rect>(() => {
+    if (inline) {
+      const s = getPreviewSize(deviceInfo.type);
+      return { left: 0, top: 0, width: s.width, height: s.height };
+    }
+    return topOffset != null ? previewRectTop(deviceInfo.type, topOffset) : previewRect(deviceInfo.type, bottomOffset);
+  });
 
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickCount = useRef(0);
@@ -144,9 +177,11 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = 
 
   const recompute = useCallback(() => {
     if (expanded) setRect(overlayRect(deviceInfo.type, inline ? 0 : spacerWidth));
-    else if (inline) setRect({ left: 0, top: 0, width: COL_WIDTH, height: 96 });
-    else setRect(previewRect(deviceInfo.type, bottomOffset));
-  }, [expanded, deviceInfo.type, spacerWidth, bottomOffset, inline]);
+    else if (inline) {
+      const s = getPreviewSize(deviceInfo.type);
+      setRect({ left: 0, top: 0, width: s.width, height: s.height });
+    } else setRect(getPreviewRect());
+  }, [expanded, deviceInfo.type, spacerWidth, inline, getPreviewRect]);
 
   useLayoutEffect(() => {
     recompute();
@@ -182,11 +217,13 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = 
   }, [deviceInfo.type, spacerWidth, inline]);
 
   const collapse = useCallback(() => {
-    if (inline) setRect({ left: 0, top: 0, width: COL_WIDTH, height: 96 });
-    else setRect(previewRect(deviceInfo.type, bottomOffset));
+    if (inline) {
+      const s = getPreviewSize(deviceInfo.type);
+      setRect({ left: 0, top: 0, width: s.width, height: s.height });
+    } else setRect(getPreviewRect());
     setExpanded(false);
     setOperating(false);
-  }, [deviceInfo.type, bottomOffset, inline]);
+  }, [deviceInfo.type, inline, getPreviewRect]);
 
   // Single click → expand; double click → operating
   const handleClick = (e: React.MouseEvent) => {
@@ -260,7 +297,7 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = 
         <div className="w-full h-full bg-black overflow-hidden relative group/card rounded-[inherit]">
           {isMain ? (
             <div className="w-full h-full">
-              <VNCViewShared agentId={agentId} deviceId={device.id} isThumbnail={false} />
+              <VNCViewShared agentId={agentId} deviceId={device.id} isThumbnail={!expanded} />
             </div>
           ) : isVmUser ? (
             <div className="w-full h-full">
@@ -275,7 +312,7 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = 
           ) : isAndroid ? (
             <div className="w-full h-full flex items-center justify-center">
               <div className="w-full h-full" style={{ aspectRatio: '9 / 19.5' }}>
-                <ScrcpyView deviceSerial={deviceInfo.serial!} isThumbnail={false} autoConnect={true} />
+                <ScrcpyView deviceSerial={deviceInfo.serial!} isThumbnail={!expanded} autoConnect={true} />
               </div>
             </div>
           ) : null}
@@ -313,14 +350,6 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = 
             </div>
           )}
 
-          {!expanded && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none
-                            opacity-0 group-hover/card:opacity-100 transition-opacity">
-              <span className="bg-black/70 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-sm">
-                点击放大 · 双击操作
-              </span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -415,10 +444,11 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, spacerWidth, inline = 
 interface ChipProps {
   subjectCard: SubjectCardInfo;
   bottomOffset: number;
+  topOffset?: number;
   inline?: boolean;
 }
 
-function StoppedDeviceChip({ subjectCard, bottomOffset, inline = false }: ChipProps) {
+function StoppedDeviceChip({ subjectCard, bottomOffset, topOffset, inline = false }: ChipProps) {
   const { device, binding, deviceInfo } = subjectCard;
   const [starting, setStarting] = useState(false);
 
@@ -435,15 +465,16 @@ function StoppedDeviceChip({ subjectCard, bottomOffset, inline = false }: ChipPr
     }
   };
 
-  const chipH = 40;
+  const chipH = FLOATING_PANEL_LAYOUT.chipH;
   const displayName = binding.subject_label || deviceInfo.name;
 
+  const chipW = getPreviewSize(deviceInfo.type).width;
   const chipStyle = inline
     ? { minWidth: 100, height: chipH, borderRadius: 12 }
     : {
-        left: window.innerWidth - RIGHT - COL_WIDTH,
-        top: window.innerHeight - bottomOffset - chipH,
-        width: COL_WIDTH,
+        left: window.innerWidth - FLOATING_PANEL_LAYOUT.right - chipW,
+        top: topOffset != null ? topOffset : window.innerHeight - bottomOffset - chipH,
+        width: chipW,
         height: chipH,
         borderRadius: 12,
         zIndex: 50,
@@ -489,11 +520,15 @@ function StoppedDeviceChip({ subjectCard, bottomOffset, inline = false }: ChipPr
 // ─── Container ───────────────────────────────────────────────────────────────
 
 interface DeviceFloatingPanelProps {
-  /** 内联模式：与输入框同排，挤占部分宽度，高度一致 */
+  /** 内联模式：嵌入布局中（非浮动） */
   inline?: boolean;
+  /** 内联时的位置：top=顶部栏，bottom=输入框旁（默认） */
+  placement?: 'top' | 'bottom';
+  /** 紧凑浮层模式：不占布局空间，纯浮动 overlay */
+  compact?: boolean;
 }
 
-export function DeviceFloatingPanel({ inline = false }: DeviceFloatingPanelProps) {
+export function DeviceFloatingPanel({ inline = false, placement = 'bottom', compact = false }: DeviceFloatingPanelProps) {
   const { currentAgentId, currentAgent } = useAgent();
   const { binding, device, loading, error } = useAgentBinding(currentAgentId, currentAgent?.binding ?? undefined);
   const [deviceStatuses, setDeviceStatuses] = useState<Record<string, boolean>>({});
@@ -538,27 +573,41 @@ export function DeviceFloatingPanel({ inline = false }: DeviceFloatingPanelProps
   const stopped = !isRunning ? [subjectCard] : [];
 
   const runningOffsets: number[] = [];
-  let cursor = STACK_BOTTOM;
-  for (const sc of running) {
-    runningOffsets.push(cursor);
-    cursor += PREVIEW_H[sc.deviceInfo.type] + HEADER_H + GAP;
-  }
-
-  const CHIP_H = 40;
   const stoppedOffsets: number[] = [];
-  for (const _ of stopped) {
-    stoppedOffsets.push(cursor);
-    cursor += CHIP_H + GAP;
+
+  if (compact) {
+    let topCursor = FLOATING_PANEL_LAYOUT.stackTop;
+    for (const sc of running) {
+      runningOffsets.push(topCursor);
+      topCursor += getPreviewSize(sc.deviceInfo.type).height + FLOATING_PANEL_LAYOUT.gap;
+    }
+    for (const _ of stopped) {
+      stoppedOffsets.push(topCursor);
+      topCursor += FLOATING_PANEL_LAYOUT.chipH + FLOATING_PANEL_LAYOUT.gap;
+    }
+  } else {
+    let cursor = FLOATING_PANEL_LAYOUT.stackBottom;
+    for (const sc of running) {
+      runningOffsets.push(cursor);
+      cursor += getPreviewSize(sc.deviceInfo.type).height + FLOATING_PANEL_LAYOUT.gap;
+    }
+    for (const _ of stopped) {
+      stoppedOffsets.push(cursor);
+      cursor += FLOATING_PANEL_LAYOUT.chipH + FLOATING_PANEL_LAYOUT.gap;
+    }
   }
 
   const hasAny = running.length > 0 || stopped.length > 0;
-  const spacerWidth = inline ? 0 : (hasAny ? COL_WIDTH + RIGHT + 8 : 0);
+  const spacerWidth = (inline || compact) ? 0 : (hasAny ? COL_WIDTH + FLOATING_PANEL_LAYOUT.right + FLOATING_PANEL_LAYOUT.spacerExtra : 0);
 
   const cardKey = `${binding.device_id}:${binding.subject_type}:${binding.subject_id}`;
 
-  if (inline) {
+  if (inline && !compact) {
+    const isTop = placement === 'top';
     return (
-      <div className="shrink-0 w-auto h-[96px] flex flex-col justify-end gap-1.5 px-2 py-2 border-l border-nb-border/40 bg-nb-bg/60">
+      <div className={`shrink-0 w-auto h-[96px] flex flex-col gap-1.5 px-2 py-2 bg-nb-bg/60 ${
+        isTop ? 'justify-center' : 'justify-end border-l border-nb-border/40'
+      }`}>
         {running.map((sc, i) => (
           <div
             key={cardKey}
@@ -587,11 +636,13 @@ export function DeviceFloatingPanel({ inline = false }: DeviceFloatingPanelProps
 
   return (
     <>
-      <div
-        className="shrink-0 h-full transition-[width] duration-300 ease-out"
-        style={{ width: spacerWidth }}
-        aria-hidden
-      />
+      {!compact && (
+        <div
+          className="shrink-0 h-full transition-[width] duration-300 ease-out"
+          style={{ width: spacerWidth }}
+          aria-hidden
+        />
+      )}
 
       {running.map((sc, i) => (
         <DeviceCard
@@ -599,6 +650,7 @@ export function DeviceFloatingPanel({ inline = false }: DeviceFloatingPanelProps
           subjectCard={sc}
           agentId={currentAgentId}
           bottomOffset={runningOffsets[i]}
+          topOffset={compact ? runningOffsets[i] : undefined}
           spacerWidth={spacerWidth}
         />
       ))}
@@ -608,6 +660,7 @@ export function DeviceFloatingPanel({ inline = false }: DeviceFloatingPanelProps
           key={cardKey}
           subjectCard={sc}
           bottomOffset={stoppedOffsets[i]}
+          topOffset={compact ? stoppedOffsets[i] : undefined}
         />
       ))}
     </>

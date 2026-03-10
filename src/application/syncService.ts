@@ -67,6 +67,9 @@ export class SyncService {
       onLogEntry: async (entry) => {
         await this.logService.handleIncoming(agentId, entry);
       },
+      onLogBatch: async (entries) => {
+        await this.logService.handleBatch(agentId, entries);
+      },
       onLogsUpdated: () => {
         this.logService.fetchAndMerge(agentId).catch(() => {});
         this.logService.fetchSubagentTree(agentId).catch(() => {});

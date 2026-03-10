@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronDown, Plus, Trash2, Monitor, Loader2 } from 'lucide-react';
+import { ChevronDown, Plus, Trash2, Bot, Loader2 } from 'lucide-react';
 import { useAgent } from '../hooks/useAgent';
 import type { AICAgent } from '../../services/api';
 import { vmService, VmStatus } from '../../services/vm';
@@ -134,7 +134,7 @@ export function AgentSelector({ onCreateNew }: AgentSelectorProps) {
         disabled={isLoading}
         className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-nb-hover transition-colors text-sm"
       >
-        <Monitor size={16} className="text-nb-text-secondary" />
+        <Bot size={16} className="text-nb-text-secondary" />
         <span className="text-nb-text max-w-[120px] truncate">
           {currentAgent?.name || 'Select Agent'}
         </span>

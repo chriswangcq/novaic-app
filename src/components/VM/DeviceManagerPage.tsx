@@ -261,10 +261,10 @@ export function DeviceListPanel({
 
   return (
     <div className="flex flex-col h-full bg-nb-bg min-w-0">
-      {/* Header */}
+      {/* Header — 标题区可拖动窗口 */}
       <div className="flex items-center justify-between px-4 py-3
                       border-b border-nb-border bg-nb-surface/60 backdrop-blur-sm shrink-0">
-        <div>
+        <div data-tauri-drag-region className="flex-1 min-w-0 cursor-default">
           <h1 className="text-sm font-semibold text-nb-text">Devices</h1>
           {!compact && (
             <p className="text-[11px] text-nb-text-secondary mt-0.5">
@@ -618,6 +618,7 @@ interface DeviceManagerPageProps {
 export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceManagerPageProps) {
   const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
   const sharedSelectedVmUser = useAppStore(s => s.selectedVmUser);
+  const deviceManagerDevices = useAppStore(s => s.deviceManagerDevices);
   const addLinuxOpen = useAppStore(s => s.addLinuxDeviceModalOpen);
   const addAndroidOpen = useAppStore(s => s.addAndroidDeviceModalOpen);
   const addVmSubuserDeviceId = useAppStore(s => s.addVmSubuserDeviceId);
@@ -639,12 +640,26 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
       patchState({ deviceManagerDevices: next });
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load devices');
+      // Fallback: use devices from store (may have been loaded by AgentDrawer)
+      const fromStore = useAppStore.getState().deviceManagerDevices;
+      if (fromStore?.length) {
+        setDevices(fromStore);
+        setError(null);
+      }
     } finally {
       setLoading(false);
     }
   }, [patchState]);
 
   useEffect(() => { load(); }, [load]);
+
+  // When our load failed but AgentDrawer later loaded devices, use store data
+  useEffect(() => {
+    if (error && deviceManagerDevices?.length) {
+      setDevices(deviceManagerDevices);
+      setError(null);
+    }
+  }, [error, deviceManagerDevices]);
 
   // Keep selectedDevice in sync after reload
   useEffect(() => {
@@ -668,23 +683,36 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
   }, [sharedSelectedVmUser]);
 
   const backBar = isPageMode && onBackToChat ? (
-    <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-nb-border bg-nb-surface/60">
+    <div className="shrink-0 grid grid-cols-[1fr_auto_1fr] items-center px-3 py-2 border-b border-nb-border bg-nb-surface/60">
       <button
         onClick={onBackToChat}
         className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm text-nb-text-secondary
-                   hover:text-nb-text hover:bg-white/[0.06] transition-colors shrink-0"
+                   hover:text-nb-text hover:bg-white/[0.06] transition-colors shrink-0 justify-self-start"
       >
         <ChevronLeft size={16} />
             返回
       </button>
-      <div data-tauri-drag-region className="flex-1 cursor-default" />
+      <h1 data-tauri-drag-region className="text-sm font-semibold text-nb-text text-center cursor-default px-2">
+        Devices
+      </h1>
+      <div />
     </div>
   ) : null;
+
+  // PC 式：与 Header 同高的可拖动标题栏（h-11）
+  const devicesHeaderBar = !isPageMode && (
+    <div
+      data-tauri-drag-region
+      className="h-11 shrink-0 flex items-center px-4 border-b border-nb-border/60 bg-nb-surface/95 backdrop-blur-sm cursor-default"
+    >
+      <h1 className="text-sm font-semibold text-nb-text">Devices</h1>
+    </div>
+  );
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {backBar}
-      {!isPageMode && <div data-tauri-drag-region className="h-3 shrink-0 cursor-default" />}
+      {devicesHeaderBar}
       {selectedDevice ? (
         <div className="flex flex-1 min-h-0 min-w-0">
           <div className="flex-1 min-w-0 overflow-hidden">
@@ -720,7 +748,17 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
               选中后会在这里显示主桌面或子用户桌面
             </p>
             {loading && <p className="text-xs text-nb-text-secondary mt-2">正在加载 devices…</p>}
-            {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
+            {error && (
+              <div className="flex items-center gap-2 mt-2 justify-center">
+                <p className="text-xs text-red-400">{error}</p>
+                <button
+                  onClick={load}
+                  className="px-2 py-1 text-xs rounded bg-white/[0.06] hover:bg-white/[0.1] text-nb-text transition-colors"
+                >
+                  重试
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button

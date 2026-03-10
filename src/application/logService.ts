@@ -54,9 +54,35 @@ export class LogService {
       useAppStore.getState().setLogs(local.map(rawToLogVM));
       useAppStore.getState().patchState({ lastLogId: maxId });
     }
+
+    // 2. Fetch subagent tree (主 agent + subagent 列表及状态，后续由 SSE subagent_update 增量更新)
+    if (isCurrent()) {
+      await this.fetchSubagentTree(agentId);
+    }
   }
 
-  // ── Handle SSE log_entry ──────────────────────────────────────────────────
+  // ── Handle SSE log_batch（连接时一次性推送，避免 50 次 log_entry 导致前端抖动）──
+
+  async handleBatch(agentId: string, raws: RawLog[]): Promise<void> {
+    const { logSubagentId } = useAppStore.getState();
+    const filtered = logSubagentId !== null
+      ? raws.filter(r => r.subagent_id === logSubagentId)
+      : raws;
+    if (!filtered.length) return;
+
+    await logRepo.putLogs(this.userId, filtered);
+    const store = useAppStore.getState();
+    const byId = new Map(store.logs.map(l => [l.id, l]));
+    filtered.forEach(r => byId.set(r.id, rawToLogVM(r)));
+    let merged = Array.from(byId.values()).sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+    if (merged.length > MAX_LOGS) merged = merged.slice(-MAX_LOGS);
+    useAppStore.getState().setLogs(merged);
+    const newMaxId = Math.max(...filtered.map(r => r.id ?? 0), store.lastLogId ?? 0);
+    useAppStore.getState().patchState({ lastLogId: newMaxId });
+    await prefsRepo.setLogSyncId(this.userId, agentId, newMaxId);
+  }
+
+  // ── Handle SSE log_entry（单条新日志）──────────────────────────────────────────
 
   async handleIncoming(agentId: string, raw: RawLog): Promise<void> {
     const { logSubagentId } = useAppStore.getState();
@@ -225,7 +251,9 @@ export class LogService {
       const validStatus = status as SubAgentMeta['status'];
       useAppStore.getState().patchState({
         logSubagents: logSubagents.map((s: SubAgentMeta) =>
-          s.subagent_id === subagent_id ? { ...s, status: validStatus } : s
+          s.subagent_id === subagent_id
+            ? { ...s, status: validStatus, ...(task != null && { task }) }
+            : s
         ),
       });
     } else if (status === 'spawned') {

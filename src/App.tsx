@@ -11,6 +11,7 @@ import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import type { SetupConfig } from './components/Agent/CreateAgentModal';
 import { logout, getAccessToken, getCurrentUser, type UserInfo } from './services/auth';
 import { invoke } from '@tauri-apps/api/core';
+import { resetServices } from './application';
 import { AuthPage } from './components/Auth/AuthPage';
 import { getDb } from './db';
 
@@ -127,6 +128,14 @@ function App() {
     }
   }, [currentUserInfo]);
 
+  const handleLogout = useCallback(async () => {
+    await logout();
+    invoke('update_cloud_token', { token: '' }).catch(() => {});
+    resetServices();
+    setIsSignedIn(false);
+    setCurrentUserInfo(null);
+  }, []);
+
   const isInitialized = useAppStore(s => s.isInitialized);
   const settingsOpen = useAppStore(s => s.settingsOpen);
   const agents = useAppStore(s => s.agents);
@@ -134,7 +143,7 @@ function App() {
   const drawerWidth = useAppStore(s => s.drawerWidth);
   const drawerOpen = useAppStore(s => s.drawerOpen);
   const isSidebarLayout = useIsSidebarLayout();
-  const [narrowPage, setNarrowPage] = useState<'sidebar' | 'chat' | 'devices' | 'settings'>('sidebar');
+  const [narrowPage, setNarrowPage] = useState<'sidebar' | 'chat' | 'devices' | 'settings' | 'more'>('sidebar');
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
@@ -413,37 +422,15 @@ function App() {
         onNarrowPageChange={setNarrowPage}
         onOpenSettings={() => useAppStore.getState().patchState({ settingsOpen: true })}
         onAgentCreated={handleAgentCreated}
+        onLogout={handleLogout}
       />
       </div>
 
-      <SettingsModal open={settingsOpen} onClose={() => useAppStore.getState().patchState({ settingsOpen: false })} />
-      
-      {/* Status bar */}
-      <footer className="h-6 shrink-0 bg-nb-surface border-t border-nb-border px-4 flex items-center text-xs text-nb-text-muted">
-        <span className={`w-2 h-2 rounded-full mr-2 ${isInitialized ? 'bg-nb-success' : 'bg-nb-warning'}`} />
-        <span>{isInitialized ? 'Connected' : 'Connecting...'}</span>
-        <span className="ml-auto flex items-center gap-3">
-          {currentUserInfo?.email && (
-            <span className="text-nb-text-muted/60 truncate max-w-[160px]">
-              {currentUserInfo.email}
-            </span>
-          )}
-          <button
-            onClick={async () => {
-              await logout();
-              // 清空 Rust 端 token
-              invoke('update_cloud_token', { token: '' }).catch(() => {});
-              setIsSignedIn(false);
-              setCurrentUserInfo(null);
-            }}
-            className="text-nb-text-muted/60 hover:text-nb-text-muted transition-colors text-xs"
-            title="退出登录"
-          >
-            退出
-          </button>
-          <span className="text-nb-text-muted/40">NovAIC v0.1.0</span>
-        </span>
-      </footer>
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => useAppStore.getState().patchState({ settingsOpen: false })}
+        onLogout={handleLogout}
+      />
     </div>
   );
 }

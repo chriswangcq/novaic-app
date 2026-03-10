@@ -1,17 +1,20 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { ChevronDown, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Wrench, Eye, Edit3, Smartphone } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Bot, Monitor, Zap, Wrench, Eye, Edit3, Smartphone, User, LogOut } from 'lucide-react';
 import type { ApiKeyInfo, CandidateModel, AICAgent } from '../../gateway/client';
 import { useAgent } from '../hooks/useAgent';
 import { useSettings } from '../hooks/useSettings';
+import { useModels } from '../hooks/useModels';
+import { getModelService } from '../../application';
 import { vmService } from '../../services/vm';
 import { api, type AgentDeviceBinding, type DeviceSubject, type DeviceSubjectType, type MountedToolsByCategory } from '../../services/api';
+import { getCurrentUser } from '../../services/auth';
 import { Markdown } from '../Chat/Markdown';
 import type { Device } from '../../types';
 
 // ==================== Tab Types ====================
 
-export type SettingsTab = 'models' | 'agents' | 'skills' | 'agent-tools' | 'cache';
+export type SettingsTab = 'models' | 'agents' | 'skills' | 'agent-tools' | 'cache' | 'user';
 
 // ==================== Types ====================
 
@@ -836,7 +839,7 @@ function AgentsTab() {
               >
                 {/* Icon */}
                 <div className="w-9 h-9 rounded-lg bg-white/5 flex items-center justify-center shrink-0 border border-white/10">
-                  <Monitor size={18} className="text-white/60" />
+                  <Bot size={18} className="text-white/60" />
                 </div>
                 
                 {/* Info */}
@@ -1086,7 +1089,7 @@ function SkillsTab() {
               placeholder="browser, web, 网页, 浏览器"
               disabled={isBuiltin}
             />
-            <p className="text-[10px] text-nb-text-muted mt-1">当用户消息包含这些关键词时，自动加载此技能</p>
+            <p className="text-[10px] text-nb-text-muted mt-1">When user message contains these keywords, auto-load this skill</p>
           </div>
           <div>
             <label className="block text-xs text-nb-text-muted mb-1">Prompt / Instructions</label>
@@ -1358,6 +1361,7 @@ const MOUNTED_CATEGORY_LABELS: Record<string, string> = {
   file: 'File Transfer',
   shell: 'Command Execution',
   clipboard: 'Clipboard',
+  qemu: 'QEMU VM',
   screen: 'Screen Control',
   app: 'App Management',
   browser: 'Browser',
@@ -1560,6 +1564,7 @@ function ToolCategorySection({
 function AgentToolsTab() {
   const settings = useSettings();
   const { agents, currentAgentId } = useAgent();
+  const { availableModels, apiKeys } = useModels();
   const [selectedAgentId, setSelectedAgentId] = useState<string>(currentAgentId || '');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1599,6 +1604,9 @@ function AgentToolsTab() {
 
   // Prompts
   const [prompts, setPrompts] = useState<{ system_prompt: string; wake_message: string; system_prompt_length: number; wake_message_length: number } | null>(null);
+
+  // Model selection
+  const [agentModelComposite, setAgentModelComposite] = useState<string>('');
 
   const selectedDevice = useMemo(
     () => devices.find(device => device.id === bindingDeviceId) ?? null,
@@ -1681,13 +1689,15 @@ function AgentToolsTab() {
     setSaveError(null);
     setSaveInfo(null);
     try {
-      const [catResult, configResult, skillsResult, agentSkillsResult, devicesResult, bindingResult] = await Promise.allSettled([
+      await getModelService().loadConfig();
+      const [catResult, configResult, skillsResult, agentSkillsResult, devicesResult, bindingResult, modelResult] = await Promise.allSettled([
         settings.getToolCategories(),
         settings.getAgentToolsConfig(selectedAgentId),
         settings.getSkills(true),
         settings.getAgentSkills(selectedAgentId),
         api.devices.listForUser(),
         api.getAgentBinding(selectedAgentId),
+        api.getAgentModel(selectedAgentId),
       ]);
 
       const errors: string[] = [];
@@ -1717,6 +1727,13 @@ function AgentToolsTab() {
       const bindingRes = bindingResult.status === 'fulfilled' ? bindingResult.value : null;
       if (bindingResult.status === 'rejected') errors.push('device binding');
       setCurrentBinding(bindingRes);
+
+      const modelRes = modelResult.status === 'fulfilled' ? modelResult.value : null;
+      if (modelRes?.model_id && modelRes?.model) {
+        setAgentModelComposite(`${modelRes.model.api_key_id}:${modelRes.model_id}`);
+      } else {
+        setAgentModelComposite('');
+      }
       if (bindingRes?.device_id) {
         setBindingDeviceId(bindingRes.device_id);
         await loadSubjectsForDevice(bindingRes.device_id, {
@@ -1940,6 +1957,43 @@ function AgentToolsTab() {
                 {loadError}
               </div>
             )}
+
+            {/* Model Section */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-medium text-nb-text">Model</h4>
+              </div>
+              <select
+                value={agentModelComposite}
+                onChange={async (e) => {
+                  const v = e.target.value;
+                  setAgentModelComposite(v);
+                  if (v) {
+                    try {
+                      await getModelService().setModel(selectedAgentId, v);
+                    } catch (err) {
+                      console.error('Failed to set agent model:', err);
+                      setAgentModelComposite(agentModelComposite);
+                    }
+                  }
+                }}
+                className="w-full bg-nb-surface border border-nb-border rounded px-2 py-2 text-xs text-nb-text"
+              >
+                <option value="">Select model...</option>
+                {availableModels.map((m) => {
+                  const composite = `${m.api_key_id}:${m.id}`;
+                  const apiKey = apiKeys.find(k => k.id === m.api_key_id);
+                  return (
+                    <option key={composite} value={composite}>
+                      {m.name} ({apiKey?.name || m.provider})
+                    </option>
+                  );
+                })}
+              </select>
+              {availableModels.length === 0 && (
+                <p className="text-[10px] text-nb-text-muted mt-1">No models enabled. Configure in Settings → Models.</p>
+              )}
+            </div>
 
             {/* Skills Section */}
             <div>
@@ -2172,7 +2226,7 @@ function AgentToolsTab() {
 - 真正有帮助，不是表演有帮助
 - 有自己的观点
 - 先尝试解决，再问问题
-- 尊重用户的时间
+- Respect user's time
 
 ## 风格
 友好、自然、像朋友一样交流`}
@@ -2194,7 +2248,7 @@ function AgentToolsTab() {
 - 笔记本中有 status=ready 的内容吗？
 
 ## 轮换检查（每天 2-3 次）
-- 用户关心的新闻/价格有变化吗？
+- Any news/price changes the user cares about?
 
 ## 定期检查（每天 1 次）
 - 回顾最近对话，整理到 MEMORY.md`}
@@ -2220,14 +2274,14 @@ function AgentToolsTab() {
               {/* USER.md (只读) */}
               <div>
                 <label className="block text-[10px] text-nb-text-muted mb-1">
-                  USER.md (用户画像 - Agent 维护，只读)
+                  USER.md (User profile - maintained by Agent, read-only)
                 </label>
                 <div className="relative">
                   <textarea
                     value={userMd}
                     readOnly
                     className="w-full h-24 px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-400 font-mono resize-y cursor-not-allowed"
-                    placeholder="Agent 会在对话中学习用户偏好并记录到这里..."
+                    placeholder="Agent will learn user preferences in conversation and record here..."
                   />
                   <span className="absolute top-2 right-2 text-xs text-gray-500 bg-gray-900 px-1">只读</span>
                 </div>
@@ -2321,8 +2375,10 @@ export function SettingsModal(props: {
   onEmbeddedSubTabSelect?: (tab: SettingsTab) => void;
   /** embeddedMode='content' 时，点击返回 */
   onEmbeddedBack?: () => void;
+  /** 退出登录回调（User 管理用） */
+  onLogout?: () => void | Promise<void>;
 }) {
-  const { open, onClose, embedded = false, embeddedMode = 'list', embeddedTab, onEmbeddedSubTabSelect, onEmbeddedBack } = props;
+  const { open, onClose, embedded = false, embeddedMode = 'list', embeddedTab, onEmbeddedSubTabSelect, onEmbeddedBack, onLogout } = props;
   const settings = useSettings();
 
   // Tab state
@@ -2550,17 +2606,18 @@ export function SettingsModal(props: {
 
   const TAB_ITEMS: { id: SettingsTab; icon: typeof Database; label: string }[] = [
     { id: 'models', icon: Database, label: 'Models' },
-    { id: 'agents', icon: Monitor, label: 'Agents' },
+    { id: 'agents', icon: Bot, label: 'Agents' },
     { id: 'skills', icon: Zap, label: 'Skills' },
     { id: 'agent-tools', icon: Wrench, label: 'Agent Tools' },
-    { id: 'cache', icon: Trash2, label: '清理缓存' },
+    { id: 'cache', icon: Trash2, label: 'Clear Cache' },
+    { id: 'user', icon: User, label: 'User' },
   ];
 
   if (embedded && embeddedMode === 'list') {
     return (
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-nb-surface">
-        <div className="flex items-center justify-between border-b border-nb-border px-4 py-3 flex-shrink-0">
-          <div data-tauri-drag-region className="flex-1 text-sm font-semibold text-nb-text cursor-default">Settings</div>
+        <div className="flex items-center justify-center border-b border-nb-border px-4 py-3 flex-shrink-0">
+          <div data-tauri-drag-region className="text-sm font-semibold text-nb-text cursor-default">Settings</div>
         </div>
         <div className="flex-1 overflow-y-auto py-2">
           {TAB_ITEMS.map(({ id, icon: Icon, label }) => {
@@ -2594,10 +2651,23 @@ export function SettingsModal(props: {
     }
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-nb-border px-4 py-3 flex-shrink-0">
-        <div id="settings-modal-title" data-tauri-drag-region className={`text-sm font-semibold text-nb-text flex items-center gap-2 ${embedded ? 'flex-1 cursor-default' : ''}`}>
+      <div className={`flex items-center border-b border-nb-border px-4 py-3 flex-shrink-0 ${embedded ? 'grid grid-cols-[auto_1fr_auto]' : 'justify-between'}`}>
+        <div className="flex items-center">
+          {embedded && embeddedMode === 'content' && onEmbeddedBack && (
+            <button
+              type="button"
+              onClick={onEmbeddedBack}
+              className="w-7 h-7 flex items-center justify-center rounded-md text-nb-text-muted hover:bg-white/[0.06] hover:text-nb-text transition-all shrink-0"
+              title="返回"
+            >
+              <ChevronLeft size={15} strokeWidth={1.8} />
+            </button>
+          )}
+        </div>
+        <div id="settings-modal-title" data-tauri-drag-region className={`text-sm font-semibold text-nb-text flex items-center ${embedded ? 'justify-center cursor-default min-w-0' : 'flex-1'}`}>
           {embedded ? TAB_ITEMS.find(t => t.id === effectiveTab)?.label ?? 'Settings' : 'Settings'}
         </div>
+        <div className={embedded ? 'w-7' : 'hidden'} />
         {!embedded && (
           <button
             onClick={onClose}
@@ -2632,7 +2702,7 @@ export function SettingsModal(props: {
                   : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
               }`}
             >
-              <Monitor size={16} />
+              <Bot size={16} />
               <span>Agents</span>
             </button>
             <button
@@ -2666,7 +2736,18 @@ export function SettingsModal(props: {
               }`}
             >
               <Trash2 size={16} />
-              <span>清理缓存</span>
+              <span>Clear Cache</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('user')}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
+                effectiveTab === 'user'
+                  ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
+                  : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
+              }`}
+            >
+              <User size={16} />
+              <span>User</span>
             </button>
           </div>
           )}
@@ -2808,7 +2889,7 @@ export function SettingsModal(props: {
                 {/* Tab Header */}
                 <div className="px-4 py-3 border-b border-nb-border flex-shrink-0">
                   <div className="text-xs text-nb-text-muted">
-                    清理临时文件、日志和虚拟机缓存
+                    Clear temp files, logs and VM cache
                   </div>
                 </div>
 
@@ -2821,9 +2902,9 @@ export function SettingsModal(props: {
                         <Trash2 size={20} className="text-nb-text-muted" />
                       </div>
                       <div className="flex-1">
-                        <div className="text-sm font-medium text-nb-text">普通清理</div>
+                        <div className="text-sm font-medium text-nb-text">Standard cleanup</div>
                         <div className="text-xs text-nb-text-muted mt-1">
-                          清理 7 天前的日志、临时文件 (.tmp, .bak)、系统元数据文件 (.DS_Store) 和空目录
+                          Clear logs older than 7 days, temp files (.tmp, .bak), system metadata (.DS_Store) and empty dirs
                         </div>
                       </div>
                     </div>
@@ -2832,7 +2913,7 @@ export function SettingsModal(props: {
                       disabled={cleaning}
                       className="w-full py-2 rounded-lg border border-nb-border text-sm text-nb-text hover:bg-nb-surface-2 transition-colors disabled:opacity-50"
                     >
-                      {cleaning ? '清理中...' : '执行普通清理'}
+                      {cleaning ? 'Cleaning...' : 'Run standard cleanup'}
                     </button>
                   </div>
 
@@ -2843,15 +2924,15 @@ export function SettingsModal(props: {
                         <HardDrive size={20} className="text-orange-400" />
                       </div>
                       <div className="flex-1">
-                        <div className="text-sm font-medium text-nb-text">深度清理</div>
+                        <div className="text-sm font-medium text-nb-text">Deep cleanup</div>
                         <div className="text-xs text-nb-text-muted mt-1">
-                          包含普通清理的所有操作，另外还会：
+                          Includes all standard cleanup operations, plus:
                         </div>
                         <ul className="text-xs text-nb-text-muted mt-2 space-y-1 list-disc list-inside">
-                          <li>清理所有日志文件（不保留近期）</li>
-                          <li>清理孤立的 Agent 数据</li>
-                          <li>优化数据库（VACUUM）</li>
-                          <li>清理虚拟机基础镜像缓存（需重新下载）</li>
+                          <li>Clear all log files (no retention)</li>
+                          <li>Clear orphaned Agent data</li>
+                          <li>Optimize database (VACUUM)</li>
+                          <li>Clear VM base image cache (requires re-download)</li>
                         </ul>
                       </div>
                     </div>
@@ -2860,30 +2941,30 @@ export function SettingsModal(props: {
                       disabled={cleaning}
                       className="w-full py-2 rounded-lg bg-orange-500/20 border border-orange-500/30 text-sm text-orange-300 hover:bg-orange-500/30 transition-colors disabled:opacity-50"
                     >
-                      {cleaning ? '清理中...' : '执行深度清理'}
+                      {cleaning ? 'Cleaning...' : 'Run deep cleanup'}
                     </button>
                   </div>
 
                   {/* Cleanup Result */}
                   {cleanupResult && (
                     <div className="border border-green-500/30 rounded-lg p-4 bg-green-500/5">
-                      <div className="text-sm font-medium text-green-400 mb-3">清理完成</div>
+                      <div className="text-sm font-medium text-green-400 mb-3">Cleanup complete</div>
                       <div className="grid grid-cols-2 gap-2 text-xs">
                         <div className="flex justify-between">
-                          <span className="text-nb-text-muted">日志文件</span>
-                          <span className="text-nb-text">{cleanupResult.logs} 个</span>
+                          <span className="text-nb-text-muted">Log files</span>
+                          <span className="text-nb-text">{cleanupResult.logs}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-nb-text-muted">元数据文件</span>
-                          <span className="text-nb-text">{cleanupResult.metadata_files} 个</span>
+                          <span className="text-nb-text-muted">Metadata files</span>
+                          <span className="text-nb-text">{cleanupResult.metadata_files}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-nb-text-muted">临时文件</span>
-                          <span className="text-nb-text">{cleanupResult.temp_files} 个</span>
+                          <span className="text-nb-text-muted">Temp files</span>
+                          <span className="text-nb-text">{cleanupResult.temp_files}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-nb-text-muted">空目录</span>
-                          <span className="text-nb-text">{cleanupResult.empty_dirs} 个</span>
+                          <span className="text-nb-text-muted">Empty dirs</span>
+                          <span className="text-nb-text">{cleanupResult.empty_dirs}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-nb-text-muted">孤立 Agent</span>
@@ -2912,6 +2993,61 @@ export function SettingsModal(props: {
                       {info}
                     </div>
                   )}
+                </div>
+              </>
+            )}
+
+            {/* User Tab */}
+            {effectiveTab === 'user' && (
+              <>
+                <div className="px-4 py-3 border-b border-nb-border flex-shrink-0">
+                  <div className="text-xs text-nb-text-muted">Account info and logout</div>
+                </div>
+                <div className="p-4 overflow-y-auto flex-1 space-y-4">
+                  {(() => {
+                    const user = getCurrentUser();
+                    return (
+                      <div className="space-y-4">
+                        <div className="rounded-lg border border-nb-border/60 bg-nb-surface/40 p-4 space-y-3">
+                          <div className="flex items-center gap-2">
+                            <User size={18} className="text-nb-text-muted" />
+                            <span className="text-sm font-medium text-nb-text">Current account</span>
+                          </div>
+                          {user ? (
+                            <div className="space-y-1.5">
+                              <div>
+                                <span className="text-[11px] text-nb-text-muted">Email</span>
+                                <p className="text-sm text-nb-text">{user.email}</p>
+                              </div>
+                              {user.display_name && (
+                                <div>
+                                  <span className="text-[11px] text-nb-text-muted">Display name</span>
+                                  <p className="text-sm text-nb-text">{user.display_name}</p>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-nb-text-muted">Failed to get user info</p>
+                          )}
+                        </div>
+                        {onLogout && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await onLogout();
+                              if (!embedded) onClose();
+                            }}
+                            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm
+                                       bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20
+                                       transition-colors"
+                          >
+                            <LogOut size={16} />
+                            Log out
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </>
             )}

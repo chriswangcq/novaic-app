@@ -167,7 +167,8 @@ LayoutService   （独立）
 | 方法 | 说明 |
 |------|------|
 | `load(agentId)` | DB → store（epoch 保护） |
-| `handleIncoming(agentId, entry)` | SSE log_entry → DB → store upsert |
+| `handleBatch(agentId, entries)` | SSE log_batch（连接时一次性）→ DB → store 合并 |
+| `handleIncoming(agentId, entry)` | SSE log_entry（单条新日志）→ DB → store upsert |
 | `fetchAndMerge(agentId)` | logs_updated 事件后全量拉取并合并 |
 | `fetchSubagentTree(agentId)` | 拉取 subagent 树状态 |
 | `handleSubagentUpdate(update)` | subagent_update SSE 事件 → store |
@@ -191,7 +192,8 @@ Chat SSE  /api/chat/messages?agent_id=...
   onError         → delay → deltaSync → reconnect
 
 Logs SSE  /api/logs/stream?agent_id=...
-  log_entry       → logService.handleIncoming()
+  log_batch       → logService.handleBatch()（连接时一次性推送最近 50 条）
+  log_entry       → logService.handleIncoming()（单条新日志）
   logs_updated    → logService.fetchAndMerge() + fetchSubagentTree()
   subagent_update → logService.handleSubagentUpdate()
 ```

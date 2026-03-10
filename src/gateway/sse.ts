@@ -20,6 +20,7 @@ export interface ChatSSEHandlers {
 
 export interface LogSSEHandlers {
   onLogEntry: (entry: RawLog) => Promise<void> | void;
+  onLogBatch: (entries: RawLog[]) => Promise<void> | void;
   onLogsUpdated: () => void;
   onSubagentUpdate: (update: { subagent_id: string; status: string; task?: string | null; parent_subagent_id?: string | null }) => void;
 }
@@ -100,6 +101,25 @@ export class SSEManager {
             result: e.result,
             updated_at: e.updated_at,
           } as RawLog);
+        }
+
+        if (data?.event === 'log_batch' && data.agent_id === agentId && Array.isArray(data.entries)) {
+          const entries = data.entries.map((e: Record<string, unknown>) => ({
+            id: e.id,
+            agent_id: agentId,
+            type: e.type,
+            timestamp: e.timestamp,
+            data: e.data || {},
+            subagent_id: e.subagent_id,
+            status: e.status,
+            kind: e.kind,
+            event_key: e.event_key,
+            input: e.input,
+            input_summary: e.input_summary,
+            result: e.result,
+            updated_at: e.updated_at,
+          } as RawLog));
+          await handlers.onLogBatch(entries);
         }
 
         if (data?.event === 'logs_updated' && data.agent_id === agentId) {

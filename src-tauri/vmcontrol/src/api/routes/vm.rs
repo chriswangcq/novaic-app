@@ -499,10 +499,19 @@ pub async fn start_vm(
     // Remove stale QMP socket if it exists
     std::fs::remove_file(&qmp_socket).ok();
 
-    let port_forward = format!(
-        "user,id=net0,hostfwd=tcp::{}-:22,hostfwd=tcp::{}-:8080",
-        req.ssh_port, req.vmuse_port
-    );
+    // Build hostfwd: SSH, VMUSE, and subuser VNC ports (5900 + display_num).
+    // Subuser ports must be in QEMU args so they survive VM restart (QMP hostfwd is not persisted).
+    let mut hostfwd_parts = vec![
+        format!("hostfwd=tcp::{}-:22", req.ssh_port),
+        format!("hostfwd=tcp::{}-:8080", req.vmuse_port),
+    ];
+    for &disp_num in &req.vm_user_display_nums {
+        let vnc_port = 5900u32 + disp_num;
+        hostfwd_parts.push(format!("hostfwd=tcp::{}-:{}", vnc_port, vnc_port));
+    }
+    let hostfwd_str = hostfwd_parts.join(",");
+    let port_forward = format!("user,id=net0,{}", hostfwd_str);
+    let port_forward_legacy = format!("user,{}", hostfwd_str); // for x86 -net
 
     let qemu_share_dir = if !resource_dir.is_empty() {
         let share = format!("{}/qemu/share", resource_dir);
@@ -585,7 +594,7 @@ pub async fn start_vm(
             "-hda".to_string(), req.image_path.clone(),
             "-boot".to_string(), "c".to_string(),
             "-net".to_string(), "nic".to_string(),
-            "-net".to_string(), format!("user,hostfwd=tcp::{}-:22,hostfwd=tcp::{}-:8080", req.ssh_port, req.vmuse_port),
+            "-net".to_string(), port_forward_legacy,
             "-device".to_string(), "virtio-serial-pci".to_string(),
             "-chardev".to_string(), format!("socket,id=mcp,path={},server=on,wait=off", mcp_socket),
             "-device".to_string(), "virtserialport,chardev=mcp,name=mcp".to_string(),

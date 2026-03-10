@@ -132,8 +132,8 @@ function VNCViewComponent({ isThumbnail = false }: VNCViewProps) {
     if (status === 'starting') {
       return (
         <div className="absolute inset-0 flex flex-col items-center justify-center text-nb-text-muted">
-          <Loader2 size={48} className="mb-4 opacity-50 animate-spin" />
-          <p className="text-sm">正在启动虚拟机...</p>
+          <Loader2 size={isThumbnail ? 16 : 48} className={`${isThumbnail ? 'mb-1' : 'mb-4'} opacity-50 animate-spin`} />
+          {!isThumbnail && <p className="text-sm">正在启动虚拟机...</p>}
         </div>
       );
     }
@@ -141,18 +141,22 @@ function VNCViewComponent({ isThumbnail = false }: VNCViewProps) {
     // 未连接
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center text-nb-text-muted">
-        <Monitor size={48} className="mb-4 opacity-50" />
-        <p className="text-sm mb-2">
-          {status === 'error' ? '启动失败' : status === 'unknown' ? 'VM 未连接' : 'VM 未启动'}
-        </p>
-        {errorMsg && <p className="text-xs text-nb-error mb-4">{errorMsg}</p>}
-        <button
-          onClick={startVm}
-          className="px-4 py-2 bg-nb-accent hover:bg-nb-accent/90 text-white rounded-lg transition-colors flex items-center gap-2"
-        >
-          <Play size={16} />
-          Start VM
-        </button>
+        <Monitor size={isThumbnail ? 16 : 48} className={`${isThumbnail ? 'mb-1' : 'mb-4'} opacity-50`} />
+        {!isThumbnail && (
+          <>
+            <p className="text-sm mb-2">
+              {status === 'error' ? '启动失败' : status === 'unknown' ? 'VM 未连接' : 'VM 未启动'}
+            </p>
+            {errorMsg && <p className="text-xs text-nb-error mb-4">{errorMsg}</p>}
+            <button
+              onClick={startVm}
+              className="px-4 py-2 bg-nb-accent hover:bg-nb-accent/90 text-white rounded-lg transition-colors flex items-center gap-2"
+            >
+              <Play size={16} />
+              Start VM
+            </button>
+          </>
+        )}
       </div>
     );
   };

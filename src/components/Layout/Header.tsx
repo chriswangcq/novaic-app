@@ -1,17 +1,17 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
-import { Settings, Menu, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useMemo } from 'react';
+import { Menu, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { CreateAgentModal } from '../Agent/CreateAgentModal';
 import { useAppStore } from '../../application/store';
 import { useAgent } from '../hooks/useAgent';
 import { useVNCConnection } from '../Visual/useVNCConnection';
 
-const RECENT_AGENTS_LIMIT = 5;
-
 type NarrowPage = 'sidebar' | 'chat' | 'devices';
 
 interface HeaderProps {
-  onOpenSettings: () => void;
+  onOpenSettings?: () => void;
+  /** 右上角 ... 按钮回调（预留，具体功能待定） */
+  onHeaderMore?: () => void;
   onToggleDrawer: () => void;
   isDrawerOpen: boolean;
   onAgentCreated?: () => void;
@@ -23,19 +23,8 @@ interface HeaderProps {
   compact?: boolean;
 }
 
-// Status dot config
-const STATUS_DOT: Record<string, { dot: string; label: string; pulse: boolean }> = {
-  running:     { dot: 'bg-emerald-400',  label: 'Running',     pulse: false },
-  starting:    { dot: 'bg-amber-400',    label: 'Starting',    pulse: true  },
-  stopped:     { dot: 'bg-nb-text-secondary', label: 'Stopped', pulse: false },
-  error:       { dot: 'bg-red-400',      label: 'Error',       pulse: false },
-  setup_error: { dot: 'bg-red-400',      label: 'Error',       pulse: false },
-  setting_up:  { dot: 'bg-amber-400',    label: 'Setting up',  pulse: true  },
-  needs_setup: { dot: 'bg-nb-text-secondary', label: 'Needs setup', pulse: false },
-};
-
 export function Header(props: HeaderProps) {
-  const { onOpenSettings, onToggleDrawer, isDrawerOpen, onAgentCreated, isSidebarLayout = true, narrowPage = 'sidebar', onBackToSidebar, compact = false } = props;
+  const { onOpenSettings, onHeaderMore, onToggleDrawer, isDrawerOpen, onAgentCreated, isSidebarLayout = true, narrowPage = 'sidebar', onBackToSidebar, compact = false } = props;
   const showBackButton = !isSidebarLayout && narrowPage !== 'sidebar' && onBackToSidebar;
   const showHamburger = isSidebarLayout && !isDrawerOpen;
   const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);
@@ -44,40 +33,23 @@ export function Header(props: HeaderProps) {
   const setVncConnected = (v: boolean) => useAppStore.getState().patchState({ vncConnected: v });
 
   const currentAgent = agents.find(a => a.id === currentAgentId);
-  const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
-  const agentDropdownRef = useRef<HTMLDivElement>(null);
 
-  const recentAgents = (() => {
-    const others = agents.filter(a => a.id !== currentAgentId);
-    const list = currentAgent ? [currentAgent, ...others] : others;
-    return list.slice(0, RECENT_AGENTS_LIMIT);
-  })();
-
-  const currentIndex = recentAgents.findIndex(a => a.id === currentAgentId);
-  const canGoPrev = currentIndex > 0;
-  const canGoNext = currentIndex >= 0 && currentIndex < recentAgents.length - 1;
+  // 左右切换使用 agents 的固定顺序，支持循环
+  const currentIndex = agents.findIndex(a => a.id === currentAgentId);
+  const canCycle = agents.length > 1;
 
   const handlePrevAgent = () => {
-    if (canGoPrev && recentAgents[currentIndex - 1]) selectAgent(recentAgents[currentIndex - 1].id);
+    if (!canCycle) return;
+    const prevIndex = currentIndex <= 0 ? agents.length - 1 : currentIndex - 1;
+    selectAgent(agents[prevIndex].id);
   };
   const handleNextAgent = () => {
-    if (canGoNext && recentAgents[currentIndex + 1]) selectAgent(recentAgents[currentIndex + 1].id);
+    if (!canCycle) return;
+    const nextIndex = currentIndex >= agents.length - 1 ? 0 : currentIndex + 1;
+    selectAgent(agents[nextIndex].id);
   };
 
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (agentDropdownRef.current && !agentDropdownRef.current.contains(e.target as Node)) {
-        setAgentDropdownOpen(false);
-      }
-    }
-    if (agentDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [agentDropdownOpen]);
-
-  const [connectionState] = useVNCConnection(currentAgentId, setVncConnected);
-  const { status } = connectionState;
+  useVNCConnection(currentAgentId, setVncConnected);
 
   const handleHeaderMouseDown = (e: React.MouseEvent<HTMLElement>) => {
     if (e.buttons !== 1) return;
@@ -90,27 +62,19 @@ export function Header(props: HeaderProps) {
     }
   };
 
-  const statusKey = (() => {
-    if (!currentAgent) return 'stopped';
-    if (!currentAgent.setup_complete) {
-      if (currentAgent.setup_progress?.error) return 'setup_error';
-      if (currentAgent.setup_progress) return 'setting_up';
-      return 'needs_setup';
-    }
-    return status ?? 'stopped';
-  })();
-  const statusDot = STATUS_DOT[statusKey] ?? STATUS_DOT.stopped;
+  const isNarrow = !isSidebarLayout;
 
   return (
     <>
       <header
         className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
-                    flex items-center pr-2 no-select shrink-0
+                    no-select shrink-0 pr-2
+                    ${isNarrow ? 'grid grid-cols-[1fr_auto_1fr] items-center' : 'flex items-center'}
                     ${compact ? 'pl-2' : isMacOS ? 'pl-[76px]' : 'pl-2'}`}
         onMouseDown={handleHeaderMouseDown}
       >
         {/* Logo + 三杠(宽屏) / 返回(窄屏二级) — compact 时只显示三杠 */}
-        <div className="flex items-center gap-1 shrink-0">
+        <div className={`flex items-center gap-1 shrink-0 ${isNarrow ? 'min-w-0' : ''}`}>
           {!compact && <img src="/logo.png" alt="NovAIC" className="w-5 h-5 opacity-90" />}
           {showBackButton ? (
             <button
@@ -132,8 +96,8 @@ export function Header(props: HeaderProps) {
           ) : null}
         </div>
 
-        {/* Spacer — 非按钮区域可拖动 */}
-        <div data-tauri-drag-region className="flex-1 cursor-default" />
+        {/* Spacer — 非按钮区域可拖动（宽屏） */}
+        {!isNarrow && <div data-tauri-drag-region className="flex-1 cursor-default" />}
 
         {/* Center — agent selector + status */}
         {currentAgent ? (
@@ -141,7 +105,7 @@ export function Header(props: HeaderProps) {
             {/* Prev */}
             <button
               onClick={handlePrevAgent}
-              disabled={!canGoPrev}
+              disabled={!canCycle}
               className="w-5 h-5 flex items-center justify-center rounded text-nb-text-secondary
                          hover:text-nb-text hover:bg-white/[0.06] disabled:opacity-25 disabled:pointer-events-none transition-all"
               title="Previous agent"
@@ -149,57 +113,18 @@ export function Header(props: HeaderProps) {
               <ChevronLeft size={13} />
             </button>
 
-            {/* Selector pill */}
-            <div ref={agentDropdownRef} className="relative">
-              <button
-                onClick={() => setAgentDropdownOpen(!agentDropdownOpen)}
-                className="flex items-center gap-2 h-7 px-2.5 rounded-lg
-                           bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06]
-                           hover:border-white/[0.12] transition-all"
-              >
-                {/* Status dot */}
-                <span className="relative flex items-center justify-center shrink-0">
-                  <span className={`w-1.5 h-1.5 rounded-full ${statusDot.dot}`} />
-                  {statusDot.pulse && (
-                    <span className={`absolute w-1.5 h-1.5 rounded-full ${statusDot.dot} animate-ping opacity-60`} />
-                  )}
-                </span>
-                <span className="text-[12.5px] font-medium text-nb-text max-w-[140px] truncate">
-                  {currentAgent.name}
-                </span>
-                <ChevronDown size={11} className="text-nb-text-secondary shrink-0 -ml-0.5" />
-              </button>
-
-              {/* Dropdown */}
-              {agentDropdownOpen && recentAgents.length > 0 && (
-                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5
-                                min-w-[160px] py-1 rounded-xl
-                                bg-nb-surface border border-nb-border/80 shadow-2xl z-[100]">
-                  {recentAgents.map((agent) => (
-                    <button
-                      key={agent.id}
-                      onClick={() => { selectAgent(agent.id); setAgentDropdownOpen(false); }}
-                      className={`w-full px-3 py-1.5 text-left text-[12px] transition-colors truncate rounded-lg mx-auto
-                                  ${agent.id === currentAgentId
-                                    ? 'text-nb-text bg-white/[0.06]'
-                                    : 'text-nb-text-muted hover:bg-white/[0.04] hover:text-nb-text'}`}
-                    >
-                      {agent.name}
-                    </button>
-                  ))}
-                </div>
-              )}
+            {/* 当前 agent 显示 — 固定宽度，名字居中 */}
+            <div className="flex items-center justify-center h-7 w-[180px] px-2.5 rounded-lg
+                           bg-white/[0.04] border border-white/[0.06] shrink-0">
+              <span className="text-[12.5px] font-medium text-nb-text truncate text-center min-w-0">
+                {currentAgent.name}
+              </span>
             </div>
-
-            {/* Status label */}
-            <span className="text-[11px] text-nb-text-secondary/70 hidden sm:block">
-              {statusDot.label}
-            </span>
 
             {/* Next */}
             <button
               onClick={handleNextAgent}
-              disabled={!canGoNext}
+              disabled={!canCycle}
               className="w-5 h-5 flex items-center justify-center rounded text-nb-text-secondary
                          hover:text-nb-text hover:bg-white/[0.06] disabled:opacity-25 disabled:pointer-events-none transition-all"
               title="Next agent"
@@ -213,18 +138,20 @@ export function Header(props: HeaderProps) {
           </span>
         )}
 
-        {/* Spacer — 非按钮区域可拖动 */}
-        <div data-tauri-drag-region className="flex-1 cursor-default" />
+        {/* Spacer — 非按钮区域可拖动（宽屏） */}
+        {!isNarrow && <div data-tauri-drag-region className="flex-1 cursor-default" />}
 
-        {/* Settings */}
+        {/* 右上角 ... 按钮（预留） */}
+        <div className={isNarrow ? 'flex justify-end min-w-0' : ''}>
         <button
-          onClick={onOpenSettings}
+          onClick={() => onHeaderMore?.()}
           className="w-7 h-7 flex items-center justify-center rounded-md
                      text-nb-text-muted hover:text-nb-text hover:bg-white/[0.06] transition-all shrink-0"
-          title="Settings"
+          title="更多"
         >
-          <Settings size={15} strokeWidth={1.6} />
+          <MoreVertical size={15} strokeWidth={1.6} />
         </button>
+        </div>
       </header>
 
       <CreateAgentModal

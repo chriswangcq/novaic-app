@@ -1,9 +1,6 @@
-import { useState, useRef, KeyboardEvent, useEffect, useMemo, useCallback } from 'react';
-import { ArrowUp, ChevronDown, Bot, X, ArrowDown, Paperclip } from 'lucide-react';
-import { useModels } from '../hooks/useModels';
+import { useState, useRef, KeyboardEvent, useEffect, useCallback } from 'react';
+import { ArrowUp, Bot, X, ArrowDown, Paperclip } from 'lucide-react';
 import { useAgent } from '../hooks/useAgent';
-import { getModelService } from '../../application';
-import { CandidateModel } from '../../types';
 
 const MAX_ATTACHMENTS = 5;
 const MAX_FILE_SIZE_MB = 500; // 支持大文件（如 APK）
@@ -38,71 +35,15 @@ export function ChatInput({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isFocused, setIsFocused] = useState(false);
-  const [showModelDropdown, setShowModelDropdown] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const modelDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { availableModels, apiKeys, selectedModel, setModel: setSelectedModel } = useModels();
   const { currentAgentId } = useAgent();
-
-  // Check if agent is selected
   const hasAgent = !!currentAgentId;
 
-  // Fetch latest models when dropdown opens
-  const handleOpenModelDropdown = useCallback(async () => {
-    if (!showModelDropdown) {
-      await getModelService().loadConfig();
-    }
-    setShowModelDropdown(!showModelDropdown);
-  }, [showModelDropdown]);
-
-  // Focus on mount
   useEffect(() => {
     textareaRef.current?.focus();
   }, []);
-
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
-        setShowModelDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Create API Key name map
-  const apiKeyNameMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    apiKeys.forEach(k => { map[k.id] = k.name; });
-    return map;
-  }, [apiKeys]);
-
-  // Get current model info - selectedModel is composite ID: {api_key_id}:{model_id}
-  // Note: model_id may contain colons, so only split on FIRST colon
-  const currentModel = useMemo(() => {
-    if (!selectedModel) return null;
-    const colonIndex = selectedModel.indexOf(':');
-    if (colonIndex === -1) return null;
-    const apiKeyId = selectedModel.substring(0, colonIndex);
-    const modelId = selectedModel.substring(colonIndex + 1);
-    if (!apiKeyId || !modelId) return null;
-    return availableModels.find(m => m.api_key_id === apiKeyId && m.id === modelId);
-  }, [selectedModel, availableModels]);
-  const displayModelName = currentModel?.name || (selectedModel?.includes(':') ? selectedModel.substring(selectedModel.indexOf(':') + 1) : selectedModel) || 'Select model';
-
-  // Group models by API Key (not provider)
-  const modelsByApiKey = useMemo(() => {
-    const grouped: Record<string, CandidateModel[]> = {};
-    availableModels.forEach(model => {
-      const keyId = model.api_key_id;
-      if (!grouped[keyId]) grouped[keyId] = [];
-      grouped[keyId].push(model);
-    });
-    return grouped;
-  }, [availableModels]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -167,7 +108,7 @@ export function ChatInput({
   };
 
   return (
-    <div className="p-4 flex flex-col items-center gap-2 relative">
+    <div className="px-4 pt-2 pb-4 flex flex-col items-center gap-2 relative">
       {/* 新消息提示胶囊按钮 - 在输入框上方 */}
       {unreadCount > 0 && (
         <button
@@ -277,74 +218,6 @@ export function ChatInput({
           <ArrowUp size={14} strokeWidth={2.5} />
         </button>
 
-      </div>
-
-      {/* Model selector row */}
-      <div className="flex items-center gap-3 w-full max-w-[480px]">
-        {/* Model selector */}
-        <div className="relative" ref={modelDropdownRef}>
-          <button
-            onClick={handleOpenModelDropdown}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-white/[0.06] transition-colors text-white/60 hover:text-white/80 max-w-[180px]"
-          >
-            <span className="text-xs truncate">{displayModelName}</span>
-            <ChevronDown size={12} className={`transition-transform shrink-0 ${showModelDropdown ? 'rotate-180' : ''}`} />
-          </button>
-          
-          {showModelDropdown && (
-            <div className="absolute bottom-full left-0 mb-1 w-72 max-h-80 bg-[#1a1a1a] border border-white/10 rounded-lg shadow-xl z-50 flex flex-col">
-              {/* Header with close button */}
-              <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 flex-shrink-0">
-                <span className="text-[10px] font-medium text-white/50 uppercase tracking-wide">Select Model</span>
-                <button
-                  onClick={() => setShowModelDropdown(false)}
-                  className="text-white/40 hover:text-white/70 transition-colors"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-              
-              {/* Model list */}
-              <div className="overflow-y-auto flex-1">
-                {availableModels.length === 0 ? (
-                  <div className="px-3 py-3 text-xs text-white/40 text-center">
-                    No models enabled.<br/>
-                    <span className="text-white/30">Configure in Settings →</span>
-                  </div>
-                ) : (
-                  Object.entries(modelsByApiKey).map(([apiKeyId, models]) => (
-                    <div key={apiKeyId}>
-                      <div className="px-3 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wide bg-white/[0.02] sticky top-0">
-                        {apiKeyNameMap[apiKeyId] || 'Unknown'}
-                      </div>
-                      {models.map((model) => {
-                        // Use composite ID: {api_key_id}:{model_id} to uniquely identify
-                        const compositeId = `${model.api_key_id}:${model.id}`;
-                        return (
-                          <button
-                            key={compositeId}
-                            onClick={() => {
-                              setSelectedModel(compositeId);
-                              setShowModelDropdown(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 hover:bg-white/[0.06] transition-colors flex items-center justify-between gap-2 ${
-                              compositeId === selectedModel ? 'bg-white/10 border-l-2 border-white/40' : ''
-                            }`}
-                          >
-                            <span className="text-xs text-white/80 truncate">{model.name}</span>
-                            <span className="text-[9px] text-white/30 bg-white/[0.04] px-1.5 py-0.5 rounded flex-shrink-0">
-                              {model.api_key_name || apiKeyNameMap[model.api_key_id] || model.provider}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-        </div>
       </div>
 
     </div>

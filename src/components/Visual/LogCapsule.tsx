@@ -5,7 +5,7 @@
  */
 
 import { useCallback } from 'react';
-import { Monitor, Cpu, ChevronRight } from 'lucide-react';
+import { Bot, ChevronRight } from 'lucide-react';
 import { LogEntry } from '../../types';
 import { LogCard } from './ExecutionLog';
 import { useVirtualList } from '../../hooks/useVirtualList';
@@ -90,51 +90,50 @@ export function LogCapsule({
   return (
     <div
       data-capsule-id={capsuleId}
-      className={`rounded-xl border bg-nb-surface/80 overflow-hidden transition-opacity ${
+      className={`rounded-xl border overflow-hidden transition-all ${
         isMain
-          ? 'border-nb-border border-l-2 border-l-blue-500/50'
+          ? 'border-nb-border/60 bg-nb-surface/60'
           : isUnloaded
-            ? 'border-nb-border/40 border-l-2 border-l-violet-500/20 opacity-60'
-            : 'border-nb-border border-l-2 border-l-violet-500/50'
+            ? 'border-nb-border/40 bg-nb-surface/40 opacity-70'
+            : 'border-nb-border/50 bg-nb-surface/50'
       }`}
-      style={{ marginLeft: depth * 20 }}
+      style={{ marginLeft: depth * 16 }}
     >
       {/* 标题栏 */}
       <div
-        className={`px-3 py-2 flex items-center gap-2 cursor-pointer transition-colors ${
+        className={`px-4 py-2.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
           isUnloaded
-            ? 'bg-nb-surface-2/30 hover:bg-nb-surface-2/50'
-            : 'bg-nb-surface-2/50 hover:bg-nb-surface-2/70'
+            ? 'hover:bg-nb-surface-2/40'
+            : 'hover:bg-nb-surface-2/50'
         }`}
         onClick={onToggleExpand}
       >
         {isMain ? (
-          <Monitor size={13} className="text-nb-text-secondary shrink-0" />
+          <Bot size={14} className="text-nb-text-secondary shrink-0" />
         ) : (
-          <Cpu size={13} className={`shrink-0 ${isUnloaded ? 'text-nb-text-secondary/50' : 'text-nb-text-secondary'}`} />
+          <Bot size={14} className={`shrink-0 ${isUnloaded ? 'text-nb-text-secondary/60' : 'text-nb-text-secondary'}`} />
         )}
         {statusDot}
-        <span className={`text-[12px] font-medium truncate ${isUnloaded ? 'text-nb-text-muted' : 'text-nb-text'}`}>
+        <span className={`text-[13px] font-medium truncate flex-1 min-w-0 ${isUnloaded ? 'text-nb-text-muted' : 'text-nb-text'}`}>
           {label}
         </span>
-        <span className="text-[11px] text-nb-text-secondary shrink-0 tabular-nums">
+        <span className="text-[11px] text-nb-text-secondary/80 shrink-0 tabular-nums">
           {displayCount} 条
         </span>
         {isUnloaded && (
-          <span className="text-[10px] text-nb-text-secondary/50 shrink-0 border border-nb-border/40 rounded px-1 py-0.5">
+          <span className="text-[10px] text-nb-text-secondary/60 shrink-0 px-2 py-0.5 rounded-md bg-nb-surface-2/60">
             未加载
           </span>
         )}
         {runningCount > 0 && (
-          <span className="text-[10px] text-nb-accent shrink-0">● 运行中</span>
+          <span className="text-[10px] text-nb-accent shrink-0">运行中</span>
         )}
         {hasFailed && (
-          <span className="text-[10px] text-nb-error shrink-0">✗ 失败</span>
+          <span className="text-[10px] text-nb-error shrink-0">失败</span>
         )}
-        <div className="flex-1" />
         <ChevronRight
-          size={13}
-          className={`shrink-0 transition-transform text-nb-text-muted/60 ${isExpanded ? 'rotate-90' : ''}`}
+          size={14}
+          className={`shrink-0 transition-transform duration-200 text-nb-text-secondary/50 ${isExpanded ? 'rotate-90' : ''}`}
         />
       </div>
 
@@ -166,7 +165,7 @@ function LogCapsuleContent({
 }: LogCapsuleContentProps) {
   if (logs.length <= VIRTUALIZE_THRESHOLD) {
     return (
-      <div className="p-2 space-y-2">
+      <div className="p-3 space-y-2">
         {logs.map((log, idx) => {
           const logKey = log.id?.toString() || `${idx}-${log.timestamp}`;
           const isExpanded = expandedLogs.has(logKey);
@@ -209,7 +208,7 @@ function LogCapsuleContentVirtualized({
   return (
       <div
         ref={parentRef}
-        className="p-2 overflow-y-auto"
+        className="p-3 overflow-y-auto"
         style={{ maxHeight: 400 }}
       >
         <div

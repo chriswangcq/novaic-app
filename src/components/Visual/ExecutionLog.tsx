@@ -14,6 +14,7 @@ import { SmartValue } from './SmartValue';
 import { formatTime } from '../../utils/time';
 import { getTrsFull, toFileUrl, normalizedToContent, type TrsContentItem } from '../../services/trs';
 import { buildSubAgentTree, type SubAgentNode } from '../../types/subagent';
+import { getLogGroupKey } from '../../utils/subagent';
 
 // ==================== LLM Message Types ====================
 
@@ -1024,14 +1025,15 @@ function LLMInputModal({ isOpen, onClose, messages, model, tools, provider }: LL
 interface ExecutionLogProps {
   logs: LogEntry[];
   showHeader?: boolean;
+  /** 单 agent 模式：仅展示传入 logs 的 agent，不展示其他 subagent（如弹窗内） */
+  singleAgentMode?: boolean;
 }
 
-/** 按 subagent_id 分组，key 为 'main' | subagent_id；空字符串与 undefined 同等对待，归入 main */
-function groupLogsBySubagent(logs: LogEntry[]): Map<string, LogEntry[]> {
+/** 按 subagent_id 分组，key 为 'main' | subagent_id；主 agent 判别：subagent_id 后 8 位与 agent_id 一致 */
+function groupLogsBySubagent(logs: LogEntry[], agentId: string | undefined | null): Map<string, LogEntry[]> {
   const groups = new Map<string, LogEntry[]>();
   for (const log of logs) {
-    const raw = log.subagent_id;
-    const key = (typeof raw === 'string' && raw.trim()) ? raw : 'main';
+    const key = getLogGroupKey(log.subagent_id, agentId);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(log);
   }
@@ -1199,12 +1201,12 @@ export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProp
 
   return (
     <div className={`
-      group rounded-lg border transition-all duration-200
+      group rounded-lg border transition-all duration-150
       ${isRunning 
-        ? 'bg-gradient-to-r from-nb-accent/10 to-transparent border-nb-accent/30' 
+        ? 'bg-nb-accent/5 border-nb-accent/25' 
         : isFailed 
-          ? 'bg-gradient-to-r from-nb-error/10 to-transparent border-nb-error/30'
-          : 'bg-nb-surface/50 border-nb-border/50 hover:border-nb-border hover:bg-nb-surface'
+          ? 'bg-nb-error/5 border-nb-error/25'
+          : 'bg-nb-surface/40 border-nb-border/40 hover:bg-nb-surface/60 hover:border-nb-border/60'
       }
     `}>
       {/* 主内容区 */}
@@ -1415,7 +1417,7 @@ export function LogCard({ log, isExpanded, onToggle, showSubagent }: LogCardProp
 
 // ==================== 主组件 ====================
 
-export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
+export function ExecutionLog({ logs, showHeader = true, singleAgentMode = false }: ExecutionLogProps) {
   const { currentAgentId } = useAgent();
   const {
     logSubagentId,
@@ -1501,7 +1503,7 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
     }
   }, [logs.length, isLoadingMoreLogs, isAtBottom, scrollToBottom]);
 
-  const groups = useMemo(() => groupLogsBySubagent(logs), [logs]);
+  const groups = useMemo(() => groupLogsBySubagent(logs, currentAgentId), [logs, currentAgentId]);
 
   // Build subagent tree for enriched rendering
   const subAgentTree = useMemo(() => buildSubAgentTree(logSubagents), [logSubagents]);
@@ -1518,9 +1520,13 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
     return m;
   }, [subAgentTree]);
 
-  // Build a stable capsule ID list using the subAgentTree order as the source of truth.
-  // In-memory load state does NOT affect position — only tree order (created_at) matters.
+  // Build a stable capsule ID list.
+  // singleAgentMode: 仅展示传入 logs 的 agent，不展示其他 subagent（如弹窗内）.
+  // 否则：使用 subAgentTree 顺序，合并 in-memory groups.
   const sortedCapsuleIds = useMemo(() => {
+    if (singleAgentMode) {
+      return getSortedCapsuleIds(groups);
+    }
     const result: string[] = [];
     const seen = new Set<string>();
 
@@ -1549,7 +1555,7 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
     });
 
     return result;
-  }, [groups, subAgentTree]);
+  }, [groups, subAgentTree, singleAgentMode]);
 
   const showSubagentBadge = logSubagentId === null && sortedCapsuleIds.length > 1;
 
@@ -1636,7 +1642,7 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
       {/* Log content */}
       <div
         ref={parentRef}
-        className={`flex-1 overflow-y-auto overflow-x-hidden p-3 ${isReady ? 'opacity-100' : 'opacity-0'}`}
+        className={`flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 ${isReady ? 'opacity-100' : 'opacity-0'}`}
         style={{ transition: 'none' }}
         onScroll={handleScroll}
       >
@@ -1674,47 +1680,63 @@ export function ExecutionLog({ logs, showHeader = true }: ExecutionLogProps) {
               </div>
             )}
 
-            {/* 按 subagent 分组的胶囊列表（支持树形嵌套） */}
-            <div className="space-y-3">
-              {sortedCapsuleIds.map(capsuleId => {
-                const capsuleLogs = groups.get(capsuleId) ?? [];
-                const subNode = subAgentNodeMap.get(capsuleId);
-                const displayName = subNode?.task
-                  ? (subNode.task.length > 40 ? subNode.task.slice(0, 40) + '…' : subNode.task)
-                  : (capsuleId === 'main' ? '主 Agent' : capsuleId);
-                return (
-                  <LogCapsule
-                    key={capsuleId}
-                    capsuleId={capsuleId}
-                    displayName={displayName}
-                    isMain={capsuleId === 'main' || capsuleId.startsWith('main-')}
-                    logs={capsuleLogs}
-                    metaLogCount={subNode?.log_count}
-                    isExpanded={isCapsuleExpanded(capsuleId)}
-                    onToggleExpand={() => {
-                      // Only fetch if truly no in-memory logs for this capsule.
-                      // For main-type nodes: also skip if 'main' (legacy key) already has logs,
-                      // since they represent the same agent and re-fetching would duplicate entries.
-                      const noMemLogs = capsuleLogs.length === 0;
-                      const hasDbLogs = (subNode?.log_count ?? 0) > 0;
-                      const isMainNode = subNode?.type === 'main';
-                      const mainAlreadyInMem = isMainNode &&
-                        Array.from(groups.keys()).some(k => k === 'main' || k.startsWith('main-'));
-                      if (noMemLogs && hasDbLogs && !mainAlreadyInMem) {
-                        appendSubagentLogs(capsuleId);
-                      }
-                      toggleCapsuleExpand(capsuleId);
-                    }}
-                    showSubagentBadge={showSubagentBadge}
-                    expandedLogs={expandedLogs}
-                    onToggleLogExpand={toggleLogExpand}
-                    depth={subNode?.depth ?? 0}
-                    taskLabel={subNode?.task}
-                    subagentStatus={subNode?.status}
-                  />
-                );
-              })}
-            </div>
+            {/* singleAgentMode: 直接展示日志列表，无胶囊 */}
+            {singleAgentMode ? (
+              <div className="space-y-2">
+                {logs.map((log, idx) => {
+                  const logKey = log.id?.toString() || `${idx}-${log.timestamp}`;
+                  const isExpanded = expandedLogs.has(logKey);
+                  return (
+                    <LogCard
+                      key={logKey}
+                      log={log}
+                      isExpanded={isExpanded}
+                      onToggle={() => toggleLogExpand(logKey)}
+                      showSubagent={false}
+                    />
+                  );
+                })}
+              </div>
+            ) : (
+              /* 按 subagent 分组的胶囊列表（支持树形嵌套） */
+              <div className="space-y-4">
+                {sortedCapsuleIds.map(capsuleId => {
+                  const capsuleLogs = groups.get(capsuleId) ?? [];
+                  const subNode = subAgentNodeMap.get(capsuleId);
+                  const displayName = subNode?.task
+                    ? (subNode.task.length > 40 ? subNode.task.slice(0, 40) + '…' : subNode.task)
+                    : (capsuleId === 'main' ? '主 Agent' : capsuleId);
+                  return (
+                    <LogCapsule
+                      key={capsuleId}
+                      capsuleId={capsuleId}
+                      displayName={displayName}
+                      isMain={capsuleId === 'main' || capsuleId.startsWith('main-')}
+                      logs={capsuleLogs}
+                      metaLogCount={subNode?.log_count}
+                      isExpanded={isCapsuleExpanded(capsuleId)}
+                      onToggleExpand={() => {
+                        const noMemLogs = capsuleLogs.length === 0;
+                        const hasDbLogs = (subNode?.log_count ?? 0) > 0;
+                        const isMainNode = subNode?.type === 'main';
+                        const mainAlreadyInMem = isMainNode &&
+                          Array.from(groups.keys()).some(k => k === 'main' || k.startsWith('main-'));
+                        if (noMemLogs && hasDbLogs && !mainAlreadyInMem) {
+                          appendSubagentLogs(capsuleId);
+                        }
+                        toggleCapsuleExpand(capsuleId);
+                      }}
+                      showSubagentBadge={showSubagentBadge}
+                      expandedLogs={expandedLogs}
+                      onToggleLogExpand={toggleLogExpand}
+                      depth={subNode?.depth ?? 0}
+                      taskLabel={subNode?.task}
+                      subagentStatus={subNode?.status}
+                    />
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </div>

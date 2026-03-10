@@ -270,8 +270,12 @@ export const DEFAULT_PORTS = {
 
 /** 布局配置 */
 export const LAYOUT_CONFIG = {
-  /** 边栏布局宽度阈值（px）：>= 此宽度时边栏固定打开，< 时采用一二级页面形式 */
-  SIDEBAR_WIDTH_THRESHOLD: 1024,
+  /**
+   * 布局统一阈值（px）：
+   * - 高于阈值：PC 式，三栏展开（PrimaryNav | AgentDrawer | Main）
+   * - 低于阈值：手机式，tab 移到底部，第二栏时底 tab 可见，第三栏时底 tab 隐藏、可返回
+   */
+  LAYOUT_THRESHOLD: 1024,
 
   /** 默认左侧面板宽度（像素） */
   DEFAULT_LEFT_WIDTH: 400,

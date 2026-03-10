@@ -315,8 +315,31 @@ pub async fn vmuse_agent_proxy(
         agent_id, tool, operation
     );
 
-    // 1. Resolve vmuse port from local vmcontrol state first; fall back to Gateway.
-    let vmuse_port = get_agent_vmuse_port(&state, &agent_id).await?;
+    // 1. Resolve vmuse port: prefer runtime_context from Gateway forward (avoids 401 on /api/agents)
+    let vmuse_port = body
+        .get("runtime_context")
+        .and_then(|rc| rc.get("vm"))
+        .and_then(|vm| vm.get("ports"))
+        .and_then(|ports| ports.get("vmuse"))
+        .and_then(|p| p.as_u64())
+        .map(|p| p as u16)
+        .filter(|p| *p > 0)
+        .or_else(|| {
+            body.get("vm")
+                .and_then(|vm| vm.get("ports"))
+                .and_then(|ports| ports.get("vmuse"))
+                .and_then(|p| p.as_u64())
+                .map(|p| p as u16)
+                .filter(|p| *p > 0)
+        });
+
+    let vmuse_port = match vmuse_port {
+        Some(p) => {
+            tracing::info!("Using vmuse port {} from request body (Gateway forward)", p);
+            p
+        }
+        None => get_agent_vmuse_port(&state, &agent_id).await?,
+    };
     
     tracing::info!(
         "Got vmuse port {} for agent {}",
