@@ -43,32 +43,49 @@ pub async fn download_file_to_cache(
     }
 
     let token = cloud_token.read().await.clone();
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Download failed: {}", e))?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .http1_only() // Avoid HTTP/2 TLS handshake issues with some servers
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Client build failed: {}", e))?;
 
-    if !response.status().is_success() {
-        return Err(format!("Download failed: HTTP {}", response.status()));
+    // Retry on TLS/connection errors (often transient)
+    let mut last_err = String::new();
+    for attempt in 1..=3 {
+        match client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    return Err(format!("Download failed: HTTP {}", resp.status()));
+                }
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .map_err(|e| format!("Failed to read response: {}", e))?;
+                let mut file = std::fs::File::create(&target_path)
+                    .map_err(|e| format!("Failed to create file: {}", e))?;
+                file.write_all(&bytes)
+                    .map_err(|e| format!("Failed to write file: {}", e))?;
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "path": target_path.to_string_lossy()
+                }));
+            }
+            Err(e) => {
+                last_err = format!("Download failed: {}", e);
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                }
+            }
+        }
     }
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
-
-    let mut file = std::fs::File::create(&target_path)
-        .map_err(|e| format!("Failed to create file: {}", e))?;
-    file.write_all(&bytes)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
-
-    Ok(serde_json::json!({
-        "success": true,
-        "path": target_path.to_string_lossy()
-    }))
+    Err(last_err)
 }
 
 /// Open file with default application
