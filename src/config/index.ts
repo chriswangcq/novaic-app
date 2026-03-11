@@ -24,15 +24,15 @@ declare global {
 
 /** API 配置 */
 const rawGatewayUrl = import.meta.env.VITE_GATEWAY_URL?.trim();
-if (!rawGatewayUrl) {
-  throw new Error(
-    'SPLIT_CONFIG_ERROR: VITE_GATEWAY_URL is required in split-only mode (example: https://api.example.com)'
-  );
+// iOS/移动端构建时 .env 可能未加载，使用默认 Gateway 避免启动崩溃
+const gatewayUrl = rawGatewayUrl || 'https://api.gradievo.com';
+if (!rawGatewayUrl && !import.meta.env.DEV) {
+  console.warn('[Config] VITE_GATEWAY_URL not set, using default:', gatewayUrl);
 }
 
 export const API_CONFIG = {
   /** Gateway 服务 URL */
-  GATEWAY_URL: rawGatewayUrl,
+  GATEWAY_URL: gatewayUrl,
   
   /** Gateway 端口（从 URL 提取或默认） */
   GATEWAY_PORT: 19999,

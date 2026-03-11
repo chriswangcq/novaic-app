@@ -5,7 +5,10 @@
         "label": "main",
         "title": "",
         "width": 1280,
-        "height": 800
+        "height": 800,
+        "decorations": false,
+        "transparent": false,
+        "center": false
       }
     ]
   },
