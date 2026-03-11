@@ -3,7 +3,9 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 // https://vitejs.dev/config/
+// VITE_BASE: CDN 部署时设置，如 /v0.3.0/；本地/Tauri 打包用默认 /
 export default defineConfig({
+  base: process.env.VITE_BASE || '/',
   plugins: [react()],
   // Prevent vite from obscuring rust errors
   clearScreen: false,

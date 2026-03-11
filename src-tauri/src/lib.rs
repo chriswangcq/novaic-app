@@ -246,6 +246,10 @@ pub fn run() {
             let cloud_token = app.state::<CloudTokenState>().inner().clone();
             let login_notify = app.state::<LoginNotifyState>().inner().clone();
             let vnc_proxy_state = app.state::<vnc_proxy::VncProxyState>().inner().clone();
+            let app_instance_guard = app.state::<state::AppInstanceState>().inner().blocking_read();
+            let app_instance_id = app_instance_guard.app_instance_id.clone();
+            let machine_label = app_instance_guard.machine_label.clone();
+            drop(app_instance_guard);
 
             let device_id = vmcontrol::load_or_generate_device_id(&data_dir);
             println!("[VmControl] Device ID: {}", device_id);
@@ -256,6 +260,8 @@ pub fn run() {
             let gw_url_for_task = gw_url.clone();
             let login_notify_for_task = login_notify.clone();
             let vnc_proxy_state = vnc_proxy_state.clone();
+            let app_instance_id_for_task = app_instance_id.clone();
+            let machine_label_for_task = machine_label.clone();
 
             tauri::async_runtime::spawn(async move {
                 let startup_begin = std::time::Instant::now();
@@ -268,6 +274,8 @@ pub fn run() {
                     gateway_url: gw_url_for_task.clone(),
                     cloud_token: cloud_token_for_task,
                     device_id: vmcontrol::load_or_generate_device_id(&data_dir_for_task),
+                    app_instance_id: app_instance_id_for_task,
+                    machine_label: machine_label_for_task,
                     login_notify: login_notify_for_task,
                 };
 
@@ -356,6 +364,8 @@ pub fn run() {
             commands::file::download_file_to_cache,
             commands::file::open_file,
             commands::file::show_in_folder,
+            commands::app_instance::get_app_instance,
+            commands::app_instance::get_local_device_id,
             commands::vnc_urls::get_vnc_proxy_url,
             commands::vnc_urls::get_scrcpy_proxy_url,
         ])

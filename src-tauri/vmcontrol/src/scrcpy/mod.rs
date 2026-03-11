@@ -453,6 +453,12 @@ impl ScrcpyProxy {
         // scrcpy 3.x 启动命令
         // 参考: https://github.com/Genymobile/scrcpy/blob/master/doc/develop.md
         // 注意: scid 必须是十六进制格式
+        // AVD/模拟器性能较弱，使用较低码率和帧率以提升流畅度
+        let (video_bit_rate, max_fps, max_size) = if self.device_serial.starts_with("emulator-") {
+            (4_000_000u32, 30u32, 1280u32)  // 4Mbps, 30fps, 1280 宽度
+        } else {
+            (8_000_000, 60, 0)  // 真机：8Mbps, 60fps, 原始分辨率
+        };
         let server_args = format!(
             "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server {} \
             scid={:08x} \
@@ -461,9 +467,9 @@ impl ScrcpyProxy {
             video=true \
             audio=false \
             control=true \
-            video_bit_rate=8000000 \
-            max_size=0 \
-            max_fps=60 \
+            video_bit_rate={} \
+            max_size={} \
+            max_fps={} \
             video_codec=h264 \
             send_device_meta=true \
             send_frame_meta=true \
@@ -474,7 +480,10 @@ impl ScrcpyProxy {
             clipboard_autosync=false \
             downsize_on_error=true",
             SCRCPY_VERSION,
-            scid
+            scid,
+            video_bit_rate,
+            max_size,
+            max_fps
         );
         
         tracing::info!("Starting scrcpy-server: adb -s {} shell {}", self.device_serial, server_args);

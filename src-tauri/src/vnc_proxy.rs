@@ -32,9 +32,10 @@ use tokio::net::TcpListener;
 use axum::{
     Router,
     routing::get,
-    extract::{Path, State, ws::WebSocketUpgrade},
+    extract::{Path, State, ws::{WebSocketUpgrade, Message}},
     response::Response,
 };
+use futures_util::sink::Sink;
 use futures_util::{StreamExt, SinkExt};
 use quinn::Connection;
 
@@ -237,44 +238,83 @@ async fn route_scrcpy(
     }
 }
 
+// ── 辅助：错误时发送 Close 帧，避免客户端看到「连接被对方重置」──────────────────
+
+async fn send_ws_close(ws: &mut axum::extract::ws::WebSocket) {
+    let _ = ws.send(Message::Close(None)).await;
+}
+
 // ── 本地路径：QUIC loopback ───────────────────────────────────────────────────
 
 async fn serve_local_vnc(
-    ws: axum::extract::ws::WebSocket,
+    mut ws: axum::extract::ws::WebSocket,
     agent_id: &str,
     state: &HandlerState,
 ) -> anyhow::Result<()> {
-    let conn = get_or_create_local_conn(state).await?;
-    let (quic_send, quic_recv) = p2p::tunnel::open_vnc_stream(&conn, agent_id).await?;
+    let conn = match get_or_create_local_conn(state).await {
+        Ok(c) => c,
+        Err(e) => {
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
+    let (quic_send, quic_recv) = match p2p::tunnel::open_vnc_stream(&conn, agent_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
     tracing::info!("[VncProxy] QUIC loopback VNC stream: agent={}", agent_id);
     bridge_ws_quic(ws, quic_send, quic_recv).await
 }
 
 async fn serve_local_scrcpy(
-    ws: axum::extract::ws::WebSocket,
+    mut ws: axum::extract::ws::WebSocket,
     device_serial: &str,
     state: &HandlerState,
 ) -> anyhow::Result<()> {
-    let conn = get_or_create_local_conn(state).await?;
-    let (quic_send, quic_recv) = p2p::tunnel::open_scrcpy_stream(&conn, device_serial).await?;
+    let conn = match get_or_create_local_conn(state).await {
+        Ok(c) => c,
+        Err(e) => {
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
+    let (quic_send, quic_recv) = match p2p::tunnel::open_scrcpy_stream(&conn, device_serial).await {
+        Ok(s) => s,
+        Err(e) => {
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
     tracing::info!("[ScrcpyProxy] Local QUIC loopback: serial={}", device_serial);
     bridge_ws_quic_scrcpy(ws, quic_send, quic_recv).await
 }
 
 async fn serve_remote_scrcpy(
-    ws: axum::extract::ws::WebSocket,
+    mut ws: axum::extract::ws::WebSocket,
     device_id: &str,
     device_serial: &str,
     state: &HandlerState,
 ) -> anyhow::Result<()> {
-    let conn = get_or_create_remote_conn(device_id, state).await?;
-    let (quic_send, quic_recv) = p2p::tunnel::open_scrcpy_stream(&conn, device_serial).await
-        .map_err(|e| {
+    let conn = match get_or_create_remote_conn(device_id, state).await {
+        Ok(c) => c,
+        Err(e) => {
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
+    let (quic_send, quic_recv) = match p2p::tunnel::open_scrcpy_stream(&conn, device_serial).await {
+        Ok(s) => s,
+        Err(e) => {
             let conns = state.remote_conns.clone();
             let did = device_id.to_string();
             tauri::async_runtime::spawn(async move { conns.lock().await.remove(&did); });
-            e
-        })?;
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
     tracing::info!("[ScrcpyProxy] Remote QUIC scrcpy stream: device={} serial={}", &device_id[..8.min(device_id.len())], device_serial);
     bridge_ws_quic_scrcpy(ws, quic_send, quic_recv).await
 }
@@ -328,22 +368,28 @@ async fn get_or_create_local_conn(state: &HandlerState) -> anyhow::Result<Connec
 // ── 远端路径：Gateway locate + QUIC P2P ──────────────────────────────────────
 
 async fn serve_remote_vnc(
-    ws: axum::extract::ws::WebSocket,
+    mut ws: axum::extract::ws::WebSocket,
     device_id: &str,
     agent_id: &str,
     state: &HandlerState,
 ) -> anyhow::Result<()> {
-    let conn = get_or_create_remote_conn(device_id, state).await?;
-    let (quic_send, quic_recv) = p2p::tunnel::open_vnc_stream(&conn, agent_id).await
-        .map_err(|e| {
-            // 连接已断开时清除缓存，下次重新打洞
+    let conn = match get_or_create_remote_conn(device_id, state).await {
+        Ok(c) => c,
+        Err(e) => {
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
+    let (quic_send, quic_recv) = match p2p::tunnel::open_vnc_stream(&conn, agent_id).await {
+        Ok(s) => s,
+        Err(e) => {
             let conns = state.remote_conns.clone();
             let did = device_id.to_string();
-            tauri::async_runtime::spawn(async move {
-                conns.lock().await.remove(&did);
-            });
-            e
-        })?;
+            tauri::async_runtime::spawn(async move { conns.lock().await.remove(&did); });
+            send_ws_close(&mut ws).await;
+            return Err(e);
+        }
+    };
     tracing::info!("[VncProxy] Remote QUIC VNC stream: device={} agent={}", &device_id[..8.min(device_id.len())], agent_id);
     bridge_ws_quic(ws, quic_send, quic_recv).await
 }
@@ -395,6 +441,55 @@ async fn get_or_create_remote_conn(
 
 // ── WS ↔ QUIC bridge ─────────────────────────────────────────────────────────
 
+/// 包装 SplitSink，在 drop 时 spawn 任务发送 Close 帧，避免客户端看到「连接被对方重置」
+struct WsWriteCloseGuard<S>(Option<S>)
+where
+    S: Sink<Message> + Unpin + Send + 'static,
+    S::Error: Send + 'static;
+impl<S> Drop for WsWriteCloseGuard<S>
+where
+    S: Sink<Message> + Unpin + Send + 'static,
+    S::Error: Send + 'static,
+{
+    fn drop(&mut self) {
+        if let Some(mut sink) = self.0.take() {
+            tauri::async_runtime::spawn(async move {
+                let _ = sink.close().await;
+            });
+        }
+    }
+}
+impl<S: Sink<Message> + Unpin + Send + 'static> Sink<Message> for WsWriteCloseGuard<S>
+where
+    S::Error: Send + 'static,
+{
+    type Error = S::Error;
+    fn poll_ready(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
+        match self.get_mut().0.as_mut() {
+            Some(s) => std::pin::Pin::new(s).poll_ready(cx),
+            None => std::task::Poll::Ready(Ok(())),
+        }
+    }
+    fn start_send(self: std::pin::Pin<&mut Self>, item: Message) -> Result<(), S::Error> {
+        match self.get_mut().0.as_mut() {
+            Some(s) => std::pin::Pin::new(s).start_send(item),
+            None => Ok(()),
+        }
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
+        match self.get_mut().0.as_mut() {
+            Some(s) => std::pin::Pin::new(s).poll_flush(cx),
+            None => std::task::Poll::Ready(Ok(())),
+        }
+    }
+    fn poll_close(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
+        match self.get_mut().0.as_mut() {
+            Some(s) => std::pin::Pin::new(s).poll_close(cx),
+            None => std::task::Poll::Ready(Ok(())),
+        }
+    }
+}
+
 /// scrcpy 전용 bridge：tunnel 측에서 [type:u8][len:u32 BE][data] 프레이밍을 사용하므로
 /// QUIC→WS 방향에서 프레임 헤더를 읽어 Text/Binary 타입을 복원한다.
 /// WS→QUIC 방향(제어 이벤트)은 기존과 동일하게 raw bytes.
@@ -405,7 +500,8 @@ async fn bridge_ws_quic_scrcpy(
 ) -> anyhow::Result<()> {
     use tokio::io::AsyncReadExt;
 
-    let (mut ws_write, mut ws_read) = ws.split();
+    let (ws_write, mut ws_read) = ws.split();
+    let mut ws_write = WsWriteCloseGuard(Some(ws_write));
 
     // 前端控制事件 → QUIC（带帧头，并保留 Text/Binary 类型）
     let ws_to_quic = async {
@@ -467,7 +563,8 @@ async fn bridge_ws_quic(
     mut quic_send: quinn::SendStream,
     mut quic_recv: quinn::RecvStream,
 ) -> anyhow::Result<()> {
-    let (mut ws_write, mut ws_read) = ws.split();
+    let (ws_write, mut ws_read) = ws.split();
+    let mut ws_write = WsWriteCloseGuard(Some(ws_write));
 
     let ws_to_quic = async {
         while let Some(msg) = ws_read.next().await {

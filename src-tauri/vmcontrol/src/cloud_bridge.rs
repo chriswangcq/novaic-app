@@ -78,6 +78,10 @@ pub struct CloudBridgeConfig {
     pub cloud_token: Arc<tokio::sync::RwLock<String>>,
     /// VmControl 生成的持久设备 ID（UUID v4），连接 Gateway 时携带在 x-device-id header
     pub device_id: String,
+    /// AppInstance 唯一 ID，上报 device_id 时携带在 x-app-instance-id header
+    pub app_instance_id: String,
+    /// 机器型号/主机名等标识，携带在 x-machine-label header
+    pub machine_label: String,
     /// 登录通知：前端调用 update_cloud_token 时触发，CloudBridge 等到此信号后才开始连接
     pub login_notify: Arc<tokio::sync::Notify>,
 }
@@ -145,7 +149,7 @@ pub async fn start_cloud_bridge(
                 tracing::info!("[CloudBridge] Shutdown received, stopping");
                 return;
             }
-            _ = connect_and_run(&ws_url, &vmcontrol_base_url, &current_token, &config.device_id, &http_client) => {
+            _ = connect_and_run(&ws_url, &vmcontrol_base_url, &current_token, &config.device_id, &config.app_instance_id, &config.machine_label, config.cloud_token.as_ref(), &http_client) => {
                 tracing::warn!("[CloudBridge] Disconnected from Gateway, retrying in 5s...");
             }
         }
@@ -164,6 +168,9 @@ async fn connect_and_run(
     vmcontrol_base_url: &str,
     token: &str,
     device_id: &str,
+    app_instance_id: &str,
+    machine_label: &str,
+    cloud_token: &tokio::sync::RwLock<String>,
     http_client: &reqwest::Client,
 ) {
     let ws_request = match ws_url.into_client_request() {
@@ -177,6 +184,18 @@ async fn connect_and_run(
             if !device_id.is_empty() {
                 if let Ok(val) = device_id.parse() {
                     req.headers_mut().insert("x-device-id", val);
+                }
+            }
+            // 携带 AppInstance ID，与 device_id 关联
+            if !app_instance_id.is_empty() {
+                if let Ok(val) = app_instance_id.parse() {
+                    req.headers_mut().insert("x-app-instance-id", val);
+                }
+            }
+            // 携带机器型号/主机名等标识
+            if !machine_label.is_empty() {
+                if let Ok(val) = machine_label.parse() {
+                    req.headers_mut().insert("x-machine-label", val);
                 }
             }
             req
@@ -258,7 +277,8 @@ async fn connect_and_run(
             }
 
             IncomingMessage::ConnectRelay { relay_url, session_id } => {
-                let jwt = token.to_string();
+                // 使用最新 token（长连接下 JWT 可能已刷新），避免 relay RegisterPc 鉴权失败
+                let jwt = cloud_token.read().await.clone();
                 let did = device_id.to_string();
                 let base = vmcontrol_base_url.to_string();
                 tokio::spawn(async move {

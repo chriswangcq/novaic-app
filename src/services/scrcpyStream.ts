@@ -391,8 +391,18 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
   const ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
   state.ws = ws;
-  
+
+  // 连接超时：15s 内未 open 则关闭并触发重连（解决 "Socket未连接" 场景）
+  const CONNECT_TIMEOUT_MS = 15000;
+  const connectTimeout = setTimeout(() => {
+    if (ws.readyState === WebSocket.CONNECTING) {
+      console.warn(`[ScrcpyStream] Connect timeout (${CONNECT_TIMEOUT_MS}ms) for ${deviceSerial}`);
+      ws.close();
+    }
+  }, CONNECT_TIMEOUT_MS);
+
   ws.onopen = () => {
+    clearTimeout(connectTimeout);
     console.log(`[ScrcpyStream] WebSocket connected for ${deviceSerial}`);
   };
   
@@ -484,6 +494,7 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
   };
   
   ws.onclose = () => {
+    clearTimeout(connectTimeout);
     if (!state) return;
     
     console.log(`[ScrcpyStream] WebSocket closed for ${deviceSerial}`);

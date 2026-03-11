@@ -2,6 +2,7 @@
 //!
 //! 共享命令：gateway, auth, config, file, vnc_urls
 
+pub mod app_instance;
 pub mod auth;
 pub mod config;
 pub mod secure_storage;

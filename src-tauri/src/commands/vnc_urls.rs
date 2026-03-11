@@ -40,8 +40,10 @@ pub async fn get_vnc_proxy_url(
             let token = cloud_token.read().await.clone();
             let resp = gateway_get_impl(&url, &token, "/api/p2p/my-devices").await?;
             let arr = resp
-                .as_array()
-                .ok_or("my-devices response is not an array")?;
+                .get("devices")
+                .and_then(|v| v.as_array())
+                .or_else(|| resp.as_array())
+                .ok_or("my-devices response has no devices array")?;
             let online = arr
                 .iter()
                 .find(|e| e.get("online").and_then(|v| v.as_bool()).unwrap_or(false));
@@ -86,7 +88,11 @@ pub async fn get_scrcpy_proxy_url(
             let url = read_gateway_url(&gw_url);
             let token = cloud_token.read().await.clone();
             let resp = gateway_get_impl(&url, &token, "/api/p2p/my-devices").await?;
-            let arr = resp.as_array().ok_or("my-devices response is not an array")?;
+            let arr = resp
+                .get("devices")
+                .and_then(|v| v.as_array())
+                .or_else(|| resp.as_array())
+                .ok_or("my-devices response has no devices array")?;
             let online = arr
                 .iter()
                 .find(|e| e.get("online").and_then(|v| v.as_bool()).unwrap_or(false));

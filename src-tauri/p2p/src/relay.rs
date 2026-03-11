@@ -196,9 +196,10 @@ pub async fn punch_or_relay(
         &relay_resp.session_id[..8.min(relay_resp.session_id.len())]
     );
 
-    // 竞态：手机先拿到 session_id，PC 收到 connect_relay 推送后需时间 RegisterPc。
-    // 手机 connect_via_relay 失败时重试（2s/4s/8s 指数退避），给 PC 时间到达 relay。
-    const RETRY_DELAYS: [u64; 3] = [2, 4, 8]; // 3 次重试，共 4 次尝试
+    // Relay 端已实现「长等待」：手机 ConnectRequest 时若 PC 未注册，relay 轮询等待最多 30s。
+    // 手机无需固定延迟，立即连接即可；失败时重试（2s/4s/8s 指数退避）应对网络抖动。
+    const RETRY_DELAYS: [u64; 3] = [2, 4, 8];
+
     let mut last_err = None;
     for attempt in 1..=4 {
         match connect_via_relay(
