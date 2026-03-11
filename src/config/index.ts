@@ -114,8 +114,8 @@ export const VM_CONFIG = {
 
 /** WebSocket/VNC 配置 */
 export const WS_CONFIG = {
-  /** WebSocket 连接超时（毫秒） */
-  CONNECTION_TIMEOUT: 2000,
+  /** WebSocket 连接超时（毫秒）- P2P 打洞需 5–15s，放宽以支持远端 VNC */
+  CONNECTION_TIMEOUT: 15000,
   
   /** WebSocket 快速超时（毫秒） - 用于健康检查 */
   QUICK_TIMEOUT: 1500,

@@ -22,7 +22,13 @@
 }
 
 /* Base styles */
-html, body, #root {
+html {
+  height: 100%;
+  /* 100dvh + JS polyfill: 键盘弹出时视口高度缩小，内容区随之缩小而非整页上推 */
+  height: 100dvh;
+  height: var(--visual-viewport-height, 100dvh);
+}
+body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
@@ -35,6 +41,9 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   color: rgba(255, 255, 255, 0.9);
+  /* 防止双击/捏合缩放导致布局不稳定 */
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
 }
 
 /* Selection color - violet theme */

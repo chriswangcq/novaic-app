@@ -19,8 +19,9 @@ interface BottomTabBarProps {
 
 export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
   return (
-    <div className="h-14 shrink-0 flex items-center justify-around bg-nb-surface/95 border-t border-nb-border">
-      {TABS.map(({ id, icon: Icon, label }) => {
+    <div className="shrink-0 flex flex-col bg-nb-surface/95 border-t border-nb-border">
+      <div className="h-14 flex items-center justify-around">
+        {TABS.map(({ id, icon: Icon, label }) => {
         const isActive = activeTab === id;
         return (
           <button
@@ -35,6 +36,12 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
           </button>
         );
       })}
+      </div>
+      {/* 底部安全区：适配 iPhone 等带 Home Indicator 的设备 */}
+      <div
+        className="min-h-[12px] bg-nb-surface/95"
+        style={{ height: 'max(env(safe-area-inset-bottom), 12px)' }}
+      />
     </div>
   );
 }

@@ -17,3 +17,10 @@ if ! grep -q 'run-ios-xcode-script.sh' "$GEN/novaic.xcodeproj/project.pbxproj" 2
   sed -i '' 's|shellScript = "cd \\"$(SRCROOT)/../../..\\" \&\& npm run -- tauri ios xcode-script -v|shellScript = "\"${SRCROOT}/../../../scripts/run-ios-xcode-script.sh\" -v|' "$GEN/novaic.xcodeproj/project.pbxproj"
   sed -i '' 's|shellScript = "npm run -- tauri ios xcode-script -v|shellScript = "\"${SRCROOT}/../../../scripts/run-ios-xcode-script.sh\" -v|' "$GEN/novaic.xcodeproj/project.pbxproj"
 fi
+
+# ATS：允许 ws://127.0.0.1（VncProxy WebSocket），否则 iOS 会阻止连接
+PLIST="$GEN/novaic_iOS/Info.plist"
+if [ -f "$PLIST" ] && ! grep -q 'NSAppTransportSecurity' "$PLIST" 2>/dev/null; then
+  /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST" 2>/dev/null || true
+fi
