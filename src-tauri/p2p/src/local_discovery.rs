@@ -235,7 +235,7 @@ fn get_local_ipv4() -> Ipv4Addr {
 }
 
 /// 获取本机 hostname（不含 `.local.` 后缀）。
-fn get_hostname() -> String {
+pub fn get_hostname() -> String {
     // 优先读取环境变量（CI / Docker 常用）
     if let Ok(h) = std::env::var("HOSTNAME") {
         let h = h.trim().to_string();

@@ -1,6 +1,6 @@
 //! 共享 setup 逻辑：Gateway URL、StorageBackend、VncProxy 等
 //!
-//! 桌面与移动端统一：Gateway 默认云端；VncProxy 统一打洞逻辑（p2p::hole_punch + tunnel）。
+//! 桌面与移动端统一：Gateway 默认云端；VncProxy 统一打洞逻辑（p2p hole_punch + relay + tunnel）。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -51,10 +51,20 @@ pub fn setup_shared(
     let storage_backend = crate::platform::storage::create_backend(data_dir.clone());
     app.manage(storage_backend);
 
+    let discovery = Arc::new(p2p::GatewayDiscovery::new(
+        gw_url.clone(),
+        cloud_token.clone(),
+    )) as Arc<dyn p2p::Discovery>;
+    let p2p_config = p2p::P2pClientConfig {
+        discovery: Some(discovery),
+        ..Default::default()
+    };
+    let p2p_client = Arc::new(p2p::P2pClient::new(p2p_config));
     let vnc_proxy_state: crate::vnc_proxy::VncProxyState =
         Arc::new(tokio::sync::Mutex::new(crate::vnc_proxy::VncProxyServer::new(
             gw_url.clone(),
             cloud_token.clone(),
+            p2p_client,
         )));
     app.manage(vnc_proxy_state.clone());
     {

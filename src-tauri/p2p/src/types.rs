@@ -1,6 +1,36 @@
 //! 共用类型定义（VmControl ↔ 移动端共享）
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+// ─── 注册与发现（Phase 2）───────────────────────────────────────────────────
+
+/// 可连接 P2P 服务器的描述信息（与具体传输无关）。
+/// 供 Registry / Discovery 使用，支持 Direct 与 Relay 两种连接方式。
+#[derive(Clone, Debug)]
+pub struct ServerDescriptor {
+    /// 唯一标识（业务层决定语义，如 device_id）
+    pub id: String,
+    /// 可连接地址（直连：ip:port；Relay：relay_url + session_id）
+    pub endpoint: EndpointInfo,
+    /// 连接所需附加数据（如 cert_der_b64、http_port）
+    pub metadata: HashMap<String, String>,
+}
+
+/// 连接端点信息。
+#[derive(Clone, Debug)]
+pub enum EndpointInfo {
+    /// 直连：外网或 LAN IP:Port（STUN 获取或 mDNS）
+    Direct(SocketAddr),
+    /// Relay：需通过 relay 服务连接（Phase 4）
+    Relay {
+        relay_url: String,
+        session_id: String,
+    },
+}
+
+// ─── VmControl 服务（mDNS）──────────────────────────────────────────────────
 
 /// VmControl 在 LAN 内通过 mDNS 广播的服务信息。
 /// 移动端发现后通过此结构体获取连接所需的所有信息。
@@ -30,6 +60,17 @@ impl VmControlService {
     pub fn vnc_ws_url(&self, vm_id: &str) -> Option<String> {
         self.vnc_port.map(|p| format!("ws://{}:{}/api/vnc/{}", self.hostname, p, vm_id))
     }
+}
+
+/// P2P 启动后由 VmControl 写入，供 VncProxy 本地 QUIC 连接使用。
+#[derive(Debug, Clone)]
+pub struct LocalVmControlInfo {
+    /// 本机 VmControl 的 Ed25519 device_id（公钥 hex）
+    pub device_id: String,
+    /// TLS 自签证书 DER（cert pinning）
+    pub cert_der: Vec<u8>,
+    /// P2P QUIC 监听端口（UDP）
+    pub port: u16,
 }
 
 /// mDNS 发现事件，由 `local_discovery::discover()` 发出。

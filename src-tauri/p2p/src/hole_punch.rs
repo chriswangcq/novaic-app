@@ -10,7 +10,7 @@
 //! ## 限制
 //! - 支持 Full Cone NAT / Address Restricted / Port Restricted NAT
 //! - **不支持对称型 NAT（Symmetric NAT）**（某些运营商 CGNAT）
-//! - 打洞失败直接报错，**不提供 relay fallback**
+//! - Phase 3：打洞超时后自动走 relay 兜底
 
 use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::sync::Arc;
@@ -33,7 +33,7 @@ pub struct PunchListener {
 /// - `local_port`: 固定 UDP 端口（与 STUN 上报一致，即 `P2P_PORT`）
 /// - `tls_server_config`: 由 `crypto::generate_server_tls` 生成的 rustls ServerConfig（非 Arc）
 /// 共用 TransportConfig：5 分钟 idle timeout + 25s keep-alive PING。
-fn p2p_transport_config() -> Arc<quinn::TransportConfig> {
+pub(crate) fn p2p_transport_config() -> Arc<quinn::TransportConfig> {
     let mut t = quinn::TransportConfig::default();
     // 5 分钟无数据才超时（VNC 看静止画面时长时间无流量）
     t.max_idle_timeout(Some(
@@ -99,10 +99,12 @@ impl PunchListener {
 /// - `peer_ext_addr`: PC 外网 IP:Port（从 Gateway `locate` API 获取）
 /// - `peer_device_id`: PC device_id（用作 QUIC SNI）
 /// - `pinned_cert_der`: 要 pin 的服务端证书 DER（从 Gateway `locate` API 获取）
+/// - `timeout_secs`: 连接超时秒数（0 表示使用默认 15s）
 pub async fn connect_to_peer(
     peer_ext_addr: SocketAddr,
     peer_device_id: &str,
     pinned_cert_der: &[u8],
+    timeout_secs: u64,
 ) -> anyhow::Result<Connection> {
     let client_tls = crate::crypto::generate_client_tls(pinned_cert_der)?;
     // quinn 0.11 需要 QuicClientConfig 包装层
@@ -134,9 +136,14 @@ pub async fn connect_to_peer(
         .connect(peer_ext_addr, "novaic.local")
         .map_err(|e| anyhow::anyhow!("QUIC connect setup failed: {}", e))?;
 
-    let conn = tokio::time::timeout(Duration::from_secs(15), connecting)
+    let timeout = if timeout_secs > 0 {
+        Duration::from_secs(timeout_secs)
+    } else {
+        Duration::from_secs(15)
+    };
+    let conn = tokio::time::timeout(timeout, connecting)
         .await
-        .map_err(|_| anyhow::anyhow!("Connection timeout after 15s — NAT traversal failed"))?
+        .map_err(|_| anyhow::anyhow!("Connection timeout after {}s — NAT traversal failed", timeout.as_secs()))?
         .map_err(|e| anyhow::anyhow!("QUIC handshake failed: {}", e))?;
 
     info!("[HolePunch] P2P connection established to {}", peer_ext_addr);
@@ -146,11 +153,13 @@ pub async fn connect_to_peer(
 /// 手机侧完整打洞流程：查询 Gateway → 建立 QUIC 连接。
 ///
 /// 失败时返回明确错误（不走 relay）。
+/// - `timeout_secs`: 打洞超时秒数（0 表示默认 15s）
 pub async fn punch_and_connect(
     gateway_url: &str,
     jwt: &str,
     target_device_id: &str,
     _local_port: u16,
+    timeout_secs: u64,
 ) -> anyhow::Result<Connection> {
     use crate::rendezvous;
 
@@ -172,6 +181,14 @@ pub async fn punch_and_connect(
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid ext_addr format: {}", e))?;
 
+    // Reject loopback/unspecified — mobile must not connect to localhost (would fail to reach PC)
+    if peer_ext_addr.ip().is_loopback() || peer_ext_addr.ip().is_unspecified() {
+        anyhow::bail!(
+            "Invalid peer address {}: loopback/unspecified addresses are not routable from mobile to PC",
+            peer_ext_addr
+        );
+    }
+
     let cert_b64 = locate.cert_der.ok_or_else(|| {
         anyhow::anyhow!("Device has no TLS cert registered — update PC app to Phase 3+")
     })?;
@@ -181,8 +198,14 @@ pub async fn punch_and_connect(
     )
     .map_err(|e| anyhow::anyhow!("Failed to decode cert: {}", e))?;
 
+    info!(
+        "[HolePunch] Mobile connecting to PC at {} (device={}...)",
+        peer_ext_addr,
+        &target_device_id[..8.min(target_device_id.len())]
+    );
+
     // Step 2: 发起 QUIC 连接（触发 UDP 打洞）
-    connect_to_peer(peer_ext_addr, target_device_id, &cert_bytes)
+    connect_to_peer(peer_ext_addr, target_device_id, &cert_bytes, timeout_secs)
         .await
         .map_err(|e| {
             anyhow::anyhow!(
@@ -197,3 +220,5 @@ pub async fn punch_and_connect(
             )
         })
 }
+
+// Relay 已迁移至 relay.rs（Phase 4）

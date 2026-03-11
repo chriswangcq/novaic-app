@@ -34,6 +34,13 @@ reqwest = { version = "0.11", default-features = false, features = ["json", "rus
 # QUIC ↔ WS 桥接（scrcpy tunnel server 侧）
 tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
 
+# Phase 2: async trait
+async-trait = "0.1"
+
+# Phase 3: Relay + URL 解析
+url = "2"
+webpki-roots = "0.26"
+
 # Phase 3: 工具
 futures-util = "0.3"
 bytes = "1"

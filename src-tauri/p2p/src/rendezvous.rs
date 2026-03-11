@@ -11,42 +11,91 @@ use tracing::{debug, info, warn};
 
 // ─── STUN ─────────────────────────────────────────────────────────────────────
 
+/// 默认使用 novaic-quic-service 的 STUN（stun.gradievo.com:3478，RFC 5389 标准端口）。
+/// 迁移前可设 NOVAIC_STUN_SERVER=api.gradievo.com:443 使用 Gateway 旧 STUN。
+const STUN_SERVER_DEFAULT: &str = "stun.gradievo.com:3478";
+
+fn stun_servers() -> Vec<String> {
+    if let Ok(custom) = std::env::var("NOVAIC_STUN_SERVER") {
+        let s = custom.trim().to_string();
+        if !s.is_empty() {
+            return ensure_stun_port(s);
+        }
+    }
+    ensure_stun_port(STUN_SERVER_DEFAULT.to_string())
+}
+
+/// 若未指定端口，按 RFC 5389 标准默认 3478
+fn ensure_stun_port(server: String) -> Vec<String> {
+    if server.contains(':') {
+        vec![server]
+    } else {
+        vec![format!("{}:3478", server)]
+    }
+}
+
 /// 使用 STUN (RFC 5389) 获取本机外网 IP:Port。
 ///
 /// 绑定指定 `local_port`（与 QUIC 监听端口相同），确保 NAT 映射与 QUIC 一致。
-pub async fn get_external_addr(local_port: u16) -> anyhow::Result<SocketAddr> {
+/// 可通过 `stun_override` 或环境变量 NOVAIC_STUN_SERVER 指定自建服务器。
+pub async fn get_external_addr(
+    local_port: u16,
+    stun_override: Option<&str>,
+) -> anyhow::Result<SocketAddr> {
     let socket = tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", local_port)).await?;
 
-    let stun_server: SocketAddr = tokio::net::lookup_host("stun.l.google.com:19302")
-        .await?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("STUN server DNS lookup failed"))?;
+    let servers: Vec<String> = stun_override
+        .map(|s| ensure_stun_port(s.trim().to_string()))
+        .unwrap_or_else(stun_servers);
+    let mut last_err = None;
+    for server in &servers {
+        let stun_server: SocketAddr = match tokio::net::lookup_host(server.as_str()).await {
+            Ok(mut addrs) => match addrs.next() {
+                Some(a) => a,
+                None => {
+                    last_err = Some(anyhow::anyhow!("{} returned no address", server));
+                    continue;
+                }
+            },
+            Err(e) => {
+                last_err = Some(anyhow::anyhow!("{} DNS failed: {}", server, e));
+                continue;
+            }
+        };
 
-    // STUN Binding Request（RFC 5389，20 字节 header）
-    let mut request = [0u8; 20];
-    request[0] = 0x00;
-    request[1] = 0x01; // Type: Binding Request
-    request[2] = 0x00;
-    request[3] = 0x00; // Length: 0
-    // Magic Cookie: 0x2112A442
-    request[4] = 0x21;
-    request[5] = 0x12;
-    request[6] = 0xA4;
-    request[7] = 0x42;
-    // Transaction ID（12 bytes 随机）
-    for b in &mut request[8..20] {
-        *b = rand::random();
+        // STUN Binding Request（RFC 5389，20 字节 header）
+        let mut request = [0u8; 20];
+        request[0] = 0x00;
+        request[1] = 0x01; // Type: Binding Request
+        request[2] = 0x00;
+        request[3] = 0x00; // Length: 0
+        // Magic Cookie: 0x2112A442
+        request[4] = 0x21;
+        request[5] = 0x12;
+        request[6] = 0xA4;
+        request[7] = 0x42;
+        for b in &mut request[8..20] {
+            *b = rand::random();
+        }
+
+        if let Err(e) = socket.send_to(&request, stun_server).await {
+            last_err = Some(anyhow::anyhow!("{} send failed: {}", server, e));
+            continue;
+        }
+
+        let mut buf = [0u8; 512];
+        match tokio::time::timeout(Duration::from_secs(5), socket.recv_from(&mut buf)).await {
+            Ok(Ok((n, _))) => {
+                if let Ok(addr) = parse_stun_response(&buf[..n]) {
+                    info!("[Rendezvous] External addr via STUN ({}): {}", server, addr);
+                    return Ok(addr);
+                }
+            }
+            Ok(Err(e)) => last_err = Some(anyhow::anyhow!("{} recv failed: {}", server, e)),
+            Err(_) => last_err = Some(anyhow::anyhow!("{} timeout — UDP may be blocked (firewall/VPN)", server)),
+        }
     }
-
-    socket.send_to(&request, stun_server).await?;
-
-    let mut buf = [0u8; 512];
-    let (n, _) =
-        tokio::time::timeout(Duration::from_secs(5), socket.recv_from(&mut buf)).await??;
-
-    let addr = parse_stun_response(&buf[..n])?;
-    info!("[Rendezvous] External addr via STUN: {}", addr);
-    Ok(addr)
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("STUN failed")))
 }
 
 fn parse_stun_response(data: &[u8]) -> anyhow::Result<SocketAddr> {
@@ -145,7 +194,22 @@ pub async fn heartbeat(
             .await
         {
             Ok(resp) => {
-                let body = resp.json::<HeartbeatResponse>().await?;
+                let status = resp.status();
+                let body_text = resp.text().await?;
+                if !status.is_success() {
+                    let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+                        .ok()
+                        .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
+                        .unwrap_or_else(|| body_text.chars().take(200).collect());
+                    anyhow::bail!("heartbeat failed ({}): {}", status, detail);
+                }
+                let body: HeartbeatResponse = serde_json::from_str(&body_text).map_err(|e| {
+                    anyhow::anyhow!(
+                        "heartbeat response parse error: {} (body: {}...)",
+                        e,
+                        &body_text[..body_text.len().min(100)]
+                    )
+                })?;
                 return Ok(body);
             }
             Err(e) => {
@@ -171,6 +235,46 @@ pub struct LocateResponse {
     pub cert_der: Option<String>,
 }
 
+/// relay-request 响应（Phase 3）
+#[derive(Deserialize)]
+pub struct RelayRequestResponse {
+    pub relay_url: String,
+    pub session_id: String,
+}
+
+/// 手机侧：请求 relay 连接，Gateway 推 connect_relay 给 PC，返回 relay_url + session_id
+pub async fn relay_request(
+    gateway_url: &str,
+    jwt: &str,
+    target_device_id: &str,
+) -> anyhow::Result<RelayRequestResponse> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .http1_only()
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let url = format!("{}/api/p2p/relay-request", gateway_url);
+    let body = serde_json::json!({ "target_device_id": target_device_id });
+    let resp = client
+        .post(&url)
+        .bearer_auth(jwt)
+        .json(&body)
+        .send()
+        .await?;
+    let status = resp.status();
+    let body_text = resp.text().await?;
+    if !status.is_success() {
+        let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
+            .unwrap_or(body_text);
+        anyhow::bail!("relay-request failed ({}): {}", status, detail);
+    }
+    let parsed: RelayRequestResponse = serde_json::from_str(&body_text)?;
+    Ok(parsed)
+}
+
 pub async fn locate(
     gateway_url: &str,
     jwt: &str,
@@ -186,8 +290,17 @@ pub async fn locate(
     for attempt in 1..=3 {
         match client.get(&url).bearer_auth(jwt).send().await {
             Ok(resp) => {
-                let body = resp.json::<LocateResponse>().await?;
-                return Ok(body);
+                let status = resp.status();
+                let body = resp.text().await?;
+                if !status.is_success() {
+                    let detail = serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
+                        .unwrap_or(body);
+                    anyhow::bail!("Locate failed ({}): {}", status, detail);
+                }
+                let parsed: LocateResponse = serde_json::from_str(&body)?;
+                return Ok(parsed);
             }
             Err(e) => {
                 if attempt < 3 {
@@ -204,36 +317,40 @@ pub async fn locate(
 
 // ─── 后台心跳循环（PC 侧） ────────────────────────────────────────────────────
 
-/// 持续心跳循环，保持 NAT 映射活跃（间隔 25s < 典型 NAT 映射超时 30s）。
+/// 持续心跳循环，保持 NAT 映射活跃（间隔 < 典型 NAT 映射超时 30s）。
 ///
 /// # 参数
 /// - `gateway_url`: Gateway HTTPS 地址
 /// - `device_id`: 本机 device_id（Phase 1 UUID / Phase 3 Ed25519 hex）
 /// - `cloud_token`: JWT token（`Arc<RwLock<String>>`，token 更新时自动生效）
 /// - `local_port`: QUIC 监听端口（P2P_PORT）
+/// - `initial_ext_addr`: 启动时已获取的外网地址（在 QUIC 绑定前执行 STUN 得到，避免端口冲突）
 /// - `cert_der`: 本机 TLS 证书 DER（首次心跳上报，后续省略）
 /// - `shutdown`: 关闭信号（oneshot Receiver）
+/// - `heartbeat_interval`: 心跳间隔
+/// - `stun_retry_interval`: STUN 重试间隔（当 ext_addr 为占位时）
+/// - `stun_override`: 可选 STUN 服务器覆盖（None 时使用环境变量或默认）
 pub async fn run_heartbeat_loop(
     gateway_url: String,
     device_id: String,
     cloud_token: std::sync::Arc<tokio::sync::RwLock<String>>,
     local_port: u16,
+    initial_ext_addr: String,
     cert_der: Vec<u8>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    heartbeat_interval: Duration,
+    stun_retry_interval: Duration,
+    stun_override: Option<String>,
 ) {
-    // 首次通过 STUN 获取外网地址（失败时继续，使用占位符）
-    let ext_addr = match get_external_addr(local_port).await {
-        Ok(addr) => addr.to_string(),
-        Err(e) => {
-            warn!("[Rendezvous] STUN failed: {}, will retry later", e);
-            format!("0.0.0.0:{}", local_port)
-        }
-    };
+    let mut ext_addr = initial_ext_addr;
 
     let cert_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &cert_der);
     let mut first_heartbeat = true;
-    let mut interval = tokio::time::interval(Duration::from_secs(25));
+    let mut interval = tokio::time::interval(heartbeat_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut stun_retry = tokio::time::interval(stun_retry_interval);
+    stun_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    stun_retry.tick().await; // 跳过首次立即触发
 
     loop {
         tokio::select! {
@@ -241,6 +358,15 @@ pub async fn run_heartbeat_loop(
             _ = &mut shutdown => {
                 info!("[Rendezvous] Heartbeat loop stopped");
                 return;
+            }
+            _ = stun_retry.tick() => {
+                if ext_addr.starts_with("0.0.0.0:") {
+                    let override_ref = stun_override.as_deref();
+                    if let Ok(addr) = get_external_addr(local_port, override_ref).await {
+                        ext_addr = addr.to_string();
+                        info!("[Rendezvous] STUN retry succeeded: {}", ext_addr);
+                    }
+                }
             }
             _ = interval.tick() => {
                 let token = cloud_token.read().await.clone();

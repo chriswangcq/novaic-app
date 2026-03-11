@@ -271,9 +271,11 @@ pub fn run() {
                     login_notify: login_notify_for_task,
                 };
 
+                let local_vmcontrol = vnc_proxy_state.lock().await.local_vmcontrol.clone();
+                let p2p_setup_error = vnc_proxy_state.lock().await.p2p_setup_error.clone();
                 let port_rx = {
                     let mut vc = vmcontrol_for_task.lock().await;
-                    vc.start(data_dir_for_task.clone(), Some(cloud_config))
+                    vc.start(data_dir_for_task.clone(), Some(cloud_config), Some(local_vmcontrol), Some(p2p_setup_error))
                 };
 
                 append_startup_diagnostic(&data_dir_for_task, "vmcontrol", "started",
@@ -317,25 +319,7 @@ pub fn run() {
                     eprintln!("[VmControl] Health check failed — VM/Android features may be unavailable");
                 }
 
-                match p2p::crypto::generate_server_tls(
-                    &p2p::device_id::DeviceIdentity::load_or_generate(&data_dir_for_task)
-                        .signing_key
-                        .to_bytes()
-                ) {
-                    Ok(tls_config) => {
-                        let device_id =
-                            p2p::device_id::DeviceIdentity::load_or_generate(&data_dir_for_task).id;
-                        *vnc_proxy_state.lock().await.local_vmcontrol.write().await =
-                            Some(vnc_proxy::LocalVmControlInfo {
-                                device_id: device_id.clone(),
-                                cert_der: tls_config.cert_der,
-                            });
-                        tracing::info!("[VncProxy] Local VmControl P2P info registered (device={}...)", &device_id[..8]);
-                    }
-                    Err(e) => {
-                        tracing::warn!("[VncProxy] Failed to register local P2P info: {}", e);
-                    }
-                }
+                // Local VmControl P2P info is now written by P2pServer::start in vmcontrol
 
                 append_startup_diagnostic(&data_dir_for_task, "all-services-ready", "ok",
                     format!("startup complete in {:?}", startup_begin.elapsed()));

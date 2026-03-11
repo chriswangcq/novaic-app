@@ -2,9 +2,9 @@
 //!
 //! # 打洞逻辑（统一）
 //!
-//! 本地与远端均使用 p2p::hole_punch + p2p::tunnel：
-//! - 本地（device_id == 本机）：connect_to_peer(127.0.0.1) → tunnel::open_vnc_stream
-//! - 远端：Gateway locate + punch_and_connect → tunnel::open_vnc_stream
+//! 本地与远端均使用 p2p（hole_punch + relay + tunnel）：
+//! - 本地（device_id == 本机）：connect_direct(127.0.0.1) → tunnel::open_vnc_stream
+//! - 远端：P2pClient::connect（discovery.lookup + punch_or_relay）→ tunnel::open_vnc_stream
 //!
 //! # URL 结构（统一使用 vmcontrol_device_id）
 //!
@@ -21,7 +21,7 @@
 //!       → QUIC loopback 127.0.0.1:19998（桌面 app）
 //!
 //!   device_id != 本机（远端 PC）
-//!       → Gateway locate(device_id) → punch_and_connect → QUIC P2P（手机 app / 未来）
+//!       → P2pClient::connect（discovery + punch_or_relay）→ QUIC P2P（手机 app）
 //!
 //! 两条路共用同一个 tunnel::open_vnc_stream 协议，完全对称。
 
@@ -38,8 +38,6 @@ use axum::{
 use futures_util::{StreamExt, SinkExt};
 use quinn::Connection;
 
-const LOCAL_P2P_PORT: u16 = 19998;
-
 // ── 共享类型别名 ──────────────────────────────────────────────────────────────
 
 pub type SharedGatewayUrl    = Arc<std::sync::Mutex<String>>;
@@ -48,25 +46,24 @@ pub type SharedVmcontrolUrl  = Arc<RwLock<String>>;
 
 // ── 本地 VmControl P2P 信息 ───────────────────────────────────────────────────
 
-/// P2P 启动后由 main.rs 写入
-#[derive(Clone)]
-pub struct LocalVmControlInfo {
-    /// 本机 VmControl 的 Ed25519 device_id（公钥 hex）
-    pub device_id: String,
-    /// TLS 自签证书 DER（cert pinning）
-    pub cert_der: Vec<u8>,
-}
+/// Re-export from p2p (device_id, cert_der, port)
+pub use p2p::LocalVmControlInfo;
 
 pub type SharedLocalVmControl = Arc<RwLock<Option<LocalVmControlInfo>>>;
+
+/// P2P 启动失败时的 (device_id, error)，用于区分「本地 P2P 失败」与「远端设备离线」
+pub type SharedP2pSetupError = Arc<RwLock<Option<(String, String)>>>;
 
 // ── Proxy State ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct HandlerState {
     local_vmcontrol: SharedLocalVmControl,
+    p2p_setup_error: SharedP2pSetupError,
     gateway_url:     SharedGatewayUrl,
     cloud_token:     SharedCloudToken,
     vmcontrol_url:   SharedVmcontrolUrl,
+    p2p_client:      Arc<p2p::P2pClient>,
     /// 本地 QUIC 连接缓存（多个 VNC 窗口复用同一条隧道）
     local_conn:      Arc<Mutex<Option<Connection>>>,
     /// 远端 QUIC 连接缓存，key = vmcontrol_device_id
@@ -76,20 +73,28 @@ struct HandlerState {
 pub struct VncProxyServer {
     pub port: u16,
     pub local_vmcontrol: SharedLocalVmControl,
+    pub p2p_setup_error: SharedP2pSetupError,
     pub vmcontrol_url:   SharedVmcontrolUrl,
     gateway_url:  SharedGatewayUrl,
     cloud_token:  SharedCloudToken,
+    p2p_client:   Arc<p2p::P2pClient>,
     shutdown_tx:  Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl VncProxyServer {
-    pub fn new(gateway_url: SharedGatewayUrl, cloud_token: SharedCloudToken) -> Self {
+    pub fn new(
+        gateway_url: SharedGatewayUrl,
+        cloud_token: SharedCloudToken,
+        p2p_client: Arc<p2p::P2pClient>,
+    ) -> Self {
         Self {
             port: 0,
             local_vmcontrol: Arc::new(RwLock::new(None)),
+            p2p_setup_error: Arc::new(RwLock::new(None)),
             vmcontrol_url:   Arc::new(RwLock::new(String::new())),
             gateway_url,
             cloud_token,
+            p2p_client,
             shutdown_tx: None,
         }
     }
@@ -101,9 +106,11 @@ impl VncProxyServer {
 
         let state = HandlerState {
             local_vmcontrol: self.local_vmcontrol.clone(),
+            p2p_setup_error: self.p2p_setup_error.clone(),
             gateway_url:     self.gateway_url.clone(),
             cloud_token:     self.cloud_token.clone(),
             vmcontrol_url:   self.vmcontrol_url.clone(),
+            p2p_client:      self.p2p_client.clone(),
             local_conn:      Arc::new(Mutex::new(None)),
             remote_conns:    Arc::new(Mutex::new(HashMap::new())),
         };
@@ -197,6 +204,11 @@ async fn route_vnc(
     if local_id.as_deref() == Some(device_id) {
         // 本机 VmControl：QUIC loopback
         serve_local_vnc(ws, agent_id, &state).await
+    } else if let Some((failed_did, err)) = state.p2p_setup_error.read().await.as_ref() {
+        if failed_did == device_id {
+            anyhow::bail!("P2P setup failed: {}. Please check NOVAIC_P2P_PORT and firewall.", err);
+        }
+        serve_remote_vnc(ws, device_id, agent_id, &state).await
     } else {
         // 远端设备：Gateway locate + QUIC P2P（手机 app / 未来扩展）
         serve_remote_vnc(ws, device_id, agent_id, &state).await
@@ -215,6 +227,11 @@ async fn route_scrcpy(
 
     if local_id.as_deref() == Some(device_id) {
         serve_local_scrcpy(ws, device_serial, &state).await
+    } else if let Some((failed_did, err)) = state.p2p_setup_error.read().await.as_ref() {
+        if failed_did == device_id {
+            anyhow::bail!("P2P setup failed: {}. Please check NOVAIC_P2P_PORT and firewall.", err);
+        }
+        serve_remote_scrcpy(ws, device_id, device_serial, &state).await
     } else {
         serve_remote_scrcpy(ws, device_id, device_serial, &state).await
     }
@@ -263,27 +280,43 @@ async fn serve_remote_scrcpy(
 }
 
 async fn get_or_create_local_conn(state: &HandlerState) -> anyhow::Result<Connection> {
-    // 持锁贯穿「检查 → 建连 → 写缓存」，防止多个 VNC 窗口并发各自建连导致竞态。
-    // loopback QUIC 握手极快（<5ms），不会实质阻塞其他请求。
-    let mut guard = state.local_conn.lock().await;
+    // 先快速检查缓存（持锁时间极短）
+    {
+        let guard = state.local_conn.lock().await;
+        if let Some(conn) = guard.as_ref() {
+            if conn.close_reason().is_none() {
+                return Ok(conn.clone());
+            }
+        }
+    }
 
+    // 短暂重试以应对启动竞态：用户可能在 local_info 写入前点击 VNC（不持 local_conn 锁，避免阻塞并发请求）
+    let mut retries = 0u32;
+    let info = loop {
+        if let Some(info) = state.local_vmcontrol.read().await.clone() {
+            break info;
+        }
+        retries += 1;
+        if retries >= 3 {
+            anyhow::bail!("VmControl P2P not ready yet — please wait a moment and retry");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    };
+
+    // 持锁贯穿「再次检查 → 建连 → 写缓存」，防止多个 VNC 窗口并发各自建连
+    let mut guard = state.local_conn.lock().await;
     if let Some(conn) = guard.as_ref() {
         if conn.close_reason().is_none() {
             return Ok(conn.clone());
         }
-        // 旧连接已关闭，清除缓存
         *guard = None;
     }
 
-    let info = state.local_vmcontrol.read().await.clone()
-        .ok_or_else(|| anyhow::anyhow!(
-            "VmControl P2P not ready yet — please wait a moment and retry"
-        ))?;
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", info.port).parse()?;
+    tracing::info!("[VncProxy] Connecting QUIC to {} (device={}...)", addr, &info.device_id[..8.min(info.device_id.len())]);
 
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", LOCAL_P2P_PORT).parse()?;
-    tracing::info!("[VncProxy] Connecting QUIC to {} (device={}...)", addr, &info.device_id[..8]);
-
-    let conn = p2p::hole_punch::connect_to_peer(addr, &info.device_id, &info.cert_der)
+    let conn = state.p2p_client
+        .connect_direct(addr, &info.device_id, &info.cert_der)
         .await
         .map_err(|e| anyhow::anyhow!("Local QUIC connect failed: {}", e))?;
 
@@ -347,8 +380,8 @@ async fn get_or_create_remote_conn(
         &device_id[..8.min(device_id.len())]
     );
 
-    // Gateway locate + UDP hole punch（base64解码在 punch_and_connect 内部完成）
-    let conn = p2p::hole_punch::punch_and_connect(&gateway_url, &token, device_id, 0)
+    let conn = state.p2p_client
+        .connect(&gateway_url, &token, device_id)
         .await
         .map_err(|e| anyhow::anyhow!("Remote P2P connect failed: {}", e))?;
 

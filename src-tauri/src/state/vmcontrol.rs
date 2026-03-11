@@ -33,6 +33,8 @@ impl VmControlEmbedded {
         &mut self,
         data_dir: PathBuf,
         cloud_config: Option<vmcontrol::CloudBridgeConfig>,
+        local_vmcontrol: Option<vmcontrol::SharedLocalVmControl>,
+        p2p_setup_error: Option<vmcontrol::SharedP2pSetupError>,
     ) -> tokio::sync::oneshot::Receiver<u16> {
         let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
 
@@ -58,6 +60,8 @@ impl VmControlEmbedded {
                 cloud_config,
                 Some(port_tx),
                 shutdown_rx,
+                local_vmcontrol,
+                p2p_setup_error,
             )
             .await
             {

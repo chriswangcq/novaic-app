@@ -26,6 +26,11 @@ use tokio_tungstenite::{
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum IncomingMessage {
+    /// Phase 3: Gateway 推送，PC 连接 relay
+    ConnectRelay {
+        relay_url: String,
+        session_id: String,
+    },
     ProxyRequest {
         id: String,
         method: String,
@@ -238,9 +243,9 @@ async fn connect_and_run(
         // 为什么仍用 HTTP 而非直接调 Rust 函数：
         //   VmControl HTTP handlers 已有完整的鉴权、错误处理、日志，复用它们比
         //   重新绑定共享 state 更安全；loopback 延迟 < 0.5ms，开销可忽略不计。
-        let (id, method, path, body) = match incoming {
-            IncomingMessage::ProxyRequest { id, method, path, body, .. }
-                => (id, method, path, body),
+        let (id, method, path, body, headers) = match incoming {
+            IncomingMessage::ProxyRequest { id, method, path, body, headers }
+                => (id, method, path, body, Some(headers)),
 
             IncomingMessage::Ping => {
                 let s = Arc::clone(&sink);
@@ -252,22 +257,49 @@ async fn connect_and_run(
                 continue;
             }
 
+            IncomingMessage::ConnectRelay { relay_url, session_id } => {
+                let jwt = token.to_string();
+                let did = device_id.to_string();
+                let base = vmcontrol_base_url.to_string();
+                tokio::spawn(async move {
+                    match p2p::relay::connect_via_relay(
+                        &relay_url,
+                        &jwt,
+                        &session_id,
+                        p2p::relay::RelayRole::Pc {
+                            device_id: did.clone(),
+                        },
+                    )
+                    .await
+                    {
+                        Ok(conn) => {
+                            tracing::info!("[CloudBridge] Relay connected, starting tunnel server");
+                            p2p::tunnel::run_tunnel_server(conn, base).await;
+                        }
+                        Err(e) => {
+                            tracing::warn!("[CloudBridge] connect_via_relay failed: {}", e);
+                        }
+                    }
+                });
+                continue;
+            }
+
             // VM lifecycle — 转成结构化 proxy 请求
-            IncomingMessage::VmStatus   { id, vm_id }       => (id, "GET".into(),  format!("/api/vms/{}", vm_id), None),
-            IncomingMessage::VmStart    { id, vm_id, body } => (id, "POST".into(), format!("/api/vms/{}/start", vm_id), body),
-            IncomingMessage::VmShutdown { id, vm_id, body } => (id, "POST".into(), format!("/api/vms/{}/stop",  vm_id), body),
-            IncomingMessage::VmRestart  { id, vm_id, body } => (id, "POST".into(), format!("/api/vms/{}/restart", vm_id), body),
+            IncomingMessage::VmStatus   { id, vm_id }       => (id, "GET".into(),  format!("/api/vms/{}", vm_id), None, None),
+            IncomingMessage::VmStart    { id, vm_id, body } => (id, "POST".into(), format!("/api/vms/{}/start", vm_id), body, None),
+            IncomingMessage::VmShutdown { id, vm_id, body } => (id, "POST".into(), format!("/api/vms/{}/stop",  vm_id), body, None),
+            IncomingMessage::VmRestart  { id, vm_id, body } => (id, "POST".into(), format!("/api/vms/{}/restart", vm_id), body, None),
 
             // Android management
-            IncomingMessage::AndroidDevices          { id } => (id, "GET".into(),    "/api/android/devices".into(), None),
-            IncomingMessage::AndroidAvds             { id } => (id, "GET".into(),    "/api/android/avds".into(), None),
-            IncomingMessage::AndroidAvdCreate        { id, body } => (id, "POST".into(), "/api/android/avd/create".into(), Some(body)),
-            IncomingMessage::AndroidAvdDelete        { id, avd_name } => (id, "DELETE".into(), format!("/api/android/avd/{}", avd_name), None),
-            IncomingMessage::AndroidEmulatorStart    { id, body } => (id, "POST".into(), "/api/android/emulator/start".into(), Some(body)),
-            IncomingMessage::AndroidEmulatorStop     { id, body } => (id, "POST".into(), "/api/android/emulator/stop".into(), Some(body)),
-            IncomingMessage::AndroidSystemImageCheck { id } => (id, "GET".into(),    "/api/android/system-image/check".into(), None),
-            IncomingMessage::AndroidDeviceDefinitions{ id } => (id, "GET".into(),    "/api/android/device-definitions".into(), None),
-            IncomingMessage::AndroidScrcpyStatus     { id } => (id, "GET".into(),    "/api/android/scrcpy/status".into(), None),
+            IncomingMessage::AndroidDevices          { id } => (id, "GET".into(),    "/api/android/devices".into(), None, None),
+            IncomingMessage::AndroidAvds             { id } => (id, "GET".into(),    "/api/android/avds".into(), None, None),
+            IncomingMessage::AndroidAvdCreate        { id, body } => (id, "POST".into(), "/api/android/avd/create".into(), Some(body), None),
+            IncomingMessage::AndroidAvdDelete        { id, avd_name } => (id, "DELETE".into(), format!("/api/android/avd/{}", avd_name), None, None),
+            IncomingMessage::AndroidEmulatorStart    { id, body } => (id, "POST".into(), "/api/android/emulator/start".into(), Some(body), None),
+            IncomingMessage::AndroidEmulatorStop     { id, body } => (id, "POST".into(), "/api/android/emulator/stop".into(), Some(body), None),
+            IncomingMessage::AndroidSystemImageCheck { id } => (id, "GET".into(),    "/api/android/system-image/check".into(), None, None),
+            IncomingMessage::AndroidDeviceDefinitions{ id } => (id, "GET".into(),    "/api/android/device-definitions".into(), None, None),
+            IncomingMessage::AndroidScrcpyStatus     { id } => (id, "GET".into(),    "/api/android/scrcpy/status".into(), None, None),
 
             IncomingMessage::Unknown => continue,
         };
@@ -276,7 +308,7 @@ async fn connect_and_run(
         let base_url = vmcontrol_base_url.to_string();
         let client = http_client.clone();
         tokio::spawn(async move {
-            let response = forward_to_vmcontrol(&client, &base_url, id, &method, &path, body).await;
+            let response = forward_to_vmcontrol(&client, &base_url, id, &method, &path, body, headers.as_ref()).await;
             if let Ok(json) = serde_json::to_string(&response) {
                 let _ = sink_clone.lock().await.send(Message::Text(json)).await;
             }
@@ -292,10 +324,11 @@ async fn forward_to_vmcontrol(
     method: &str,
     path: &str,
     body: Option<serde_json::Value>,
+    headers: Option<&HashMap<String, String>>,
 ) -> OutgoingMessage {
     let url = format!("{}{}", base_url.trim_end_matches('/'), path);
 
-    let req = match method.to_uppercase().as_str() {
+    let mut req = match method.to_uppercase().as_str() {
         "GET"    => client.get(&url),
         "POST"   => { let b = client.post(&url); if let Some(ref v) = body { b.json(v) } else { b } }
         "PUT"    => { let b = client.put(&url);  if let Some(ref v) = body { b.json(v) } else { b } }
@@ -306,6 +339,17 @@ async fn forward_to_vmcontrol(
             body: serde_json::json!({"success": false, "error": format!("Unsupported method: {}", method)}),
         },
     };
+
+    if let Some(hdrs) = headers {
+        for (k, v) in hdrs {
+            if let (Ok(name), Ok(val)) = (
+                reqwest::header::HeaderName::try_from(k.as_str()),
+                reqwest::header::HeaderValue::try_from(v.as_str()),
+            ) {
+                req = req.header(name, val);
+            }
+        }
+    }
 
     match req.send().await {
         Ok(resp) => {

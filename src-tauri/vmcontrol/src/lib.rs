@@ -124,8 +124,11 @@ pub async fn pre_start_scrcpy_servers() {
     .await;
 }
 
-/// P2P QUIC 监听端口（UDP，固定，与 STUN 上报一致）
-const P2P_PORT: u16 = 19998;
+/// 共享的本地 VmControl P2P 信息（由 P2pServer 写入，供 VncProxy 使用）
+pub type SharedLocalVmControl = Arc<tokio::sync::RwLock<Option<p2p::LocalVmControlInfo>>>;
+
+/// P2P 启动失败时的 (device_id, error)，供 VncProxy 区分「本地 P2P 失败」与「远端设备离线」
+pub type SharedP2pSetupError = Arc<tokio::sync::RwLock<Option<(String, String)>>>;
 
 /// 以内嵌方式启动 VmControl HTTP Server，并可选地内嵌：
 /// - Cloud Bridge（WebSocket → Gateway）
@@ -140,6 +143,8 @@ pub async fn start_embedded_server(
     cloud_config: Option<CloudBridgeConfig>,
     port_tx: Option<tokio::sync::oneshot::Sender<u16>>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
+    local_vmcontrol: Option<SharedLocalVmControl>,
+    p2p_setup_error: Option<SharedP2pSetupError>,
 ) -> anyhow::Result<()> {
     use std::net::SocketAddr;
     use tower_http::cors::CorsLayer;
@@ -153,7 +158,13 @@ pub async fn start_embedded_server(
     let process_state: crate::api::routes::ProcessState = Arc::new(RwLock::new(HashMap::new()));
     let app = create_router(state, data_dir.clone(), process_state).layer(CorsLayer::permissive());
 
-    let addr: SocketAddr = format!("{}:{}", host, port)
+    // IPv6 必须用 [host]:port 格式，否则 "::1:443" 无法 parse
+    let addr_str = if host.contains(':') {
+        format!("[{}]:{}", host, port)
+    } else {
+        format!("{}:{}", host, port)
+    };
+    let addr: SocketAddr = addr_str
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid address {}:{}: {}", host, port, e))?;
 
@@ -195,20 +206,44 @@ pub async fn start_embedded_server(
     }
 
     // ── P2P QUIC 服务端 + Rendezvous 心跳（Phase 3）─────────────────────────
-    // 关机信号通道，供 graceful shutdown 闭包调用
-    let (rendezvous_shutdown_tx, rendezvous_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut p2p_shutdown_tx: Option<tokio::sync::oneshot::Sender<()>> = None;
 
     if let Some(ref data_path) = data_dir {
-        match setup_p2p_server(data_path, actual_addr.port(), cloud_config.as_ref(), rendezvous_shutdown_rx).await {
-            Ok(()) => {}
+        let port = p2p::resolve_p2p_port().map_err(|e| anyhow::anyhow!("P2P port config: {}", e))?;
+        let registry = cloud_config.as_ref().map(|c| {
+            let r = p2p::GatewayRegistry::new(
+                c.gateway_url.clone(),
+                c.cloud_token.clone(),
+            );
+            Arc::new(r) as Arc<dyn p2p::Registry>
+        });
+        let p2p_config = p2p::P2pServerConfig {
+            port,
+            registry,
+            ..Default::default()
+        };
+        let p2p_server = p2p::P2pServer::new(p2p_config, data_path.clone());
+        let cloud_cfg = cloud_config.as_ref().map(|c| p2p::P2pServerCloudConfig {
+            gateway_url: c.gateway_url.clone(),
+            cloud_token: c.cloud_token.clone(),
+            device_id: c.device_id.clone(),
+        });
+        let identity = p2p::device_id::DeviceIdentity::load_or_generate(data_path);
+        match p2p_server.start(cloud_cfg.as_ref(), actual_addr.port()).await {
+            Ok((local_info, shutdown_tx)) => {
+                p2p_shutdown_tx = Some(shutdown_tx);
+                if let Some(ref shared) = local_vmcontrol {
+                    *shared.write().await = Some(local_info.clone());
+                    tracing::info!("[VncProxy] Local VmControl P2P info registered (device={}...)", &local_info.device_id[..8.min(local_info.device_id.len())]);
+                }
+            }
             Err(e) => {
-                // P2P 初始化失败不影响主服务（例如端口被占用）
                 tracing::warn!("[P2P] P2P server setup failed (non-fatal): {}", e);
-                // rendezvous_shutdown_rx already consumed; nothing more to do
+                if let Some(ref shared) = p2p_setup_error {
+                    *shared.write().await = Some((identity.id.clone(), e.to_string()));
+                }
             }
         }
-    } else {
-        drop(rendezvous_shutdown_rx);
     }
 
     // ── Cloud Bridge（Phase 1）───────────────────────────────────────────────
@@ -229,77 +264,15 @@ pub async fn start_embedded_server(
             let _ = shutdown.await;
             tracing::info!("[VmControl] Shutting down: stopping sub-services...");
             mdns_shutdown.notify_one();
-            let _ = rendezvous_shutdown_tx.send(());
+            if let Some(tx) = p2p_shutdown_tx {
+                let _ = tx.send(());
+            }
             let _ = cb_shutdown_tx.send(());
             tracing::info!("[VmControl] Draining HTTP connections (10s grace)...");
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             tracing::warn!("[VmControl] Grace period expired, forcing exit");
         })
         .await?;
-
-    Ok(())
-}
-
-/// 初始化 P2P 服务端：生成 TLS 证书、绑定 QUIC 端口、启动 Rendezvous 心跳、循环接受连接。
-async fn setup_p2p_server(
-    data_dir: &PathBuf,
-    http_port: u16,
-    cloud_config: Option<&CloudBridgeConfig>,
-    rendezvous_shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-) -> anyhow::Result<()> {
-    // 加载 Ed25519 设备身份（Phase 3 升级：包含签名密钥用于 TLS）
-    let identity = p2p::device_id::DeviceIdentity::load_or_generate(data_dir);
-
-    // 生成 QUIC 自签名 TLS 证书
-    let tls_config = p2p::crypto::generate_server_tls(&identity.signing_key.to_bytes())?;
-
-    // 绑定 QUIC 监听端口（UDP）
-    let listener = p2p::hole_punch::listen_for_peer(P2P_PORT, tls_config.server_config)?;
-    tracing::info!("[P2P] QUIC listener bound on UDP :{}", P2P_PORT);
-
-    // 启动 Rendezvous 心跳循环（仅有 cloud_config 时才有 token + gateway_url）
-    if let Some(cfg) = cloud_config {
-        let gateway_url = cfg.gateway_url.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let (rendezvous_shutdown_tx_inner, rendezvous_shutdown_rx_inner) =
-            tokio::sync::oneshot::channel::<()>();
-
-        // 将外部 rendezvous_shutdown_rx 桥接到内部 shutdown
-        tokio::spawn(async move {
-            let _ = rendezvous_shutdown_rx.await;
-            let _ = rendezvous_shutdown_tx_inner.send(());
-        });
-
-        tokio::spawn(p2p::rendezvous::run_heartbeat_loop(
-            gateway_url,
-            identity.id.clone(),
-            cfg.cloud_token.clone(),
-            P2P_PORT,
-            tls_config.cert_der.clone(),
-            rendezvous_shutdown_rx_inner,
-        ));
-    } else {
-        drop(rendezvous_shutdown_rx);
-    }
-
-    // 后台循环接受 P2P 连接并启动隧道
-    let vmcontrol_url = format!("http://127.0.0.1:{}", http_port);
-    tokio::spawn(async move {
-        loop {
-            match listener.accept(std::time::Duration::from_secs(300)).await {
-                Ok(conn) => {
-                    let url = vmcontrol_url.clone();
-                    tokio::spawn(async move {
-                        p2p::tunnel::run_tunnel_server(conn, url).await;
-                    });
-                }
-                Err(e) => {
-                    // accept timeout 是正常情况（300s 无连接），不打 warn
-                    tracing::debug!("[P2P] Accept: {}", e);
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-        }
-    });
 
     Ok(())
 }
