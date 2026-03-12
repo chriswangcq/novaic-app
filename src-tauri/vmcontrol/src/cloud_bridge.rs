@@ -28,6 +28,8 @@ use tokio_tungstenite::{
 enum IncomingMessage {
     /// Phase 3: Gateway 推送，PC 连接 relay
     ConnectRelay {
+        #[serde(default)]
+        push_id: Option<String>,
         relay_url: String,
         session_id: String,
     },
@@ -67,6 +69,8 @@ enum IncomingMessage {
 enum OutgoingMessage {
     ProxyResponse { id: String, status: u16, body: serde_json::Value },
     Pong,
+    /// R1/R5: PC 收到 connect_relay 后立即回执，Gateway 确认送达
+    ConnectRelayAck { push_id: String },
 }
 
 /// Cloud Bridge 配置。由 Tauri 主进程在启动 VmControl 时传入，
@@ -149,7 +153,7 @@ pub async fn start_cloud_bridge(
                 tracing::info!("[CloudBridge] Shutdown received, stopping");
                 return;
             }
-            _ = connect_and_run(&ws_url, &vmcontrol_base_url, &current_token, &config.device_id, &config.app_instance_id, &config.machine_label, config.cloud_token.as_ref(), &http_client) => {
+            _ = connect_and_run(&ws_url, &gateway_url, &vmcontrol_base_url, &current_token, &config.device_id, &config.app_instance_id, &config.machine_label, config.cloud_token.as_ref(), &http_client) => {
                 tracing::warn!("[CloudBridge] Disconnected from Gateway, retrying in 5s...");
             }
         }
@@ -165,6 +169,7 @@ pub async fn start_cloud_bridge(
 /// 建立 WebSocket 并处理消息，直到连接断开。
 async fn connect_and_run(
     ws_url: &str,
+    gateway_url: &str,
     vmcontrol_base_url: &str,
     token: &str,
     device_id: &str,
@@ -276,18 +281,31 @@ async fn connect_and_run(
                 continue;
             }
 
-            IncomingMessage::ConnectRelay { relay_url, session_id } => {
+            IncomingMessage::ConnectRelay { push_id, relay_url, session_id } => {
                 // 使用最新 token（长连接下 JWT 可能已刷新），避免 relay RegisterPc 鉴权失败
                 let jwt = cloud_token.read().await.clone();
                 let did = device_id.to_string();
                 let base = vmcontrol_base_url.to_string();
+                let gw = gateway_url.to_string();
+                let push_id_opt = push_id.clone();
+                // R1/R5: 若存在 push_id，先发送 ACK 再 spawn
+                if let Some(ref pid) = push_id_opt {
+                    let ack_msg = OutgoingMessage::ConnectRelayAck {
+                        push_id: pid.clone(),
+                    };
+                    if let Ok(json) = serde_json::to_string(&ack_msg) {
+                        let _ = sink.lock().await.send(Message::Text(json)).await;
+                    }
+                }
                 tokio::spawn(async move {
                     let mut last_err = None;
-                    for attempt in 1..=3 {
+                    let mut current_relay_url = relay_url.clone();
+                    let mut current_session_id = session_id.clone();
+                    for attempt in 1..=4 {
                         match p2p::relay::connect_via_relay(
-                            &relay_url,
+                            &current_relay_url,
                             &jwt,
-                            &session_id,
+                            &current_session_id,
                             p2p::relay::RelayRole::Pc {
                                 device_id: did.clone(),
                             },
@@ -300,8 +318,28 @@ async fn connect_and_run(
                                 return;
                             }
                             Err(e) => {
-                                last_err = Some(e.to_string());
-                                if attempt < 3 {
+                                let err_str = e.to_string();
+                                last_err = Some(err_str.clone());
+                                let err_lower = err_str.to_lowercase();
+                                // is_session_error 与 relay.rs 一致，排除 invalid/certificate
+                                let is_session_error = (err_lower.contains("session")
+                                    || (err_lower.contains("expired") && !err_lower.contains("certificate")))
+                                    && !err_lower.contains("invalid");
+
+                                if is_session_error && attempt < 4 {
+                                    if let Ok(resp) =
+                                        p2p::rendezvous::relay_refresh_for_pc(&gw, &jwt, &did).await
+                                    {
+                                        current_session_id = resp.session_id;
+                                        current_relay_url = resp.relay_url;
+                                        tracing::info!(
+                                            "[CloudBridge] Session refreshed, retrying connect_via_relay"
+                                        );
+                                        continue;
+                                    }
+                                }
+
+                                if attempt < 4 {
                                     let delay_ms = 500 * attempt as u64;
                                     tracing::warn!(
                                         "[CloudBridge] connect_via_relay attempt {} failed: {}, retrying in {}ms",
@@ -315,7 +353,7 @@ async fn connect_and_run(
                         }
                     }
                     tracing::warn!(
-                        "[CloudBridge] connect_via_relay failed after 3 attempts: {}",
+                        "[CloudBridge] connect_via_relay failed after 4 attempts: {}",
                         last_err.unwrap_or_else(|| "unknown".into())
                     );
                 });

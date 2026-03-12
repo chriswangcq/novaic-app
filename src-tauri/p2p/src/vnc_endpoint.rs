@@ -19,6 +19,9 @@ use tracing::{info, warn};
 const NOVAIC_DIR: &str = "/tmp/novaic";
 const SUBUSER_POLL_TIMEOUT_SECS: u64 = 30;
 const SUBUSER_POLL_INTERVAL_MS: u64 = 500;
+/// maindesk 短轮询：3 次 × 200ms，与 subuser 发现语义统一
+const MAINDESK_POLL_COUNT: u32 = 3;
+const MAINDESK_POLL_INTERVAL_MS: u64 = 200;
 
 /// Max resource_id length. Keeps socket path under UNIX_PATH_MAX (108).
 pub const MAX_RESOURCE_ID_LEN: usize = 80;
@@ -100,22 +103,68 @@ fn creation_lock_for(resource_id: &str) -> Arc<tokio::sync::Mutex<()>> {
 /// 确保 VNC endpoint 可用，返回 Unix socket 路径。
 ///
 /// - `resource_id` 格式：`{vm_id}`（maindesk）或 `{vm_id}:{username}`（subuser）
-/// - maindesk: 直接返回 QEMU socket `/tmp/novaic/novaic-vnc-{vm_id}.sock`
-/// - subuser: 轮询 port 文件，建立代理，返回 `/tmp/novaic/vnc-{resource_id}.sock`
+/// - maindesk: 短轮询 3×200ms，优先 `vnc-{vm_id}.sock`，fallback `novaic-vnc-{vm_id}.sock`
+/// - subuser: 轮询 port 文件 30s，建立代理，返回 `vnc-{vm_id}-{username}.sock`
 ///
 /// # Security
 /// `resource_id` is validated via `validate_resource_id` to prevent path traversal.
 pub async fn ensure_vnc_endpoint(resource_id: &str) -> Result<PathBuf, String> {
+    tracing::info!("[VNC-FLOW] [7-vnc_endpoint] ensure_vnc_endpoint 入口 resource_id={}", resource_id);
     validate_resource_id(resource_id)?;
 
     // maindesk: resource_id 不含 ':'
+    // 统一路径 vnc-{vm_id}.sock，fallback novaic-vnc-{vm_id}.sock；短轮询 3×200ms 与 subuser 发现语义统一
     if !resource_id.contains(':') {
-        let sock = PathBuf::from(NOVAIC_DIR).join(format!("novaic-vnc-{}.sock", resource_id));
-        for dir in [&std::env::temp_dir().join("novaic"), &PathBuf::from(NOVAIC_DIR)] {
-            let p = dir.join(format!("novaic-vnc-{}.sock", resource_id));
-            if p.exists() {
-                return Ok(p);
+        let dirs = [PathBuf::from(NOVAIC_DIR), std::env::temp_dir().join("novaic")];
+        let names = [
+            format!("vnc-{}.sock", resource_id),
+            format!("novaic-vnc-{}.sock", resource_id),
+        ];
+        for attempt in 1..=MAINDESK_POLL_COUNT {
+            tracing::info!(
+                "[VNC-FLOW] [7-vnc_endpoint] maindesk 轮询 attempt={}/{} resource_id={}",
+                attempt,
+                MAINDESK_POLL_COUNT,
+                resource_id
+            );
+            for dir in &dirs {
+                for name in &names {
+                    let p = dir.join(name);
+                    if p.exists() {
+                        tracing::info!(
+                            "[VNC-FLOW] [7-vnc_endpoint] maindesk socket 找到 path={}",
+                            p.display()
+                        );
+                        return Ok(p);
+                    }
+                }
             }
+            if attempt < MAINDESK_POLL_COUNT {
+                tokio::time::sleep(Duration::from_millis(MAINDESK_POLL_INTERVAL_MS)).await;
+            }
+        }
+        let sock = PathBuf::from(NOVAIC_DIR).join(format!("vnc-{}.sock", resource_id));
+        tracing::error!(
+            "[VNC-FLOW] [7-vnc_endpoint] maindesk socket 未找到 resource_id={} 期望路径={}",
+            resource_id,
+            sock.display()
+        );
+        if let Ok(entries) = std::fs::read_dir(NOVAIC_DIR) {
+            let socks: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if (n.starts_with("vnc-") || n.starts_with("novaic-vnc-")) && n.ends_with(".sock") {
+                        Some(n)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            tracing::warn!(
+                "[VNC-FLOW] [7-vnc_endpoint] maindesk 诊断: /tmp/novaic 下现有 vnc-*.sock={:?}",
+                socks
+            );
         }
         return Err(format!(
             "VNC socket not found for VM '{}': {} — VM may not be running or VNC not enabled.",
@@ -125,12 +174,14 @@ pub async fn ensure_vnc_endpoint(resource_id: &str) -> Result<PathBuf, String> {
     }
 
     // subuser: {vm_id}:{username}
+    tracing::info!("[VNC-FLOW] [7-vnc_endpoint] subuser 路径 resource_id={}", resource_id);
     let (vm_id, username) = resource_id
         .split_once(':')
         .filter(|(_, u)| !u.is_empty())
         .ok_or_else(|| format!("Invalid subuser resource_id: {}", resource_id))?;
 
     let port_file = format!("{}/share-{}/vnc-{}.port", NOVAIC_DIR, vm_id, username);
+    tracing::info!("[VNC-FLOW] [7-vnc_endpoint] subuser 轮询 port 文件 path={}", port_file);
     // 文件名中 ':' 用 '-' 替代，避免路径解析问题
     let safe_resource_id = resource_id.replace(':', "-");
     let socket_path = PathBuf::from(NOVAIC_DIR).join(format!("vnc-{}.sock", safe_resource_id));
@@ -161,12 +212,13 @@ pub async fn ensure_vnc_endpoint(resource_id: &str) -> Result<PathBuf, String> {
     let _port = loop {
         if let Ok(s) = tokio::fs::read_to_string(&port_file).await {
             if let Ok(p) = s.trim().parse::<u16>() {
-                info!("[VNC] Subuser port file ready: {} → port {}", port_file, p);
+                tracing::info!("[VNC-FLOW] [7-vnc_endpoint] subuser port 文件就绪 port={} path={}", p, port_file);
                 break p;
             }
         }
         poll_count += 1;
         if poll_count >= max_polls {
+            tracing::error!("[VNC-FLOW] [7-vnc_endpoint] subuser port 文件超时 resource_id={} port_file={}", resource_id, port_file);
             return Err(format!(
                 "VNC port file not found for user '{}': {} — Xvnc may not have started (timeout {}s)",
                 username, port_file, SUBUSER_POLL_TIMEOUT_SECS
@@ -184,7 +236,9 @@ pub async fn ensure_vnc_endpoint(resource_id: &str) -> Result<PathBuf, String> {
     let _ = tokio::fs::remove_file(&socket_path).await;
 
     // 启动 Unix 代理
+    tracing::info!("[VNC-FLOW] [7-vnc_endpoint] subuser 绑定 Unix 代理 socket={}", socket_path.display());
     let listener = UnixListener::bind(&socket_path).map_err(|e| {
+        tracing::error!("[VNC-FLOW] [7-vnc_endpoint] subuser bind 失败: {}", e);
         format!("Failed to bind VNC proxy socket {}: {}", socket_path.display(), e)
     })?;
 

@@ -371,6 +371,9 @@ pub fn run() {
             commands::vnc_bridge::vnc_bridge_connect,
             commands::vnc_bridge::vnc_bridge_send,
             commands::vnc_bridge::vnc_bridge_close,
+            commands::vnc_stream::vnc_stream_connect,
+            commands::vnc_stream::vnc_stream_send,
+            commands::vnc_stream::vnc_stream_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

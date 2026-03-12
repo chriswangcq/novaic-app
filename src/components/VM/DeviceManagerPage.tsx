@@ -19,6 +19,7 @@ import { api } from '../../services/api';
 import type { Device, DeviceStatus, VmUser } from '../../types';
 import { useAppStore } from '../../application/store';
 import { useDeviceStatus } from '../../hooks/useDeviceStatus';
+import { useDeviceStatusPolling } from '../../hooks/useDeviceStatusPolling';
 import { AddLinuxVMUserModal } from './AddLinuxVMUserModal';
 import { AddAndroidModal } from './AddAndroidModal';
 import { DeviceVNCView } from '../Visual/DeviceVNCView';
@@ -66,7 +67,7 @@ function DeviceRow({
   busy, compact = false,
 }: DeviceRowProps) {
   // P1-14: 优先使用 DeviceStatusStore（5s 轮询），避免 listForUser 状态滞后
-  const storeStatus = useDeviceStatus(device.id);
+  const storeStatus = useDeviceStatus(device.id, device.pc_client_id);
   const status = (storeStatus ?? device.status) as DeviceStatus;
   const isLinux  = device.type === 'linux';
   // Linux 'created' means disk not set up yet — can't start directly
@@ -495,7 +496,7 @@ function VmUsersSection({ device, selectedUser, onSelectUser, embedded = false }
   const [addOpen, setAddOpen]       = useState(false);
   const [deletingUser, setDeleting] = useState<string | null>(null);
   const [restartingUser, setRestarting] = useState<string | null>(null);
-  const storeStatus = useDeviceStatus(device.id);
+  const storeStatus = useDeviceStatus(device.id, device.pc_client_id);
   const status = storeStatus ?? device.status;
   const isRunning = status === 'running' || status === 'ready';
 
@@ -693,8 +694,10 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
     }).catch(() => setSelectedDevice(null));
   }, [devices, selectedDeviceId]);
 
+  // P0: 自驱动轮询，不依赖 AgentDrawer；drawer 关闭时状态仍更新
+  useDeviceStatusPolling(devices, devices.length > 0);
   // P1-14/CR#4: status 用 DeviceStatusStore 覆盖（避免 30s 缓存滞后）
-  const selectedDeviceStatus = useDeviceStatus(selectedDevice?.id ?? null);
+  const selectedDeviceStatus = useDeviceStatus(selectedDevice?.id ?? null, selectedDevice?.pc_client_id);
   const effectiveSelectedDevice = selectedDevice
     ? { ...selectedDevice, status: (selectedDeviceStatus ?? selectedDevice.status) as DeviceStatus }
     : null;

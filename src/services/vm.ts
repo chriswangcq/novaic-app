@@ -8,7 +8,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { PortConfig } from './api';
 import { VM_CONFIG, API_CONFIG, DEFAULT_PORTS, LOCAL_ENDPOINTS } from '../config';
-import { shouldUseVncBridge, VncBridgeTransport } from './vncBridge';
+import { VncBridgeTransport } from './vncBridge';
 
 // VM 状态类型 - matches Gateway VmStatus
 export interface VmStatus {
@@ -30,16 +30,19 @@ class VmService {
   /**
    * 启动虚拟机
    * @param agentId - Agent ID
+   * @param pcClientId - 可选，多 PC 时指定目标
    */
-  async start(agentId: string): Promise<string> {
+  async start(agentId: string, pcClientId?: string): Promise<string> {
     try {
+      const body: Record<string, unknown> = {
+        agent_id: agentId,
+        memory: '4096',
+        cpus: 4,
+      };
+      if (pcClientId) body.pc_client_id = pcClientId;
       const result = await invoke<{ success: boolean; status?: string; pid?: number }>('gateway_post', {
         path: '/api/vm/start',
-        body: {
-          agent_id: agentId,
-          memory: '4096',
-          cpus: 4,
-        }
+        body,
       });
       console.log('[VM Service] Start:', result, 'agentId:', agentId);
       return result.status || 'started';
@@ -52,15 +55,18 @@ class VmService {
   /**
    * 停止特定 agent 的虚拟机
    * @param agentId - Agent ID
+   * @param pcClientId - 可选，多 PC 时指定目标
    */
-  async stop(agentId: string): Promise<string> {
+  async stop(agentId: string, pcClientId?: string): Promise<string> {
     try {
+      const body: Record<string, unknown> = {
+        agent_id: agentId,
+        graceful: true,
+      };
+      if (pcClientId) body.pc_client_id = pcClientId;
       const result = await invoke<{ success: boolean; status: string }>('gateway_post', {
         path: '/api/vm/stop',
-        body: {
-          agent_id: agentId,
-          graceful: true,
-        }
+        body,
       });
       console.log('[VM Service] Stop:', result, 'agentId:', agentId);
       return result.status;
@@ -169,8 +175,7 @@ class VmService {
   }
 
   /**
-   * 获取 VNC 传输：OTA 模式返回 VncBridgeTransport，否则返回 WebSocket URL。
-   * RFB 支持 string | WebSocket，调用方直接传入 new RFB(container, transportOrUrl, opts)。
+   * 获取 VNC 传输：方案 B 一律使用 VncStreamTransport（IPC 模式）。
    *
    * @param resourceId - VM/agent 资源标识
    * @param pcClientId - 可选：vmcontrol_device_id（目标 PC）
@@ -178,13 +183,10 @@ class VmService {
   async getVncTransport(
     resourceId: string,
     pcClientId?: string
-  ): Promise<string | VncBridgeTransport> {
-    if (shouldUseVncBridge()) {
-      const transport = new VncBridgeTransport(resourceId, pcClientId);
-      await transport.connect();
-      return transport;
-    }
-    return this.getVncUrl(resourceId, pcClientId);
+  ): Promise<VncBridgeTransport> {
+    const transport = new VncBridgeTransport(resourceId, pcClientId);
+    await transport.connect();
+    return transport;
   }
 
   /**

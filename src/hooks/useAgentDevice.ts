@@ -3,6 +3,7 @@
  *
  * 正确数据流：getAgentBinding → devices.get，替代已废弃的 api.devices.list(agentId)。
  * 返回 binding、device、vncTarget，供 VNC 组件使用。
+ * P1: 缓存 key 含 pc_client_id，多 PC 同 device 避免读到错误缓存。
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -10,6 +11,8 @@ import { api } from '../services/api';
 import type { AgentDeviceBinding } from '../services/api';
 import type { Device } from '../types';
 import type { VncTarget } from '../types/vnc';
+import { statusKey } from '../utils/deviceStatusKey';
+import { useAppStore } from '../application/store';
 
 export interface UseAgentDeviceResult {
   binding: AgentDeviceBinding | null;
@@ -23,13 +26,15 @@ export interface UseAgentDeviceResult {
 const deviceCache = new Map<string, { device: Device; ts: number }>();
 const CACHE_TTL_MS = 30_000;
 
-async function getDeviceCached(deviceId: string): Promise<Device> {
-  const cached = deviceCache.get(deviceId);
+async function getDeviceCached(deviceId: string, pcClientId?: string | null): Promise<Device> {
+  const key = statusKey(deviceId, pcClientId);
+  const cached = deviceCache.get(key);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return cached.device;
   }
   const device = await api.devices.get(deviceId);
-  deviceCache.set(deviceId, { device, ts: Date.now() });
+  const storeKey = statusKey(deviceId, device.pc_client_id ?? pcClientId);
+  deviceCache.set(storeKey, { device, ts: Date.now() });
   return device;
 }
 
@@ -75,7 +80,12 @@ export function useAgentDevice(agentId: string | null): UseAgentDeviceResult {
     setIsLoading(true);
     setError(null);
     try {
-      const b = await api.getAgentBinding(requestFor);
+      const appInstanceId = useAppStore.getState().appInstanceId;
+      const [b, pcResult] = await Promise.all([
+        api.getAgentBinding(requestFor),
+        appInstanceId ? api.p2p.resolveCurrentPcClientId(appInstanceId) : Promise.resolve({ pcClientId: undefined }),
+      ]);
+      const pcClientId = pcResult?.pcClientId;
       if (agentIdRef.current !== requestFor) return;
       setBinding(b);
       if (!b) {
@@ -85,10 +95,12 @@ export function useAgentDevice(agentId: string | null): UseAgentDeviceResult {
         setIsLoading(false);
         return;
       }
-      const d = await getDeviceCached(b.device_id);
+      const d = await getDeviceCached(b.device_id, pcClientId);
       if (agentIdRef.current !== requestFor) return;
       setDevice(d);
-      setVncTarget(bindingToVncTarget(b, d));
+      const target = bindingToVncTarget(b, d);
+      console.log('[VNC-FLOW] [useAgentDevice] vncTarget 来源 agentId=', requestFor, 'binding.device_id=', b.device_id, 'subject_type=', b.subject_type, 'resourceId=', target.resourceId, 'device_id===agentId?', b.device_id === requestFor);
+      setVncTarget(target);
     } catch (e) {
       if (agentIdRef.current !== requestFor) return;
       setError(e instanceof Error ? e.message : String(e));

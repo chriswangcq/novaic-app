@@ -79,6 +79,15 @@ function App() {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [currentUserInfo, setCurrentUserInfo] = useState<UserInfo | null>(null);
 
+  // 尽早获取 app_instance_id（Tauri 启动时即生成），供 my-devices、resolveCurrentPcClientId 等使用
+  useEffect(() => {
+    invoke<{ app_instance_id: string }>('get_app_instance')
+      .then((inst) => {
+        if (inst?.app_instance_id) useAppStore.getState().patchState({ appInstanceId: inst.app_instance_id });
+      })
+      .catch(() => {});
+  }, []);
+
   // 启动时：1) 同步 Gateway URL（仅当 Rust 仍为默认云端时，避免覆盖用户配置）
   // 2) 恢复登录态（access token 过期时用 refresh_token 换新）
   useEffect(() => {
@@ -199,13 +208,6 @@ function App() {
 
     let cancelled = false;
     let fallbackInterval: ReturnType<typeof setInterval> | null = null;
-
-    // P2-5: 尽早获取 app_instance_id（Tauri 启动时即生成），供 my-devices 等使用
-    invoke<{ app_instance_id: string }>('get_app_instance')
-      .then((inst) => {
-        if (inst?.app_instance_id) useAppStore.getState().patchState({ appInstanceId: inst.app_instance_id });
-      })
-      .catch(() => {});
 
     pushToken().then((token) => {
       if (cancelled) return;

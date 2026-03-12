@@ -6,11 +6,13 @@
  */
 
 import { create } from 'zustand';
+import { statusKey } from '../utils/deviceStatusKey';
 
 export type DeviceStatusValue = 'created' | 'setup' | 'ready' | 'running' | 'stopped' | 'error';
 
 export interface DeviceStatusEntry {
   deviceId: string;
+  pcClientId?: string;
   status: DeviceStatusValue;
   updatedAt: number;
 }
@@ -21,9 +23,9 @@ interface DeviceStatusState {
   subscriberCount: number;
   /** VNC 连接数，>0 时轮询间隔降为 3s */
   vncConnectionCount: number;
-  setStatus: (deviceId: string, status: DeviceStatusValue) => void;
+  setStatus: (deviceId: string, status: DeviceStatusValue, pcClientId?: string) => void;
   setStatuses: (entries: DeviceStatusEntry[]) => void;
-  getStatus: (deviceId: string) => DeviceStatusValue | undefined;
+  getStatus: (deviceId: string, pcClientId?: string | null) => DeviceStatusValue | undefined;
   subscribeDevice: (deviceId: string) => () => void;
   incrementVncConnectionCount: () => void;
   decrementVncConnectionCount: () => void;
@@ -34,10 +36,11 @@ export const useDeviceStatusStore = create<DeviceStatusState>((set, get) => ({
   subscriberCount: 0,
   vncConnectionCount: 0,
 
-  setStatus: (deviceId, status) =>
+  setStatus: (deviceId, status, pcClientId) =>
     set((s) => {
       const next = new Map(s.statuses);
-      next.set(deviceId, { deviceId, status, updatedAt: Date.now() });
+      const key = statusKey(deviceId, pcClientId);
+      next.set(key, { deviceId, pcClientId, status, updatedAt: Date.now() });
       return { statuses: next };
     }),
 
@@ -45,12 +48,13 @@ export const useDeviceStatusStore = create<DeviceStatusState>((set, get) => ({
     set((s) => {
       const next = new Map(s.statuses);
       for (const e of entries) {
-        next.set(e.deviceId, e);
+        const key = statusKey(e.deviceId, e.pcClientId);
+        next.set(key, e);
       }
       return { statuses: next };
     }),
 
-  getStatus: (deviceId) => get().statuses.get(deviceId)?.status,
+  getStatus: (deviceId, pcClientId) => get().statuses.get(statusKey(deviceId, pcClientId))?.status,
 
   subscribeDevice: (_deviceId) => {
     set((s) => ({ subscriberCount: s.subscriberCount + 1 }));

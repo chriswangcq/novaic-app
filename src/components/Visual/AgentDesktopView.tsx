@@ -5,7 +5,7 @@
  * 用于 Agent 绑定设备的主桌面视图。
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Monitor, Loader2, AlertCircle, X, RefreshCw } from 'lucide-react';
 import { useAgentDevice } from '../../hooks/useAgentDevice';
 import { createVncTransport } from '../../services/vncTransport';
@@ -27,24 +27,31 @@ export function AgentDesktopView({ agentId, onClose, viewOnly = false, embedded 
   const [transport, setTransport] = useState<VncTransport | null>(null);
   const [transportError, setTransportError] = useState<string | null>(null);
 
-  // M1 + P0-5: requestId 避免竞态；vncTarget=null 时先递增 requestId 再 return
+  // M1 + P0-5: requestId 避免竞态；vncTargetKey 按内容稳定，避免 vncTarget 引用变化导致重复 createVncTransport
   const requestIdRef = useRef(0);
+  const vncTargetRef = useRef(vncTarget);
+  vncTargetRef.current = vncTarget;
+  const vncTargetKey = useMemo(
+    () => (vncTarget ? `${vncTarget.resourceId}|${vncTarget.pcClientId ?? ''}` : null),
+    [vncTarget?.resourceId, vncTarget?.pcClientId]
+  );
   useEffect(() => {
     const reqId = ++requestIdRef.current;
-    if (!vncTarget) {
+    const target = vncTargetRef.current;
+    if (!vncTargetKey || !target) {
       setTransport(null);
       setTransportError(null);
       return;
     }
     setTransportError(null);
-    createVncTransport(vncTarget)
+    createVncTransport(target)
       .then((t) => {
         if (reqId === requestIdRef.current) setTransport(t);
       })
       .catch((e) => {
-        if (reqId === requestIdRef.current) setTransportError(e instanceof Error ? e.message : 'Failed to create transport');
+        if (reqId === requestIdRef.current) setTransportError(e instanceof Error ? e.message : '创建传输失败');
       });
-  }, [vncTarget]);
+  }, [vncTargetKey]);
 
   const renderOverlay = useCallback((ctx: { status: string; errorMsg: string; connect: () => Promise<void>; transportReady: boolean }) => {
     return <VncConnectionOverlay status={ctx.status as import('../../hooks/useVnc').VncSessionStatus} errorMsg={ctx.errorMsg} connect={ctx.connect} transportReady={ctx.transportReady} />;
@@ -91,7 +98,7 @@ export function AgentDesktopView({ agentId, onClose, viewOnly = false, embedded 
     if (vncTarget) {
       createVncTransport(vncTarget)
         .then((t) => setTransport(t))
-        .catch((e) => setTransportError(e instanceof Error ? e.message : 'Failed to create transport'));
+        .catch((e) => setTransportError(e instanceof Error ? e.message : '创建传输失败'));
     }
   }, [vncTarget]);
 

@@ -216,7 +216,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectAgent, onCreateNew, resiz
     onOpen: () => void;
     onOpenSubuser: () => void;
   }) {
-    const storeStatus = useDeviceStatus(device.id);
+    const storeStatus = useDeviceStatus(device.id, device.pc_client_id);
     const status = storeStatus ?? device.status;
     const isLinux = device.type === 'linux';
     return (

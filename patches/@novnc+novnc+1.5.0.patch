@@ -1,0 +1,38 @@
+diff --git a/node_modules/@novnc/novnc/lib/rfb.js b/node_modules/@novnc/novnc/lib/rfb.js
+index 57c1144..b9326ac 100644
+--- a/node_modules/@novnc/novnc/lib/rfb.js
++++ b/node_modules/@novnc/novnc/lib/rfb.js
+@@ -149,6 +149,7 @@ var RFB = exports["default"] = /*#__PURE__*/function (_EventTargetMixin) {
+     _this._rfbInitState = '';
+     _this._rfbAuthScheme = -1;
+     _this._rfbCleanDisconnect = true;
++    _this._rfbCloseReason = '';
+     _this._rfbRSAAESAuthenticationState = null;
+ 
+     // Server capabilities
+@@ -709,6 +710,7 @@ var RFB = exports["default"] = /*#__PURE__*/function (_EventTargetMixin) {
+     key: "_socketClose",
+     value: function _socketClose(e) {
+       Log.Debug("WebSocket on-close event");
++      this._rfbCloseReason = (e && e.reason) ? String(e.reason) : '';
+       var msg = "";
+       if (e.code) {
+         msg = "(code: " + e.code;
+@@ -979,7 +981,8 @@ var RFB = exports["default"] = /*#__PURE__*/function (_EventTargetMixin) {
+         case 'disconnected':
+           this.dispatchEvent(new CustomEvent("disconnect", {
+             detail: {
+-              clean: this._rfbCleanDisconnect
++              clean: this._rfbCleanDisconnect,
++              reason: this._rfbCloseReason || ''
+             }
+           }));
+           break;
+@@ -1009,6 +1012,7 @@ var RFB = exports["default"] = /*#__PURE__*/function (_EventTargetMixin) {
+           break;
+       }
+       this._rfbCleanDisconnect = false; //This is sent to the UI
++      this._rfbCloseReason = this._rfbCloseReason || (typeof details === 'string' ? details : '');
+ 
+       // Transition to disconnected without waiting for socket to close
+       this._updateConnectionState('disconnecting');

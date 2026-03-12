@@ -84,11 +84,14 @@ fn is_qemu_process_alive(agent_id: &str) -> bool {
 fn is_vnc_socket_live(agent_id: &str) -> bool {
     use std::os::unix::net::UnixStream as StdUnix;
 
-    let vnc_socket = PathBuf::from(format!("{}/novaic-vnc-{}.sock", SOCKET_DIR, agent_id));
-    if !vnc_socket.exists() {
-        return false;
+    // 统一路径 vnc-{id}.sock；fallback 兼容旧 VM 的 novaic-vnc-{id}.sock
+    for name in [format!("vnc-{}.sock", agent_id), format!("novaic-vnc-{}.sock", agent_id)] {
+        let vnc_socket = PathBuf::from(format!("{}/{}", SOCKET_DIR, name));
+        if vnc_socket.exists() && StdUnix::connect(&vnc_socket).is_ok() {
+            return true;
+        }
     }
-    StdUnix::connect(&vnc_socket).is_ok()
+    false
 }
 
 /// Discover all running VMs by scanning QMP socket files
@@ -494,7 +497,7 @@ pub async fn start_vm(
     let mcp_socket = format!("/tmp/novaic/novaic-mcp-{}.sock", agent_id);
     let qmp_socket = format!("/tmp/novaic/novaic-qmp-{}.sock", agent_id);
     let ga_socket = format!("/tmp/novaic/novaic-ga-{}.sock", agent_id);
-    let vnc_socket = format!("/tmp/novaic/novaic-vnc-{}.sock", agent_id);
+    let vnc_socket = format!("/tmp/novaic/vnc-{}.sock", agent_id);
     
     // Remove stale QMP and VNC sockets if they exist (VM restart / crash recovery)
     std::fs::remove_file(&qmp_socket).ok();
@@ -805,9 +808,12 @@ pub async fn stop_vm(
 
     // Clean up all socket files for this VM
     std::fs::remove_file(&qmp_socket_path).ok();
-    let vnc_socket_path = format!("{}/novaic-vnc-{}.sock", SOCKET_DIR, id);
-    if std::fs::remove_file(&vnc_socket_path).is_ok() {
-        tracing::info!("[stop_vm] Removed VNC socket: {}", vnc_socket_path);
+    for vnc_name in [format!("vnc-{}.sock", id), format!("novaic-vnc-{}.sock", id)] {
+        let vnc_socket_path = format!("{}/{}", SOCKET_DIR, vnc_name);
+        if std::fs::remove_file(&vnc_socket_path).is_ok() {
+            tracing::info!("[stop_vm] Removed VNC socket: {}", vnc_socket_path);
+            break;
+        }
     }
     // Phase 3: 清理 subuser 代理（abort 任务、移除 socket、清理 registry）
     p2p::vnc_endpoint::shutdown_proxy_for_vm(&id).await;

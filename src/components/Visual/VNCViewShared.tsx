@@ -134,14 +134,14 @@ function VNCViewSharedComponent({
       if (propOnStart) {
         await propOnStart();
       } else {
-        await vmService.start(agentId!);
+        await vmService.start(agentId!, propPcClientId ?? undefined);
       }
       await new Promise(r => setTimeout(r, 2000));
       reconnectVNCStream(streamKey, propPcClientId);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!msg.includes('already running')) {
-        setErrorMsg(msg || 'Failed to start VM');
+        setErrorMsg(msg || '启动 VM 失败');
       } else {
         reconnectVNCStream(streamKey, propPcClientId);
       }

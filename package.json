@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "patch-package",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
@@ -26,7 +27,7 @@
   },
   "dependencies": {
     "@clerk/react": "^6.0.1",
-    "@novnc/novnc": "^1.5.0",
+    "@novnc/novnc": "1.5.0",
     "@tanstack/react-virtual": "^3.13.18",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
@@ -58,6 +59,7 @@
     "eslint-plugin-react-hooks": "^4.6.0",
     "happy-dom": "^20.5.0",
     "jsdom": "^28.0.0",
+    "patch-package": "^8.0.1",
     "postcss": "^8.4.33",
     "prettier": "^3.2.4",
     "tailwindcss": "^3.4.1",

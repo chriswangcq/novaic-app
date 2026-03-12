@@ -32,4 +32,7 @@ commands.allow = [
   "vnc_bridge_connect",
   "vnc_bridge_send",
   "vnc_bridge_close",
+  "vnc_stream_connect",
+  "vnc_stream_send",
+  "vnc_stream_close",
 ]

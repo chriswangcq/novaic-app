@@ -34,9 +34,9 @@ export function useDeviceStatusPolling(devices: Device[], enabled = true) {
           try {
             const r = await api.devices.status(d.id, d.pc_client_id);
             const status = (r?.status as 'created' | 'setup' | 'ready' | 'running' | 'stopped' | 'error') ?? 'stopped';
-            return { deviceId: d.id, status, updatedAt: Date.now() };
+            return { deviceId: d.id, pcClientId: d.pc_client_id, status, updatedAt: Date.now() };
           } catch {
-            return { deviceId: d.id, status: 'error' as const, updatedAt: Date.now() };
+            return { deviceId: d.id, pcClientId: d.pc_client_id, status: 'error' as const, updatedAt: Date.now() };
           }
         })
       );

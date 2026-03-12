@@ -242,6 +242,14 @@ pub struct RelayRequestResponse {
     pub session_id: String,
 }
 
+/// relay-refresh-for-pc 响应（R4：PC session 续期）
+#[derive(Deserialize)]
+pub struct RelayRefreshResponse {
+    pub ok: bool,
+    pub session_id: String,
+    pub relay_url: String,
+}
+
 /// 手机侧：请求 relay 连接，Gateway 推 connect_relay 给 PC，返回 relay_url + session_id
 /// 与 locate 类似，2–3 次重试，退避 500ms/1s。
 pub async fn relay_request(
@@ -293,6 +301,39 @@ pub async fn relay_request(
         }
     }
     unreachable!()
+}
+
+/// PC 端：session 过期时调用，续期 _PENDING_SESSION_TTL_SECS
+pub async fn relay_refresh_for_pc(
+    gateway_url: &str,
+    jwt: &str,
+    device_id: &str,
+) -> anyhow::Result<RelayRefreshResponse> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .http1_only()
+        .timeout(std::time::Duration::from_secs(15))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/api/p2p/relay-refresh-for-pc", gateway_url.trim_end_matches('/'));
+    let body = serde_json::json!({ "device_id": device_id });
+    let resp = client
+        .post(&url)
+        .bearer_auth(jwt)
+        .json(&body)
+        .send()
+        .await?;
+    let status = resp.status();
+    let body_text = resp.text().await?;
+    if !status.is_success() {
+        let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
+            .unwrap_or(body_text);
+        anyhow::bail!("relay-refresh-for-pc failed ({}): {}", status, detail);
+    }
+    let parsed: RelayRefreshResponse = serde_json::from_str(&body_text)?;
+    Ok(parsed)
 }
 
 pub async fn locate(

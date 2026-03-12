@@ -53,8 +53,8 @@ export function useDeviceVncTarget(
         resourceId,
         subjectType,
         deviceId: id,
-        username: subjectType === 'vm_user' ? subjectId : undefined,
-        pcClientId: d.pc_client_id,
+        username: subjectType === 'vm_user' ? (subjectId ?? undefined) : undefined,
+        pcClientId: d.pc_client_id != null ? d.pc_client_id : undefined,
       });
     } catch (e: unknown) {
       if (deviceIdRef.current !== id) return;

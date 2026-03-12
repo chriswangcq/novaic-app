@@ -20,8 +20,10 @@ pub async fn get_vnc_proxy_url(
     pcClientId: Option<String>, // 可选：物理 PC 标识
 ) -> Result<String, String> {
     let resource_id = resourceId;
+    tracing::info!("[VNC-FLOW] [4-Tauri] get_vnc_proxy_url 入口 resourceId={} pcClientId={:?}", resource_id, pcClientId);
     let p = proxy.lock().await;
     if p.port == 0 {
+        tracing::error!("[VNC-FLOW] [4-Tauri] VNC proxy 未启动 port=0");
         return Err("VNC proxy not started yet".to_string());
     }
     let device_id = p
@@ -30,13 +32,17 @@ pub async fn get_vnc_proxy_url(
         .await
         .as_ref()
         .map(|info| info.device_id.clone())
-        .or(pcClientId);
+        .or(pcClientId.clone());
 
     let device_id = match device_id {
-        Some(id) => id,
+        Some(id) => {
+            tracing::info!("[VNC-FLOW] [4-Tauri] device_id 来自 local_vmcontrol 或 pcClientId: {} (前8位)", id.chars().take(8).collect::<String>());
+            id
+        }
         None => {
             // 移动端：调用 Gateway GET /api/p2p/my-devices，取第一个 online 的 device_id
             // P2-6: 传入 current_app_instance_id 使 Gateway 标注 is_local
+            tracing::info!("[VNC-FLOW] [4-Tauri] 移动端路径: 调用 my-devices");
             let url = read_gateway_url(&gw_url);
             let token = cloud_token.read().await.clone();
             let app_id = app_instance.read().await.app_instance_id.clone();
@@ -57,12 +63,18 @@ pub async fn get_vnc_proxy_url(
             let device_id = online
                 .and_then(|e| e.get("pc_client_id").or_else(|| e.get("device_id")).and_then(|v| v.as_str()))
                 .map(|s| s.to_string())
-                .ok_or("No online VmControl device found. Ensure your PC is running NovAIC and connected.")?;
+                .ok_or_else(|| {
+                    tracing::error!("[VNC-FLOW] [4-Tauri] my-devices 无 online 设备");
+                    "No online VmControl device found. Ensure your PC is running NovAIC and connected.".to_string()
+                })?;
+            tracing::info!("[VNC-FLOW] [4-Tauri] my-devices 返回 device_id: {} (前8位)", device_id.chars().take(8).collect::<String>());
             device_id
         }
     };
 
-    Ok(p.ws_url(&device_id, &resource_id))
+    let url = p.ws_url(&device_id, &resource_id);
+    tracing::info!("[VNC-FLOW] [4-Tauri] get_vnc_proxy_url 成功 url={}", url);
+    Ok(url)
 }
 
 /// 返回 scrcpy 流代理 WS URL。

@@ -9,5 +9,6 @@ pub mod secure_storage;
 pub mod file;
 pub mod gateway;
 pub mod vnc_urls;  // 桌面+移动端：VNC/Scrcpy 代理 URL
-pub mod vnc_bridge; // OTA 模式：VNC 通过 Tauri IPC 桥接
+pub mod vnc_bridge; // OTA 模式：VNC 通过 Tauri IPC 桥接（废弃，方案 B 用 vnc_stream）
+pub mod vnc_stream;  // 方案 B：统一 IPC 模式，无 WebSocket
 

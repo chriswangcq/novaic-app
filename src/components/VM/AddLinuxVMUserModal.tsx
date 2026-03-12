@@ -77,9 +77,9 @@ export function AddLinuxVMUserModal({ isOpen, onClose, onCreated }: Props) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const pcClientId = await api.p2p.resolveCurrentPcClientId(appInstanceId);
+      const { pcClientId, errorMessage } = await api.p2p.resolveCurrentPcClientId(appInstanceId);
       if (pcClientId === undefined) {
-        setProg({ phase: 'error', progress: 0, message: 'Setup failed', error: '请选择目标 PC 或确保 Tauri 应用已连接' });
+        setProg({ phase: 'error', progress: 0, message: 'Setup failed', error: errorMessage ?? '请选择目标 PC 或确保 Tauri 应用已连接' });
         return;
       }
       setProg({ phase: 'creating', progress: 5, message: 'Creating device…' });

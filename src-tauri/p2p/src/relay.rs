@@ -169,9 +169,13 @@ pub async fn connect_via_relay_only(
         &relay_resp.session_id[..8.min(relay_resp.session_id.len())]
     );
 
-    // Relay 端已实现「长等待」：手机 ConnectRequest 时若 PC 未注册，relay 轮询等待最多 30s。
-    // 手机无需固定延迟，立即连接即可；失败时重试（2s/4s/8s 指数退避）应对网络抖动。
-    // Session TTL 约 10s，若错误含 invalid/expired/session 则重新 relay_request 获取新 session 再重试。
+    // 每次 relay_request 返回后、首次 connect 前 sleep(2s)，给 PC 收推送 + spawn 的缓冲
+    const INITIAL_DELAY_SECS: u64 = 2;
+    tokio::time::sleep(Duration::from_secs(INITIAL_DELAY_SECS)).await;
+
+    // Relay 端已实现「长等待」：手机 ConnectRequest 时若 PC 未注册，relay 轮询等待最多 20s。
+    // 失败时重试（2s/4s/8s 指数退避）应对网络抖动。
+    // Session TTL 约 20s，若错误含 invalid/expired/session 则重新 relay_request 获取新 session 再重试。
     const RETRY_DELAYS: [u64; 3] = [2, 4, 8];
 
     let mut last_err = None;
@@ -215,6 +219,8 @@ pub async fn connect_via_relay_only(
                                 "[Relay] Session refreshed: {}",
                                 &current_relay_resp.session_id[..8.min(current_relay_resp.session_id.len())]
                             );
+                            // 新 session 新延迟：每次 relay_request 返回后、新一轮 connect 前都 sleep(2s)
+                            tokio::time::sleep(Duration::from_secs(INITIAL_DELAY_SECS)).await;
                             retry_immediately = true;
                         }
                         Err(refresh_e) => {

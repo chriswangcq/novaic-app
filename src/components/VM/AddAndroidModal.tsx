@@ -219,9 +219,9 @@ export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalP
       throw new Error('Android 34 系统镜像未安装。请先安装系统镜像。');
     }
 
-    const pcClientId = await api.p2p.resolveCurrentPcClientId(appInstanceId);
+    const { pcClientId, errorMessage } = await api.p2p.resolveCurrentPcClientId(appInstanceId);
     if (pcClientId === undefined) {
-      throw new Error('请选择目标 PC 或确保 Tauri 应用已连接');
+      throw new Error(errorMessage ?? '请选择目标 PC 或确保 Tauri 应用已连接');
     }
 
     // Step 2: Create Android device using unified device API

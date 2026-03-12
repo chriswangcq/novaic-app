@@ -375,7 +375,7 @@ function connectStream(deviceSerial: string) {
     .catch((err: any) => {
       const s = streams.get(deviceSerial);
       if (s) {
-        notifySubscribers(s, 'error', err?.message || 'Failed to get Scrcpy proxy URL');
+        notifySubscribers(s, 'error', err?.message || '获取 Scrcpy 代理地址失败');
         s.status = 'error';
         notifySubscribers(s, 'status');
       }

@@ -571,7 +571,7 @@ export function DeviceFloatingPanel({ inline = false, placement = 'bottom', comp
 
   // D3: 使用 DeviceStatusStore 替代自建轮询
   useDeviceStatusPolling(device ? [device] : [], !!device);
-  const deviceStatus = useDeviceStatus(device?.id ?? null);
+  const deviceStatus = useDeviceStatus(device?.id ?? null, device?.pc_client_id);
   const isRunning = deviceStatus === 'running';
 
   const binding = isDeviceMode
@@ -633,7 +633,7 @@ export function DeviceFloatingPanel({ inline = false, placement = 'bottom', comp
   const subjectCard: SubjectCardInfo = { device, binding: syntheticBinding, deviceInfo };
 
   const onStartVm = isDeviceMode
-    ? () => api.devices.start(device.id, device.pc_client_id)
+    ? () => api.devices.start(device.id, device.pc_client_id).then(() => {})
     : undefined;
 
   const running = isRunning ? [subjectCard] : [];
@@ -682,7 +682,7 @@ export function DeviceFloatingPanel({ inline = false, placement = 'bottom', comp
           >
             <DeviceCard
               subjectCard={sc}
-              agentId={isDeviceMode ? undefined : currentAgentId}
+              agentId={isDeviceMode ? undefined : (currentAgentId ?? undefined)}
               onStartVm={isDeviceMode ? onStartVm : undefined}
               bottomOffset={runningOffsets[i]}
               spacerWidth={spacerWidth}
@@ -716,7 +716,7 @@ export function DeviceFloatingPanel({ inline = false, placement = 'bottom', comp
         <DeviceCard
           key={cardKey}
           subjectCard={sc}
-          agentId={isDeviceMode ? undefined : currentAgentId}
+          agentId={isDeviceMode ? undefined : (currentAgentId ?? undefined)}
           onStartVm={isDeviceMode ? onStartVm : undefined}
           bottomOffset={runningOffsets[i]}
           topOffset={compact ? runningOffsets[i] : undefined}

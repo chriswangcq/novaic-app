@@ -21,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 use futures_util::{SinkExt as _, StreamExt as _};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 const OPEN_BI_TIMEOUT_SECS: u64 = 15;
@@ -88,20 +88,21 @@ async fn handle_incoming_stream(
     let resource_id = String::from_utf8(id_bytes)
         .map_err(|e| anyhow::anyhow!("Invalid resource_id UTF-8: {}", e))?;
 
-    debug!(
-        "[Tunnel] Stream type=0x{:02x} id={}",
+    info!(
+        "[VNC-FLOW] [6-Tunnel] handle_incoming_stream type=0x{:02x} resource_id={}",
         stream_type, resource_id
     );
 
     match stream_type {
         0x01 => {
             // VNC: ensure_vnc_endpoint 统一 maindesk/subuser，返回 Unix socket 路径
+            info!("[VNC-FLOW] [6-Tunnel] VNC stream 调用 ensure_vnc_endpoint resource_id={}", resource_id);
             let mut last_err = None;
             for attempt in 0..VNC_RETRY_ATTEMPTS {
                 match crate::vnc_endpoint::ensure_vnc_endpoint(&resource_id).await {
                     Ok(socket_path) => {
                         let path_str: std::borrow::Cow<'_, str> = socket_path.to_string_lossy();
-                        info!("[Tunnel] VNC stream: {} → {} (attempt {})", resource_id, path_str, attempt + 1);
+                        info!("[VNC-FLOW] [6-Tunnel] ensure_vnc_endpoint 成功 resource_id={} socket={} (attempt {})", resource_id, path_str, attempt + 1);
                         match tokio::time::timeout(
                             Duration::from_secs(CONNECT_TIMEOUT_SECS),
                             UnixStream::connect(&socket_path),
@@ -109,6 +110,7 @@ async fn handle_incoming_stream(
                         .await
                         {
                             Ok(Ok(unix)) => {
+                                info!("[VNC-FLOW] [6-Tunnel] Unix socket 连接成功，开始 proxy_quic_to_unix resource_id={}", resource_id);
                                 proxy_quic_to_unix(send, recv, unix).await?;
                                 return Ok(());
                             }
@@ -116,13 +118,18 @@ async fn handle_incoming_stream(
                             Err(_) => last_err = Some(anyhow::anyhow!("VNC Unix connect to {} timed out after {}s", path_str, CONNECT_TIMEOUT_SECS)),
                         }
                     }
-                    Err(msg) => last_err = Some(anyhow::anyhow!("{}", msg)),
+                    Err(msg) => {
+                        warn!("[VNC-FLOW] [6-Tunnel] ensure_vnc_endpoint attempt {} 失败: {}", attempt + 1, msg);
+                        last_err = Some(anyhow::anyhow!("{}", msg));
+                    }
                 }
                 if attempt < VNC_RETRY_ATTEMPTS - 1 {
                     tokio::time::sleep(Duration::from_millis(VNC_RETRY_DELAY_MS)).await;
                 }
             }
-            return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("VNC target not found")));
+            let err = last_err.unwrap_or_else(|| anyhow::anyhow!("VNC target not found"));
+            error!("[VNC-FLOW] [6-Tunnel] VNC 全部重试失败 resource_id={}: {}", resource_id, err);
+            return Err(err);
         }
         0x02 => {
             // scrcpy：连接 VmControl 的 WS 端点，做 QUIC ↔ WS 桥接
@@ -274,7 +281,7 @@ pub async fn open_vnc_stream(
     .await
     .map_err(|_| anyhow::anyhow!("open_vnc_stream timed out after {}s", OPEN_BI_TIMEOUT_SECS))??;
     write_stream_header(&mut send, StreamType::Vnc as u8, vm_id).await?;
-    info!("[Tunnel] Opened VNC stream for vm={}", vm_id);
+    info!("[VNC-FLOW] [6-Tunnel] open_vnc_stream 成功 vm_id={}", vm_id);
     Ok((send, recv))
 }
 

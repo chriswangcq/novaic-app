@@ -40,50 +40,84 @@ interface DeviceDesktopViewVmUserProps extends DeviceDesktopViewBaseProps {
 
 export type DeviceDesktopViewProps = DeviceDesktopViewMainProps | DeviceDesktopViewVmUserProps;
 
-function buildVncTarget(props: DeviceDesktopViewProps): VncTarget | null {
-  if (props.subjectType === 'vm_user') {
-    const { deviceId, username, pcClientId } = props;
-    return {
-      resourceId: `${deviceId}:${username}`,
-      subjectType: 'vm_user',
-      deviceId,
-      username,
-      pcClientId,
-    };
-  }
-  const { device } = props;
-  return {
-    resourceId: device.id,
-    subjectType: props.subjectType,
-    deviceId: device.id,
-    pcClientId: device.pc_client_id,
-  };
-}
-
 const VNC_START_WAIT_MS = WS_CONFIG.VNC_START_WAIT_MS ?? 2000;
 
 export function DeviceDesktopView(props: DeviceDesktopViewProps) {
   const { onClose, embedded = false } = props;
-  const vncTarget = useMemo(() => buildVncTarget(props), [props]);
-  const isMaindesk = props.subjectType !== 'vm_user';
-  const device = isMaindesk ? props.device : null;
-  const pcClientId = isMaindesk ? device?.pc_client_id : props.pcClientId;
-  const deviceId = isMaindesk ? device?.id : props.deviceId;
+  const subjectType = props.subjectType;
+  const deviceId = subjectType === 'vm_user' ? (props as DeviceDesktopViewVmUserProps).deviceId : (props as DeviceDesktopViewMainProps).device?.id;
+  const pcClientId = subjectType === 'vm_user' ? (props as DeviceDesktopViewVmUserProps).pcClientId : (props as DeviceDesktopViewMainProps).device?.pc_client_id;
+  const username = subjectType === 'vm_user' ? (props as DeviceDesktopViewVmUserProps).username : undefined;
+  const vncTarget = useMemo((): VncTarget | null => {
+    if (subjectType === 'vm_user' && deviceId && username !== undefined) {
+      const t: VncTarget = {
+        resourceId: `${deviceId}:${username}`,
+        subjectType: 'vm_user',
+        deviceId,
+        username,
+        pcClientId,
+      };
+      console.log('[VNC-FLOW] [DeviceDesktopView] vncTarget 来源 subjectType=', subjectType, 'deviceId=', deviceId, 'resourceId=', t.resourceId);
+      return t;
+    }
+    if (subjectType !== 'vm_user' && deviceId) {
+      const t: VncTarget = {
+        resourceId: deviceId,
+        subjectType: subjectType as 'main' | 'default',
+        deviceId,
+        pcClientId,
+      };
+      console.log('[VNC-FLOW] [DeviceDesktopView] vncTarget 来源 subjectType=', subjectType, 'deviceId=', deviceId, 'resourceId=', t.resourceId);
+      return t;
+    }
+    return null;
+  }, [subjectType, deviceId, username, pcClientId]);
+  const isMaindesk = subjectType !== 'vm_user';
+  const device = isMaindesk ? (props as DeviceDesktopViewMainProps).device : null;
+
+  // 日志：挂载/卸载（排查切回 maindesk 连不上）
+  useEffect(() => {
+    console.log('[VNC-FLOW] [DeviceDesktopView] 挂载 subjectType=', subjectType, 'deviceId=', deviceId?.slice(0, 8), 'resourceId=', vncTarget?.resourceId?.slice(0, 16));
+    return () => {
+      console.log('[VNC-FLOW] [DeviceDesktopView] 卸载 subjectType=', subjectType, 'resourceId=', vncTarget?.resourceId?.slice(0, 16));
+    };
+  }, []);
 
   const [transport, setTransport] = useState<VncTransport | null>(null);
   const [transportError, setTransportError] = useState<string | null>(null);
-  const [deviceStatus, setDeviceStatus] = useState<'unknown' | 'stopped' | 'starting' | 'running' | 'error'>('unknown');
+  // maindesk 时用 device.status 做初始值，切回 maindesk 时父级已有 running 可立即建连
+  const [deviceStatus, setDeviceStatus] = useState<'unknown' | 'stopped' | 'starting' | 'running' | 'error'>(
+    () => (isMaindesk && device?.status === 'running' ? 'running' : 'unknown')
+  );
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // 日志：deviceStatus 变化（排查切回 maindesk 连不上）
+  const prevDeviceStatusRef = useRef(deviceStatus);
+  useEffect(() => {
+    if (prevDeviceStatusRef.current !== deviceStatus) {
+      console.log('[VNC-FLOW] [DeviceDesktopView] deviceStatus 变化', prevDeviceStatusRef.current, '->', deviceStatus, 'isMaindesk=', isMaindesk);
+      prevDeviceStatusRef.current = deviceStatus;
+    }
+  }, [deviceStatus, isMaindesk]);
 
   // Fetch device status for maindesk
   useEffect(() => {
     if (!deviceId || !isMaindesk) return;
     let cancelled = false;
+    console.log('[VNC-FLOW] [DeviceDesktopView] 拉取 deviceStatus deviceId=', deviceId?.slice(0, 8), 'isMaindesk=', isMaindesk);
     api.devices.status(deviceId, pcClientId)
       .then((s) => {
-        if (!cancelled) setDeviceStatus(s?.status === 'running' ? 'running' : 'stopped');
+        if (!cancelled) {
+          const next = s?.status === 'running' ? 'running' : 'stopped';
+          console.log('[VNC-FLOW] [DeviceDesktopView] deviceStatus 返回', next, 'raw=', s?.status);
+          setDeviceStatus(next);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setDeviceStatus('unknown');
+      .catch((e) => {
+        if (!cancelled) {
+          console.warn('[VNC-FLOW] [DeviceDesktopView] deviceStatus 失败', e);
+          setDeviceStatus('unknown');
+        }
       });
     return () => { cancelled = true; };
   }, [deviceId, pcClientId, isMaindesk]);
@@ -93,22 +127,33 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
   useEffect(() => {
     const reqId = ++requestIdRef.current;
     if (!vncTarget) {
+      console.log('[VNC-FLOW] [DeviceDesktopView] effect 跳过：无 vncTarget');
       setTransport(null);
       setTransportError(null);
       return;
     }
     if (isMaindesk && deviceStatus !== 'running') {
+      console.log('[VNC-FLOW] [DeviceDesktopView] effect 跳过：maindesk 且 deviceStatus=', deviceStatus, '≠running，不创建 transport');
       setTransport(null);
       setTransportError(null);
       return;
     }
+    console.log('[VNC-FLOW] [DeviceDesktopView] effect 调用 createVncTransport resourceId=', vncTarget.resourceId, 'deviceStatus=', deviceStatus);
     setTransportError(null);
     createVncTransport(vncTarget)
       .then((t) => {
-        if (reqId === requestIdRef.current) setTransport(t);
+        if (reqId === requestIdRef.current) {
+          console.log('[VNC-FLOW] [DeviceDesktopView] createVncTransport 成功 resourceId=', vncTarget.resourceId, 'reqId=', reqId);
+          setTransport(t);
+        } else {
+          console.log('[VNC-FLOW] [DeviceDesktopView] createVncTransport 成功但 reqId 已过期，丢弃 resourceId=', vncTarget.resourceId);
+        }
       })
       .catch((e) => {
-        if (reqId === requestIdRef.current) setTransportError(e instanceof Error ? e.message : 'Failed to create transport');
+        if (reqId === requestIdRef.current) {
+          console.error('[VNC-FLOW] [DeviceDesktopView] createVncTransport 失败 resourceId=', vncTarget.resourceId, e);
+          setTransportError(e instanceof Error ? e.message : '创建传输失败');
+        }
       });
   }, [vncTarget, isMaindesk, deviceStatus]);
 
@@ -120,6 +165,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
     startAbortRef.current = new AbortController();
     const signal = startAbortRef.current.signal;
     setDeviceStatus('starting');
+    setStartError(null);
     try {
       await api.devices.start(deviceId, pcClientId);
       await new Promise<void>((resolve, reject) => {
@@ -138,6 +184,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
         setDeviceStatus('running');
       } else {
         setDeviceStatus('error');
+        setStartError(msg || 'Connection failed');
       }
     }
   }, [deviceId, pcClientId]);
@@ -165,7 +212,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
     if (vncTarget) {
       createVncTransport(vncTarget)
         .then((t) => setTransport(t))
-        .catch((e) => setTransportError(e instanceof Error ? e.message : 'Failed to create transport'));
+        .catch((e) => setTransportError(e instanceof Error ? e.message : '创建传输失败'));
     }
   }, [vncTarget]);
 
@@ -235,7 +282,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
           ) : deviceStatus === 'error' ? (
             <>
               <Monitor size={36} className="text-red-400/40" />
-              <p className="text-sm text-red-400/60">Connection failed</p>
+              <p className="text-sm text-red-400/60">{startError || 'Connection failed'}</p>
               <button
                 onClick={startDevice}
                 className="px-4 py-1.5 rounded-lg text-sm bg-white/[0.08] hover:bg-white/[0.12]

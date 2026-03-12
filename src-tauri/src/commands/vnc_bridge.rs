@@ -123,17 +123,28 @@ pub async fn vnc_bridge_connect(
 
         loop {
             use tokio_tungstenite::tungstenite::Message as WsMsg;
-        tokio::select! {
-                // 前端 → WebSocket
-                Some(data) = rx.recv() => {
-                    if let Err(e) = ws_write
-                        .send(WsMsg::Binary(data))
-                        .await
-                    {
-                        tracing::warn!("[VncBridge] WS send error: {}", e);
-                        let _ = app_clone.emit(&close_event, e.to_string());
-                        bridge_exited = true;
-                        break;
+            tokio::select! {
+                // 前端 → WebSocket（含 channel 关闭 = 用户主动断开）
+                msg = rx.recv() => {
+                    match msg {
+                        Some(data) => {
+                            if let Err(e) = ws_write
+                                .send(WsMsg::Binary(data))
+                                .await
+                            {
+                                tracing::warn!("[VncBridge] WS send error: {}", e);
+                                let _ = app_clone.emit(&close_event, e.to_string());
+                                bridge_exited = true;
+                                break;
+                            }
+                        }
+                        None => {
+                            // 前端调用 vnc_bridge_close，channel 关闭：发送 Close 完成握手
+                            let _ = ws_write.send(WsMsg::Close(None)).await;
+                            let _ = app_clone.emit(&close_event, "Client closed");
+                            bridge_exited = true;
+                            break;
+                        }
                     }
                 }
                 // WebSocket → 前端
@@ -158,6 +169,8 @@ pub async fn vnc_bridge_connect(
                             }
                         }
                         Some(Ok(WsMsg::Close(frame))) => {
+                            // 回发 Close 完成 WebSocket 关闭握手，避免 noVNC "Disconnection timed out"
+                            let _ = ws_write.send(WsMsg::Close(None)).await;
                             let reason = frame
                                 .as_ref()
                                 .map(|f| f.reason.to_string())

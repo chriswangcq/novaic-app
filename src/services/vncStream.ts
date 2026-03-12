@@ -123,7 +123,10 @@ function stopFrameCapture(state: StreamState) {
   }
 }
 
+const VNC_FLOW = '[VNC-FLOW]';
+
 async function connectStream(streamKey: string, pcClientId?: string) {
+  console.log(`${VNC_FLOW} [2-vncStream] connectStream 开始 streamKey=${streamKey} pcClientId=${pcClientId ?? 'null'}`);
   let state = streams.get(streamKey);
   if (!state) {
     state = createStreamState();
@@ -134,6 +137,7 @@ async function connectStream(streamKey: string, pcClientId?: string) {
 
   // 如果已经连接或正在连接，不重复连接
   if (state.status === 'connected' || state.status === 'connecting') {
+    console.log(`${VNC_FLOW} [2-vncStream] 跳过（已连接或连接中）streamKey=${streamKey}`);
     return;
   }
 
@@ -144,12 +148,15 @@ async function connectStream(streamKey: string, pcClientId?: string) {
     // 获取传输（OTA 模式为 VncBridgeTransport，否则为 WebSocket URL）
     // P1-2: 移除 testWebSocket，设计 §3.3 要求依赖后端 ensure_vnc_endpoint
     if (!state.transportOrUrl) {
+      console.log(`${VNC_FLOW} [2-vncStream] getVncTransport streamKey=${streamKey} pcClientId=${pcClientId ?? 'null'}`);
       state.transportOrUrl = await vmService.getVncTransport(streamKey, pcClientId).catch((err: any) => {
-        notifySubscribers(state, 'error', err?.message || 'Failed to get VNC transport');
+        console.error(`${VNC_FLOW} [2-vncStream] getVncTransport 失败 streamKey=${streamKey}`, err);
+        notifySubscribers(state, 'error', err?.message || '获取 VNC 传输失败');
         state.status = 'error';
         notifySubscribers(state, 'status');
         throw err;
       });
+      console.log(`${VNC_FLOW} [2-vncStream] getVncTransport 成功 transportOrUrl=${typeof state.transportOrUrl === 'string' ? state.transportOrUrl : '(VncBridgeTransport)'}`);
     }
 
     // P1-4: 竞态校验
@@ -168,6 +175,7 @@ async function connectStream(streamKey: string, pcClientId?: string) {
     state.rfbContainer = container;
     
     // 创建 RFB 连接（Phase 3: 使用 RFB_OPTIONS，frame capture 需 override clipViewport）
+    console.log(`${VNC_FLOW} [2-vncStream] 创建 RFB streamKey=${streamKey}`);
     const rfb = new RFB(container, state.transportOrUrl as never, {
       ...RFB_OPTIONS,
     });
@@ -184,7 +192,7 @@ async function connectStream(streamKey: string, pcClientId?: string) {
     
     // 监听连接事件
     rfb.addEventListener('connect', () => {
-      console.log(`[VNCStream] Connected to ${streamKey}`);
+      console.log(`${VNC_FLOW} [2-vncStream] RFB connect 成功 streamKey=${streamKey}`);
       if (state) {
         state.status = 'connected';
         state.retryCount = 0;
@@ -198,7 +206,7 @@ async function connectStream(streamKey: string, pcClientId?: string) {
     rfb.addEventListener('disconnect', (e: any) => {
       const reason = e?.detail?.reason ?? e?.reason;
       const clean = e?.detail?.clean;
-      console.log(`[VNCStream] Disconnected from ${streamKey}:`, clean ? 'clean' : 'unclean', reason || '');
+      console.log(`${VNC_FLOW} [2-vncStream] RFB disconnect streamKey=${streamKey} clean=${clean} reason=${reason || '(empty)'}`);
       if (state) {
         stopFrameCapture(state);
         state.rfb = null;

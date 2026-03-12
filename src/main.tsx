@@ -7,15 +7,22 @@ import './styles/index.css';
 
 // noVNC: 过滤预期内的控制台噪音
 // - Disconnection timed out: WebSocket 关闭握手 3s 内未完成时触发
-// - Failed when connecting: Connection closed: 切换 Agent 或桥接关闭时的级联提示
+// - Failed when connecting / Connection closed: 切换 Agent 或桥接关闭时的级联提示
+// - Unexpected server disconnect: 连接过程中服务端关闭
 if (typeof window !== 'undefined' && window.console?.error) {
   const _ce = window.console.error.bind(window.console);
   const suppress = (msg: unknown) => {
     const s = String(msg ?? '');
-    return s.includes('Disconnection timed out') || s.includes('Failed when connecting: Connection closed');
+    return (
+      s.includes('Disconnection timed out') ||
+      s.includes('Failed when connecting') ||
+      s.includes('Failed when disconnecting') ||
+      s.includes('Unexpected server disconnect')
+    );
   };
   window.console.error = (...args: unknown[]) => {
-    if (args.length > 0 && suppress(args[0])) return;
+    const toCheck = args.length > 0 ? args[0] : '';
+    if (suppress(toCheck)) return;
     _ce(...args);
   };
 }

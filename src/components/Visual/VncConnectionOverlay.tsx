@@ -29,7 +29,7 @@ export function VncConnectionOverlay({ status, errorMsg, connect, transportReady
       <div className="flex flex-col items-center gap-3 text-nb-text-secondary max-w-xs text-center">
         <Loader2 size={28} className="animate-spin" />
         <span className="text-sm font-medium">Reconnecting…</span>
-        <span className="text-xs text-nb-text-muted">{errorMsg || 'Connection lost, retrying…'}</span>
+        <span className="text-xs text-nb-text-muted">{errorMsg || '连接断开，正在重试…'}</span>
       </div>
     );
   }
@@ -38,7 +38,7 @@ export function VncConnectionOverlay({ status, errorMsg, connect, transportReady
       <div className="flex flex-col items-center gap-3 text-red-400 max-w-xs text-center">
         <AlertCircle size={28} />
         <span className="text-sm font-medium">Connection failed</span>
-        <span className="text-xs text-nb-text-secondary">{errorMsg || 'Connection lost'}</span>
+        <span className="text-xs text-nb-text-secondary">{errorMsg || '连接断开'}</span>
         {transportReady && (
           <button
             onClick={connect}

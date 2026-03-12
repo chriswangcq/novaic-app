@@ -1022,16 +1022,38 @@ export const api = {
       const qs = params.toString();
       return invoke('gateway_get', { path: qs ? `/api/p2p/my-devices?${qs}` : '/api/p2p/my-devices' });
     },
-    /** 解析当前 PC 的 pc_client_id（用于 setup/start 多 PC 路由） */
-    resolveCurrentPcClientId: async (appInstanceId: string | null): Promise<string | undefined> => {
-      if (!appInstanceId) return undefined;
-      try {
-        const res = await api.p2p.getMyDevices(appInstanceId);
-        const local = res.devices?.find((d) => d.is_local);
-        return local?.device_id ?? local?.pc_client_id ?? res.devices?.[0]?.device_id;
-      } catch {
-        return undefined;
+    /**
+     * 解析当前 PC 的 pc_client_id（用于 setup/start 多 PC 路由）。
+     * 失败时重试 2–3 次（间隔 500ms），缓解 appInstanceId 与 DeviceRegistry 双重异步。
+     * 失败时返回 errorMessage 区分根因：appInstanceId 未同步、Cloud Bridge 未连、设备列表为空。
+     */
+    resolveCurrentPcClientId: async (
+      appInstanceId: string | null
+    ): Promise<{ pcClientId?: string; errorMessage?: string }> => {
+      if (!appInstanceId) {
+        return { errorMessage: 'appInstanceId 未同步，请稍后重试' };
       }
+      const maxAttempts = 3;
+      const intervalMs = 500;
+      let lastError: string | undefined;
+      for (let i = 0; i < maxAttempts; i++) {
+        try {
+          const res = await api.p2p.getMyDevices(appInstanceId);
+          if (!res.devices?.length) {
+            return { errorMessage: '未找到可用的 PC 设备，请确保 Tauri 应用已连接' };
+          }
+          const local = res.devices.find((d) => d.is_local);
+          const id = local?.device_id ?? local?.pc_client_id ?? res.devices[0]?.device_id;
+          if (id) return { pcClientId: id };
+          lastError = '未找到可用的 PC 设备，请确保 Tauri 应用已连接';
+        } catch {
+          lastError = 'Cloud Bridge 未连接或网络异常，请检查网络后重试';
+        }
+        if (i < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, intervalMs));
+        }
+      }
+      return { errorMessage: lastError ?? '请选择目标 PC 或确保 Tauri 应用已连接' };
     },
   },
 

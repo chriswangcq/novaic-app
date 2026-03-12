@@ -57,6 +57,7 @@ export function useVnc(
   const decrementVnc = useDeviceStatusStore((s) => s.decrementVncConnectionCount);
 
   const disconnect = useCallback(() => {
+    const VNC_FLOW = '[VNC-FLOW]';
     userInitiatedDisconnectRef.current = true;
     if (retryTimerRef.current) {
       clearTimeout(retryTimerRef.current);
@@ -68,19 +69,24 @@ export function useVnc(
       } catch { /* ignore */ }
       rfbRef.current = null;
     }
-    const t = lastTransportRef.current ?? transportRef.current;
+    // 仅关闭已使用的 transport，不关闭尚未 doConnect 的新 transport（避免 canConnect=false 时误关 transportRef）
+    const t = lastTransportRef.current;
     if (t && typeof t !== 'string' && 'close' in t) {
-      (t as VncBridgeTransport).close();
+      const br = t as VncBridgeTransport;
+      console.log(`${VNC_FLOW} [3-useVnc] disconnect 关闭 prevTransport resourceId=${br.resourceId ?? '?'}`);
+      br.close();
     }
     lastTransportRef.current = null;
     setStatus('disconnected');
     setErrorMsg('');
   }, []);
 
+  const VNC_FLOW = '[VNC-FLOW]';
   const doConnect = useCallback(async () => {
     const t = transportRef.current;
     if (!t || !containerRef.current) return;
     if (!mountedRef.current) return;
+    console.log(`${VNC_FLOW} [3-useVnc] doConnect 开始 transport=${typeof t === 'string' ? t : '(VncBridgeTransport)'}`);
     setStatus('connecting');
     setErrorMsg('');
     try {
@@ -93,9 +99,22 @@ export function useVnc(
       }
       const prevTransport = lastTransportRef.current;
       if (prevTransport && prevTransport !== t && typeof prevTransport !== 'string' && 'close' in prevTransport) {
-        (prevTransport as VncBridgeTransport).close();
+        const br = prevTransport as VncBridgeTransport;
+        console.log(`${VNC_FLOW} [3-useVnc] doConnect 关闭 prevTransport resourceId=${br.resourceId ?? '?'} (transport 已切换)`);
+        br.close();
+      }
+      // 竞态：effect cleanup 可能已关闭当前 transport，RFB 不能使用已关闭的 channel
+      const bridge = typeof t !== 'string' && 'readyState' in t ? (t as VncBridgeTransport) : null;
+      if (bridge && bridge.readyState !== bridge.OPEN) {
+        console.warn(`${VNC_FLOW} [3-useVnc] transport 已关闭(readyState=${bridge.readyState})，跳过`);
+        if (mountedRef.current) {
+          setStatus('failed');
+          setErrorMsg('连接已关闭，请重试');
+        }
+        return;
       }
       lastTransportRef.current = t;
+      console.log(`${VNC_FLOW} [3-useVnc] 创建 RFB 实例`);
       const rfb = new RFB(containerRef.current, t as never, { ...RFB_OPTIONS });
       rfb.scaleViewport = scaleViewport;
       rfb.clipViewport = clipViewport;
@@ -104,6 +123,7 @@ export function useVnc(
       rfb.focusOnClick = true;
 
       rfb.addEventListener('connect', () => {
+        console.log(`${VNC_FLOW} [3-useVnc] RFB connect 成功`);
         if (mountedRef.current) {
           retryCountRef.current = 0;
           setStatus('connected');
@@ -111,9 +131,10 @@ export function useVnc(
         }
       });
       rfb.addEventListener('disconnect', ((e: Event & { detail?: { clean?: boolean; reason?: string } }) => {
+        const reason = e?.detail?.reason ?? '';
+        console.log(`${VNC_FLOW} [3-useVnc] RFB disconnect reason=${reason || '(empty)'} userInitiated=${userInitiatedDisconnectRef.current}`);
         if (!mountedRef.current) return;
         rfbRef.current = null;
-        const reason = e?.detail?.reason ?? '';
         // P0-1: 用 userInitiatedDisconnectRef 判断，不再依赖 clean（服务器端断开也为 clean）
         const userInitiated = userInitiatedDisconnectRef.current;
         userInitiatedDisconnectRef.current = false;
@@ -130,22 +151,23 @@ export function useVnc(
             }, delay);
           } else {
             setStatus('failed');
-            setErrorMsg(reason || 'Connection lost, max retries exceeded');
+            setErrorMsg(reason || '连接断开，已达最大重试次数');
           }
         }
       }) as EventListener);
       rfb.addEventListener('credentialsrequired', () => {
         if (mountedRef.current) {
           setStatus('failed');
-          setErrorMsg('VNC requires credentials (unexpected)');
+          setErrorMsg('VNC 需要凭据（意外）');
         }
       });
 
       rfbRef.current = rfb;
     } catch (e) {
+      console.error(`${VNC_FLOW} [3-useVnc] doConnect 异常`, e);
       if (mountedRef.current) {
         setStatus('failed');
-        setErrorMsg(e instanceof Error ? e.message : 'RFB connection failed');
+        setErrorMsg(e instanceof Error ? e.message : 'RFB 连接失败');
       }
     }
   }, [scaleViewport, clipViewport, viewOnly]);
@@ -167,16 +189,25 @@ export function useVnc(
   }, [status, incrementVnc, decrementVnc]);
 
   useEffect(() => {
-    if (transport && containerReady && containerRef.current) {
+    const hasTransport = !!transport;
+    const hasContainer = !!containerRef.current;
+    const canConnect = hasTransport && containerReady && hasContainer;
+    console.log(`${VNC_FLOW} [3-useVnc] effect 运行 transport=${hasTransport} containerReady=${containerReady} containerRef=${hasContainer} canConnect=${canConnect}`);
+    if (canConnect) {
       doConnect();
     } else {
-      // C1: transport 为 null 时也调用 disconnect，确保旧 VncBridgeTransport 被关闭
-      disconnect();
+      if (!hasTransport) {
+        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 transport，disconnect`);
+        disconnect();
+      } else if (!containerReady) {
+        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：containerReady=false，不 disconnect（等待容器）`);
+      } else if (!hasContainer) {
+        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 containerRef，不 disconnect（等待 ref）`);
+      }
     }
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-      // P2: effect cleanup 显式 disconnect
-      disconnect();
+      // 仅清理定时器；disconnect 由 mount effect 的 unmount 负责，避免 effect 因 doConnect 依赖重跑时误关 transport
     };
   }, [transport, containerReady, doConnect, disconnect]);
 
