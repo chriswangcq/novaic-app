@@ -1,12 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { VNCView } from './VNCView';
+import { AgentDesktopView } from './AgentDesktopView';
 import { ScrcpyView } from './ScrcpyView';
 import { ExecutionLog } from './ExecutionLog';
 import { useLayout } from '../hooks/useLayout';
 import { useLogs } from '../hooks/useLogs';
 import { useAgent } from '../hooks/useAgent';
+import { useAgentDevice } from '../../hooks/useAgentDevice';
 import { GripHorizontal, Maximize2, Monitor, Smartphone } from 'lucide-react';
-import { isLinuxDevice, isAndroidDevice, LinuxDevice, AndroidDevice } from '../../types';
+import type { AndroidDevice } from '../../types';
 
 type ActiveView = 'linux' | 'android';
 
@@ -46,23 +47,18 @@ interface VisualPanelProps {
 export function VisualPanel({ isThumbnail = false }: VisualPanelProps) {
   const { setLayoutMode } = useLayout();
   const { logs } = useLogs();
-  const { currentAgentId, agents } = useAgent();
+  const { currentAgentId } = useAgent();
+  const { device } = useAgentDevice(currentAgentId);
   const [vmHeightRatio, setVmHeightRatio] = useState(loadVmHeightRatio);
   const [isResizing, setIsResizing] = useState(false);
   const [isLogsCollapsed, setIsLogsCollapsed] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>('linux');
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // 从 agent.devices 获取设备信息
-  const currentAgent = currentAgentId ? agents.find((a) => a.id === currentAgentId) : null;
-  
-  // 获取设备列表
-  const linuxDevice = currentAgent?.devices?.find(isLinuxDevice) as LinuxDevice | undefined;
-  const androidDevice = currentAgent?.devices?.find(isAndroidDevice) as AndroidDevice | undefined;
-  
-  // 判断是否有设备
-  const hasLinux = Boolean(linuxDevice);
-  const hasAndroid = Boolean(androidDevice);
+  // C4: 使用 useAgentDevice 替代已废弃的 agent.devices
+  const hasLinux = device?.type === 'linux';
+  const hasAndroid = device?.type === 'android';
+  const androidDevice = hasAndroid ? (device as AndroidDevice) : undefined;
   const showViewSwitch = hasLinux && hasAndroid;
 
   // 根据 Agent 配置自动选择默认视图
@@ -128,12 +124,11 @@ export function VisualPanel({ isThumbnail = false }: VisualPanelProps) {
         className="h-full w-full cursor-pointer"
         onClick={() => setLayoutMode('normal')}
       >
-        <VNCView isThumbnail />
+        <AgentDesktopView agentId={currentAgentId} embedded />
       </div>
     );
   }
 
-  // 获取 Android 设备序列号（从统一设备模型获取）
   const androidDeviceSerial = androidDevice?.device_serial;
 
   // Full mode or normal mode: VM on top, logs on bottom
@@ -176,7 +171,7 @@ export function VisualPanel({ isThumbnail = false }: VisualPanelProps) {
 
         {/* 视图内容 */}
         <div className="flex-1 min-h-0 overflow-hidden">
-          {activeView === 'linux' && <VNCView />}
+          {activeView === 'linux' && <AgentDesktopView agentId={currentAgentId} />}
           {activeView === 'android' && <ScrcpyView deviceSerial={androidDeviceSerial} autoConnect />}
         </div>
       </div>

@@ -113,7 +113,7 @@ export interface AICAgent {
     managed?: boolean;       // 是否由 novaic 管理
     avd_name?: string;       // 托管模式下的 AVD 名称
   };
-  // 统一设备列表（新架构）
+  /** @deprecated Device 按 User 组织，Agent 只通过 binding 引用。请用 useAgentDevice(agentId) 或 api.agents.getAgentBinding。 */
   devices?: Device[];
   binding?: AgentDeviceBinding | null;
 }
@@ -1006,6 +1006,35 @@ export const api = {
     },
   },
 
+  // ==================== P2P API ====================
+
+  p2p: {
+    /**
+     * 获取当前用户的 P2P 设备列表。
+     * @param currentAppInstanceId - 本机 app_instance_id，传入时 Gateway 标注 is_local
+     */
+    getMyDevices: async (currentAppInstanceId?: string): Promise<{
+      devices: Array<{ device_id: string; pc_client_id?: string; is_local?: boolean; online?: boolean }>;
+      by_app_instance: unknown[];
+    }> => {
+      const params = new URLSearchParams();
+      if (currentAppInstanceId) params.set('current_app_instance_id', currentAppInstanceId);
+      const qs = params.toString();
+      return invoke('gateway_get', { path: qs ? `/api/p2p/my-devices?${qs}` : '/api/p2p/my-devices' });
+    },
+    /** 解析当前 PC 的 pc_client_id（用于 setup/start 多 PC 路由） */
+    resolveCurrentPcClientId: async (appInstanceId: string | null): Promise<string | undefined> => {
+      if (!appInstanceId) return undefined;
+      try {
+        const res = await api.p2p.getMyDevices(appInstanceId);
+        const local = res.devices?.find((d) => d.is_local);
+        return local?.device_id ?? local?.pc_client_id ?? res.devices?.[0]?.device_id;
+      } catch {
+        return undefined;
+      }
+    },
+  },
+
   // ==================== Device API ====================
 
   devices: {
@@ -1018,6 +1047,9 @@ export const api = {
 
     /**
      * List all devices for an agent
+     * @deprecated 该 API 不存在（404）。Device 按 User 组织，Agent 只通过 Binding 引用。
+     * 替代方案：优先使用 useAgentDevice(agentId) 获取绑定设备；或 listForUser() + api.agents.getAgentBinding(agentId)。
+     * 计划 Phase 2 移除。
      */
     list: async (agentId: string): Promise<{ devices: Device[] }> => {
       return invoke('gateway_get', { path: `/api/agents/${agentId}/devices` });
@@ -1074,45 +1106,55 @@ export const api = {
 
     /**
      * Delete a device
+     * @param pcClientId - P2-8: 目标物理 PC，多 PC 时指定
+     * @returns status, message, and optional warnings (e.g. AVD deletion failed)
      */
-    delete: async (deviceId: string): Promise<void> => {
-      await invoke('gateway_delete', { path: `/api/devices/${deviceId}` });
+    delete: async (deviceId: string, pcClientId?: string): Promise<{ status: string; message?: string; warnings?: string[] }> => {
+      const qs = pcClientId ? `?pc_client_id=${encodeURIComponent(pcClientId)}` : '';
+      return invoke('gateway_delete', { path: `/api/devices/${deviceId}${qs}` });
     },
 
     /**
      * Setup a device
+     * @param pcClientId - P2-8: 目标物理 PC，多 PC 时指定
      */
-    setup: async (deviceId: string, data?: SetupDeviceRequest): Promise<{ status: string; message: string }> => {
+    setup: async (deviceId: string, data?: SetupDeviceRequest, pcClientId?: string): Promise<{ status: string; message: string }> => {
+      const qs = pcClientId ? `?pc_client_id=${encodeURIComponent(pcClientId)}` : '';
       return invoke('gateway_post', { 
-        path: `/api/devices/${deviceId}/setup`, 
+        path: `/api/devices/${deviceId}/setup${qs}`, 
         body: data || {} 
       });
     },
 
     /**
      * Start a device
+     * @param pcClientId - P2-8: 目标物理 PC，多 PC 时指定
      */
-    start: async (deviceId: string): Promise<{ status: string; message: string }> => {
+    start: async (deviceId: string, pcClientId?: string): Promise<{ status: string; message: string }> => {
+      const qs = pcClientId ? `?pc_client_id=${encodeURIComponent(pcClientId)}` : '';
       return invoke('gateway_post', { 
-        path: `/api/devices/${deviceId}/start` 
+        path: `/api/devices/${deviceId}/start${qs}` 
       });
     },
 
     /**
      * Stop a device
      */
-    stop: async (deviceId: string): Promise<{ status: string; message: string }> => {
+    stop: async (deviceId: string, pcClientId?: string): Promise<{ status: string; message: string }> => {
+      const qs = pcClientId ? `?pc_client_id=${encodeURIComponent(pcClientId)}` : '';
       return invoke('gateway_post', { 
-        path: `/api/devices/${deviceId}/stop` 
+        path: `/api/devices/${deviceId}/stop${qs}` 
       });
     },
 
     /**
      * Get device status
+     * @param pcClientId - P2-8: 目标物理 PC，多 PC 时指定
      */
-    status: async (deviceId: string): Promise<{ device_id: string; type: string; status: string; running: boolean }> => {
+    status: async (deviceId: string, pcClientId?: string): Promise<{ device_id: string; type: string; status: string; running: boolean }> => {
+      const qs = pcClientId ? `?pc_client_id=${encodeURIComponent(pcClientId)}` : '';
       return invoke('gateway_get', { 
-        path: `/api/devices/${deviceId}/status` 
+        path: `/api/devices/${deviceId}/status${qs}` 
       });
     },
   },

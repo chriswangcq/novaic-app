@@ -15,13 +15,18 @@
 //! ## 手机侧（Tunnel Client）
 //! 开一条新 QUIC stream，写入头部，后续透明转发。
 
+use std::time::Duration;
 use quinn::{Connection, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tracing::{debug, info, warn};
+
+const CONNECT_TIMEOUT_SECS: u64 = 5;
+const OPEN_BI_TIMEOUT_SECS: u64 = 15;
+const VNC_RETRY_ATTEMPTS: u32 = 3;
+const VNC_RETRY_DELAY_MS: u64 = 200;
 
 /// 流类型标识（首字节）
 #[repr(u8)]
@@ -71,6 +76,13 @@ async fn handle_incoming_stream(
     // 读取流头部：[stream_type: u8][id_len: u8][id: bytes]
     let stream_type = recv.read_u8().await?;
     let id_len = recv.read_u8().await? as usize;
+    if id_len == 0 || id_len > crate::vnc_endpoint::MAX_RESOURCE_ID_LEN {
+        anyhow::bail!(
+            "Invalid resource_id length: {} (max {})",
+            id_len,
+            crate::vnc_endpoint::MAX_RESOURCE_ID_LEN
+        );
+    }
     let mut id_bytes = vec![0u8; id_len];
     recv.read_exact(&mut id_bytes).await?;
     let resource_id = String::from_utf8(id_bytes)
@@ -83,25 +95,34 @@ async fn handle_incoming_stream(
 
     match stream_type {
         0x01 => {
-            // VNC: try TCP port file first (TigerVNC sub-user), fallback to Unix socket
-            match find_vnc_target(&resource_id) {
-                VncTarget::Tcp(port) => {
-                    let addr = format!("127.0.0.1:{}", port);
-                    info!("[Tunnel] VNC stream (TCP): vm={} → {}", resource_id, addr);
-                    let tcp = TcpStream::connect(&addr).await
-                        .map_err(|e| anyhow::anyhow!("VNC TCP connect to {} failed: {}", addr, e))?;
-                    proxy_quic_to_tcp(send, recv, tcp).await?;
+            // VNC: ensure_vnc_endpoint 统一 maindesk/subuser，返回 Unix socket 路径
+            let mut last_err = None;
+            for attempt in 0..VNC_RETRY_ATTEMPTS {
+                match crate::vnc_endpoint::ensure_vnc_endpoint(&resource_id).await {
+                    Ok(socket_path) => {
+                        let path_str: std::borrow::Cow<'_, str> = socket_path.to_string_lossy();
+                        info!("[Tunnel] VNC stream: {} → {} (attempt {})", resource_id, path_str, attempt + 1);
+                        match tokio::time::timeout(
+                            Duration::from_secs(CONNECT_TIMEOUT_SECS),
+                            UnixStream::connect(&socket_path),
+                        )
+                        .await
+                        {
+                            Ok(Ok(unix)) => {
+                                proxy_quic_to_unix(send, recv, unix).await?;
+                                return Ok(());
+                            }
+                            Ok(Err(e)) => last_err = Some(anyhow::anyhow!("VNC Unix connect to {} failed: {}", path_str, e)),
+                            Err(_) => last_err = Some(anyhow::anyhow!("VNC Unix connect to {} timed out after {}s", path_str, CONNECT_TIMEOUT_SECS)),
+                        }
+                    }
+                    Err(msg) => last_err = Some(anyhow::anyhow!("{}", msg)),
                 }
-                VncTarget::Unix(socket_path) => {
-                    info!("[Tunnel] VNC stream (Unix): vm={} → {}", resource_id, socket_path);
-                    let unix = UnixStream::connect(&socket_path).await
-                        .map_err(|e| anyhow::anyhow!("VNC Unix connect to {} failed: {}", socket_path, e))?;
-                    proxy_quic_to_unix(send, recv, unix).await?;
-                }
-                VncTarget::NotFound(msg) => {
-                    anyhow::bail!("{}", msg);
+                if attempt < VNC_RETRY_ATTEMPTS - 1 {
+                    tokio::time::sleep(Duration::from_millis(VNC_RETRY_DELAY_MS)).await;
                 }
             }
+            return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("VNC target not found")));
         }
         0x02 => {
             // scrcpy：连接 VmControl 的 WS 端点，做 QUIC ↔ WS 桥接
@@ -119,55 +140,6 @@ async fn handle_incoming_stream(
         }
     }
     Ok(())
-}
-
-enum VncTarget {
-    Tcp(u16),
-    Unix(String),
-    NotFound(String),
-}
-
-/// 推导 VNC 连接目标。
-///
-/// `resource_id` 格式：
-///   - `{vm_id}`            → 主桌面：先查 TCP port 文件，再试 TigerVNC Unix socket，最后 QEMU VNC
-///   - `{vm_id}:{username}` → 子用户：读 TCP port 文件（9p 不支持 socket 文件）
-///
-/// TCP 优先：Xvnc 现在监听 TCP 端口，通过 QMP hostfwd 映射到主机 localhost。
-fn find_vnc_target(resource_id: &str) -> VncTarget {
-    // 多用户格式：{vm_id}:{username}
-    if let Some(colon_pos) = resource_id.find(':') {
-        let vm_id  = &resource_id[..colon_pos];
-        let username = &resource_id[colon_pos + 1..];
-        if !username.is_empty() {
-            // 优先读 TCP port 文件
-            let port_file = format!("/tmp/novaic/share-{}/vnc-{}.port", vm_id, username);
-            if let Ok(s) = std::fs::read_to_string(&port_file) {
-                if let Ok(port) = s.trim().parse::<u16>() {
-                    info!("[VNC] Multi-user TCP: vm={} user={} → port {}", vm_id, username, port);
-                    return VncTarget::Tcp(port);
-                }
-            }
-            return VncTarget::NotFound(format!(
-                "VNC port file not found for user '{}': {} — \
-                 user may not be created yet or VM is not running.",
-                username, port_file
-            ));
-        }
-    }
-
-    // 主桌面：走稳定的 QEMU 内置 VNC Unix socket
-    let vm_id = resource_id;
-    let qemu_vnc = format!("/tmp/novaic/novaic-vnc-{}.sock", vm_id);
-    if std::path::Path::new(&qemu_vnc).exists() {
-        info!("[VNC] Main desktop (QEMU VNC): {}", qemu_vnc);
-        return VncTarget::Unix(qemu_vnc);
-    }
-
-    VncTarget::NotFound(format!(
-        "No VNC socket found for VM '{}': {}",
-        vm_id, qemu_vnc
-    ))
 }
 
 /// 双向代理：QUIC stream ↔ Unix socket（VNC，65K 缓冲）
@@ -202,51 +174,6 @@ async fn proxy_quic_to_unix(
     tokio::select! {
         r = quic_to_unix => r?,
         r = unix_to_quic => r?,
-    }
-    Ok(())
-}
-
-/// 双向代理：QUIC stream ↔ TCP 连接（scrcpy，65K 缓冲）
-async fn proxy_quic_to_tcp(
-    mut quic_send: SendStream,
-    mut quic_recv: RecvStream,
-    tcp: TcpStream,
-) -> anyhow::Result<()> {
-    let (mut tcp_read, mut tcp_write) = tcp.into_split();
-
-    // QUIC → TCP
-    let quic_to_tcp = async {
-        let mut buf = vec![0u8; 65536];
-        loop {
-            match quic_recv.read(&mut buf).await {
-                Ok(Some(n)) if n > 0 => {
-                    tcp_write.write_all(&buf[..n]).await?;
-                }
-                _ => break,
-            }
-        }
-        let _ = tcp_write.shutdown().await;
-        Ok::<(), anyhow::Error>(())
-    };
-
-    // TCP → QUIC
-    let tcp_to_quic = async {
-        let mut buf = vec![0u8; 65536];
-        loop {
-            let n = tcp_read.read(&mut buf).await?;
-            if n == 0 {
-                break;
-            }
-            quic_send.write_all(&buf[..n]).await?;
-        }
-        let _ = quic_send.finish();
-        Ok::<(), anyhow::Error>(())
-    };
-
-    // 任一方向结束则停止整个代理
-    tokio::select! {
-        r = quic_to_tcp => r?,
-        r = tcp_to_quic => r?,
     }
     Ok(())
 }
@@ -340,7 +267,12 @@ pub async fn open_vnc_stream(
     conn: &Connection,
     vm_id: &str,
 ) -> anyhow::Result<(SendStream, RecvStream)> {
-    let (mut send, recv) = conn.open_bi().await?;
+    let (mut send, recv) = tokio::time::timeout(
+        Duration::from_secs(OPEN_BI_TIMEOUT_SECS),
+        conn.open_bi(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("open_vnc_stream timed out after {}s", OPEN_BI_TIMEOUT_SECS))??;
     write_stream_header(&mut send, StreamType::Vnc as u8, vm_id).await?;
     info!("[Tunnel] Opened VNC stream for vm={}", vm_id);
     Ok((send, recv))
@@ -351,7 +283,12 @@ pub async fn open_scrcpy_stream(
     conn: &Connection,
     android_device_id: &str,
 ) -> anyhow::Result<(SendStream, RecvStream)> {
-    let (mut send, recv) = conn.open_bi().await?;
+    let (mut send, recv) = tokio::time::timeout(
+        Duration::from_secs(OPEN_BI_TIMEOUT_SECS),
+        conn.open_bi(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("open_scrcpy_stream timed out after {}s", OPEN_BI_TIMEOUT_SECS))??;
     write_stream_header(&mut send, StreamType::Scrcpy as u8, android_device_id).await?;
     info!(
         "[Tunnel] Opened scrcpy stream for device={}",
@@ -366,6 +303,13 @@ async fn write_stream_header(
     resource_id: &str,
 ) -> anyhow::Result<()> {
     let id_bytes = resource_id.as_bytes();
+    if id_bytes.len() > crate::vnc_endpoint::MAX_RESOURCE_ID_LEN {
+        anyhow::bail!(
+            "resource_id too long (max {}): {}",
+            crate::vnc_endpoint::MAX_RESOURCE_ID_LEN,
+            id_bytes.len()
+        );
+    }
     send.write_u8(stream_type).await?;
     send.write_u8(id_bytes.len() as u8).await?;
     send.write_all(id_bytes).await?;

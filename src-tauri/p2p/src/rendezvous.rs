@@ -243,6 +243,7 @@ pub struct RelayRequestResponse {
 }
 
 /// 手机侧：请求 relay 连接，Gateway 推 connect_relay 给 PC，返回 relay_url + session_id
+/// 与 locate 类似，2–3 次重试，退避 500ms/1s。
 pub async fn relay_request(
     gateway_url: &str,
     jwt: &str,
@@ -256,23 +257,42 @@ pub async fn relay_request(
         .build()?;
     let url = format!("{}/api/p2p/relay-request", gateway_url);
     let body = serde_json::json!({ "target_device_id": target_device_id });
-    let resp = client
-        .post(&url)
-        .bearer_auth(jwt)
-        .json(&body)
-        .send()
-        .await?;
-    let status = resp.status();
-    let body_text = resp.text().await?;
-    if !status.is_success() {
-        let detail = serde_json::from_str::<serde_json::Value>(&body_text)
-            .ok()
-            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
-            .unwrap_or(body_text);
-        anyhow::bail!("relay-request failed ({}): {}", status, detail);
+    for attempt in 1..=3 {
+        match client
+            .post(&url)
+            .bearer_auth(jwt)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                let body_text = resp.text().await?;
+                if !status.is_success() {
+                    let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+                        .ok()
+                        .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(String::from))
+                        .unwrap_or(body_text);
+                    anyhow::bail!("relay-request failed ({}): {}", status, detail);
+                }
+                let parsed: RelayRequestResponse = serde_json::from_str(&body_text)?;
+                return Ok(parsed);
+            }
+            Err(e) => {
+                if attempt < 3 {
+                    tracing::debug!(
+                        "[Rendezvous] relay_request attempt {} failed: {}, retrying",
+                        attempt,
+                        e
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
     }
-    let parsed: RelayRequestResponse = serde_json::from_str(&body_text)?;
-    Ok(parsed)
+    unreachable!()
 }
 
 pub async fn locate(

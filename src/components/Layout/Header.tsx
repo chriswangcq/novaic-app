@@ -2,9 +2,7 @@ import { useMemo } from 'react';
 import { Menu, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { CreateAgentModal } from '../Agent/CreateAgentModal';
-import { useAppStore } from '../../application/store';
 import { useAgent } from '../hooks/useAgent';
-import { useVNCConnection } from '../Visual/useVNCConnection';
 
 type NarrowPage = 'sidebar' | 'chat' | 'devices' | 'settings' | 'more';
 
@@ -30,8 +28,6 @@ export function Header(props: HeaderProps) {
   const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);
   const { createModalOpen: createAgentModalOpen, setCreateModal, agents, currentAgentId, select: selectAgent } = useAgent();
   const setCreateAgentModalOpen = (open: boolean) => setCreateModal(open);
-  const setVncConnected = (v: boolean) => useAppStore.getState().patchState({ vncConnected: v });
-
   const currentAgent = agents.find(a => a.id === currentAgentId);
 
   // 左右切换使用 agents 的固定顺序，支持循环
@@ -48,8 +44,6 @@ export function Header(props: HeaderProps) {
     const nextIndex = currentIndex >= agents.length - 1 ? 0 : currentIndex + 1;
     selectAgent(agents[nextIndex].id);
   };
-
-  useVNCConnection(currentAgentId, setVncConnected);
 
   const handleHeaderMouseDown = (e: React.MouseEvent<HTMLElement>) => {
     if (e.buttons !== 1) return;

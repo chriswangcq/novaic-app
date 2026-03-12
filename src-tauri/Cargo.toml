@@ -63,11 +63,13 @@ keyring = { version = "3", features = ["apple-native"] }
 aes-gcm = "0.10"
 rand = "0.8"
 
-# 移动端：VncProxy（P2P 连接远端 VNC/Scrcpy）需要 p2p/axum/quinn
+# 移动端：VncProxy（P2P 连接远端 VNC/Scrcpy）需要 p2p/axum/quinn；vnc_bridge 需 WebSocket 客户端
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 axum = { version = "0.7", features = ["ws"] }
 quinn = { version = "0.11", features = ["rustls"] }
 p2p = { path = "p2p" }
+tokio-tungstenite = { version = "0.24", default-features = false }
+futures-util = "0.3"
 
 [features]
 default = ["custom-protocol", "desktop"]

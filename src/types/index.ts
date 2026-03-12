@@ -2,6 +2,8 @@
  * NB-CC Type Definitions
  */
 
+export { RFB_OPTIONS, type VncTarget } from './vnc';
+
 // ==================== Unified Device Types ====================
 
 export type DeviceType = 'linux' | 'android';
@@ -22,6 +24,8 @@ export interface DeviceConfig {
   cpus: number;
   data_path: string;
   ports: Record<string, number>;
+  /** P2-8: 设备所属物理 PC（setup 时记录，多 PC 路由用） */
+  pc_client_id?: string;
 }
 
 /**

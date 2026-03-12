@@ -10,6 +10,9 @@
 import RFB from 'novnc-rfb';
 import { vmService } from './vm';
 import { WS_CONFIG } from '../config';
+import { RFB_OPTIONS } from '../types';
+import type { VncBridgeTransport } from './vncBridge';
+import { useDeviceStatusStore } from '../stores/deviceStatusStore';
 
 export type StreamStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -19,20 +22,27 @@ export interface StreamSubscriber {
   onError: (error: string) => void;
 }
 
+const VNC_RETRY_DELAY_MS = WS_CONFIG.VNC_RETRY_DELAY_MS ?? 2000;
+const VNC_MAX_RETRIES = WS_CONFIG.VNC_MAX_RETRIES ?? 5;
+
 interface StreamState {
   rfb: RFB | null;
   rfbContainer: HTMLDivElement | null;
   canvas: HTMLCanvasElement;
   status: StreamStatus;
   subscribers: Set<StreamSubscriber>;
-  wsUrl: string | null;
+  transportOrUrl: string | VncBridgeTransport | null;
   retryCount: number;
   retryTimer: ReturnType<typeof setTimeout> | null;
   frameTimer: ReturnType<typeof setInterval> | null;
   viewOnly: boolean;
+  /** P0-6: 持久化 pc_client_id，重连时使用 */
+  deviceId?: string;
+  /** P1-4: 避免 connectStream 竞态 */
+  connectRequestId: number;
 }
 
-// 全局流状态存储，按 agentId 管理
+// 全局流状态存储，按 streamKey 管理
 const streams = new Map<string, StreamState>();
 
 // ==================== 内部函数 ====================
@@ -49,11 +59,13 @@ function createStreamState(): StreamState {
     canvas,
     status: 'disconnected',
     subscribers: new Set(),
-    wsUrl: null,
+    transportOrUrl: null,
     retryCount: 0,
     retryTimer: null,
     frameTimer: null,
-    viewOnly: false,  // 默认允许交互
+    viewOnly: false,
+    deviceId: undefined,
+    connectRequestId: 0,
   };
 }
 
@@ -111,34 +123,38 @@ function stopFrameCapture(state: StreamState) {
   }
 }
 
-async function connectStream(agentId: string) {
-  let state = streams.get(agentId);
+async function connectStream(streamKey: string, pcClientId?: string) {
+  let state = streams.get(streamKey);
   if (!state) {
     state = createStreamState();
-    streams.set(agentId, state);
+    streams.set(streamKey, state);
   }
-  
+  state.deviceId = pcClientId;
+  const reqId = ++state.connectRequestId;
+
   // 如果已经连接或正在连接，不重复连接
   if (state.status === 'connected' || state.status === 'connecting') {
     return;
   }
-  
+
   state.status = 'connecting';
   notifySubscribers(state, 'status');
-  
+
   try {
-    // 获取 WebSocket URL
-    if (!state.wsUrl) {
-      state.wsUrl = await vmService.getVncUrl(agentId);
+    // 获取传输（OTA 模式为 VncBridgeTransport，否则为 WebSocket URL）
+    // P1-2: 移除 testWebSocket，设计 §3.3 要求依赖后端 ensure_vnc_endpoint
+    if (!state.transportOrUrl) {
+      state.transportOrUrl = await vmService.getVncTransport(streamKey, pcClientId).catch((err: any) => {
+        notifySubscribers(state, 'error', err?.message || 'Failed to get VNC transport');
+        state.status = 'error';
+        notifySubscribers(state, 'status');
+        throw err;
+      });
     }
-    
-    // 先测试 WebSocket 是否可用（探测失败时清除缓存，下次重试重新拉取 URL）
-    const wsAvailable = await testWebSocket(state.wsUrl);
-    if (!wsAvailable) {
-      state.wsUrl = null;
-      throw new Error('VNC WebSocket not available');
-    }
-    
+
+    // P1-4: 竞态校验
+    if (reqId !== state.connectRequestId) return;
+
     // 创建 RFB 容器
     // 初始隐藏，但可以被移动到可见位置用于全屏交互
     const container = document.createElement('div');
@@ -151,14 +167,13 @@ async function connectStream(agentId: string) {
     
     state.rfbContainer = container;
     
-    // 创建 RFB 连接
-    const rfb = new RFB(container, state.wsUrl, {
-      shared: true,
-      credentials: {},
+    // 创建 RFB 连接（Phase 3: 使用 RFB_OPTIONS，frame capture 需 override clipViewport）
+    const rfb = new RFB(container, state.transportOrUrl as never, {
+      ...RFB_OPTIONS,
     });
     
     rfb.scaleViewport = true;
-    rfb.clipViewport = false;  // conflicts with scaleViewport
+    rfb.clipViewport = false;  // Frame capture: 避免 clipping 以获取完整 framebuffer
     rfb.resizeSession = false;
     rfb.viewOnly = state.viewOnly;
     rfb.qualityLevel = 6;
@@ -169,17 +184,21 @@ async function connectStream(agentId: string) {
     
     // 监听连接事件
     rfb.addEventListener('connect', () => {
-      console.log(`[VNCStream] Connected to ${agentId}`);
+      console.log(`[VNCStream] Connected to ${streamKey}`);
       if (state) {
         state.status = 'connected';
         state.retryCount = 0;
         notifySubscribers(state, 'status');
         startFrameCapture(state);
+        // P1-3: vncStream 接入 DeviceStatusStore
+        useDeviceStatusStore.getState().incrementVncConnectionCount();
       }
     });
     
     rfb.addEventListener('disconnect', (e: any) => {
-      console.log(`[VNCStream] Disconnected from ${agentId}:`, e.detail?.clean ? 'clean' : 'unclean');
+      const reason = e?.detail?.reason ?? e?.reason;
+      const clean = e?.detail?.clean;
+      console.log(`[VNCStream] Disconnected from ${streamKey}:`, clean ? 'clean' : 'unclean', reason || '');
       if (state) {
         stopFrameCapture(state);
         state.rfb = null;
@@ -191,23 +210,37 @@ async function connectStream(agentId: string) {
         
         const wasConnected = state.status === 'connected';
         state.status = wasConnected ? 'disconnected' : 'error';
+        // 连接失败时清除 transportOrUrl 缓存，下次重试重新拉取
+        if (state.status === 'error') {
+          if (state.transportOrUrl && typeof state.transportOrUrl !== 'string' && 'close' in state.transportOrUrl) {
+            (state.transportOrUrl as VncBridgeTransport).close();
+          }
+          state.transportOrUrl = null;
+          if (reason) {
+            notifySubscribers(state, 'error', reason);
+          }
+        }
         notifySubscribers(state, 'status');
         
-        // 自动重连（如果有订阅者）
-        if (state.subscribers.size > 0 && state.retryCount < 3) {
+        // P1-3: 断开时 decrement
+        useDeviceStatusStore.getState().decrementVncConnectionCount();
+        // P1-1: 5 次、指数退避；P0-6: 使用 state.deviceId
+        const pcId = state.deviceId;
+        if (state.subscribers.size > 0 && state.retryCount < VNC_MAX_RETRIES) {
           state.retryCount++;
-          console.log(`[VNCStream] Scheduling reconnect for ${agentId} (${state.retryCount}/3)`);
+          const delay = VNC_RETRY_DELAY_MS * Math.pow(2, state.retryCount - 1);
+          console.log(`[VNCStream] Scheduling reconnect for ${streamKey} (${state.retryCount}/${VNC_MAX_RETRIES}) in ${delay}ms`);
           state.retryTimer = setTimeout(() => {
             if (state && state.subscribers.size > 0) {
-              connectStream(agentId);
+              connectStream(streamKey, pcId);
             }
-          }, 2000);
+          }, delay);
         }
       }
     });
     
     rfb.addEventListener('securityfailure', (e: any) => {
-      console.error(`[VNCStream] Security failure for ${agentId}:`, e.detail?.reason);
+      console.error(`[VNCStream] Security failure for ${streamKey}:`, e.detail?.reason);
       if (state) {
         state.status = 'error';
         notifySubscribers(state, 'error', e.detail?.reason || 'Security failure');
@@ -216,50 +249,39 @@ async function connectStream(agentId: string) {
     });
     
   } catch (e: any) {
-    console.error(`[VNCStream] Failed to connect to ${agentId}:`, e);
+    console.error(`[VNCStream] Failed to connect to ${streamKey}:`, e);
     if (state) {
+      if (state.transportOrUrl && typeof state.transportOrUrl !== 'string' && 'close' in state.transportOrUrl) {
+        (state.transportOrUrl as VncBridgeTransport).close();
+      }
+      state.transportOrUrl = null;
       state.status = 'error';
       notifySubscribers(state, 'error', e.message || 'Connection failed');
       notifySubscribers(state, 'status');
       
-      // 自动重连
-      if (state.subscribers.size > 0 && state.retryCount < 3) {
+      // P1-1: 5 次、指数退避；P0-6: 使用 state.deviceId
+      const pcId = state.deviceId;
+      if (state.subscribers.size > 0 && state.retryCount < VNC_MAX_RETRIES) {
         state.retryCount++;
+        const delay = VNC_RETRY_DELAY_MS * Math.pow(2, state.retryCount - 1);
         state.retryTimer = setTimeout(() => {
           if (state && state.subscribers.size > 0) {
-            connectStream(agentId);
+            connectStream(streamKey, pcId);
           }
-        }, 3000);
+        }, delay);
       }
     }
   }
 }
 
-async function testWebSocket(url: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const ws = new WebSocket(url);
-    const timeout = setTimeout(() => {
-      ws.close();
-      resolve(false);
-    }, WS_CONFIG.CONNECTION_TIMEOUT);
-    
-    ws.onopen = () => {
-      clearTimeout(timeout);
-      ws.close();
-      resolve(true);
-    };
-    
-    ws.onerror = () => {
-      clearTimeout(timeout);
-      resolve(false);
-    };
-  });
-}
-
-function disconnectStream(agentId: string) {
-  const state = streams.get(agentId);
+function disconnectStream(streamKey: string) {
+  const state = streams.get(streamKey);
   if (!state) return;
-  
+
+  if (state.status === 'connected') {
+    useDeviceStatusStore.getState().decrementVncConnectionCount();
+  }
+
   if (state.retryTimer) {
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
@@ -273,7 +295,10 @@ function disconnectStream(agentId: string) {
   }
   
   state.status = 'disconnected';
-  state.wsUrl = null;
+  if (state.transportOrUrl && typeof state.transportOrUrl !== 'string' && 'close' in state.transportOrUrl) {
+    (state.transportOrUrl as VncBridgeTransport).close();
+  }
+  state.transportOrUrl = null;
   notifySubscribers(state, 'status');
 }
 
@@ -281,15 +306,16 @@ function disconnectStream(agentId: string) {
 
 /**
  * 订阅 VNC 流
- * @param agentId Agent ID
+ * @param streamKey VNC 流标识
  * @param subscriber 订阅者回调
+ * @param pcClientId 可选：目标 PC 标识，多 PC 时传入可指定目标
  * @returns 取消订阅函数
  */
-export function subscribeToVNCStream(agentId: string, subscriber: StreamSubscriber): () => void {
-  let state = streams.get(agentId);
+export function subscribeToVNCStream(streamKey: string, subscriber: StreamSubscriber, pcClientId?: string): () => void {
+  let state = streams.get(streamKey);
   if (!state) {
     state = createStreamState();
-    streams.set(agentId, state);
+    streams.set(streamKey, state);
   }
   
   state.subscribers.add(subscriber);
@@ -299,7 +325,7 @@ export function subscribeToVNCStream(agentId: string, subscriber: StreamSubscrib
   
   // 如果还没连接，开始连接
   if (state.status === 'disconnected' || state.status === 'error') {
-    connectStream(agentId);
+    connectStream(streamKey, pcClientId);
   }
   
   // 返回取消订阅函数
@@ -309,8 +335,8 @@ export function subscribeToVNCStream(agentId: string, subscriber: StreamSubscrib
       
       // 如果没有订阅者了，断开连接
       if (state.subscribers.size === 0) {
-        console.log(`[VNCStream] No subscribers left for ${agentId}, disconnecting`);
-        disconnectStream(agentId);
+        console.log(`[VNCStream] No subscribers left for ${streamKey}, disconnecting`);
+        disconnectStream(streamKey);
       }
     }
   };
@@ -319,24 +345,24 @@ export function subscribeToVNCStream(agentId: string, subscriber: StreamSubscrib
 /**
  * 获取流的共享 Canvas
  */
-export function getVNCStreamCanvas(agentId: string): HTMLCanvasElement | null {
-  const state = streams.get(agentId);
+export function getVNCStreamCanvas(streamKey: string): HTMLCanvasElement | null {
+  const state = streams.get(streamKey);
   return state?.canvas || null;
 }
 
 /**
  * 获取流状态
  */
-export function getVNCStreamStatus(agentId: string): StreamStatus {
-  const state = streams.get(agentId);
+export function getVNCStreamStatus(streamKey: string): StreamStatus {
+  const state = streams.get(streamKey);
   return state?.status || 'disconnected';
 }
 
 /**
  * 设置 viewOnly 模式
  */
-export function setVNCViewOnly(agentId: string, viewOnly: boolean) {
-  const state = streams.get(agentId);
+export function setVNCViewOnly(streamKey: string, viewOnly: boolean) {
+  const state = streams.get(streamKey);
   if (state) {
     state.viewOnly = viewOnly;
     if (state.rfb) {
@@ -348,8 +374,8 @@ export function setVNCViewOnly(agentId: string, viewOnly: boolean) {
 /**
  * 发送按键事件
  */
-export function sendVNCKey(agentId: string, keysym: number, code: string | null, down: boolean) {
-  const state = streams.get(agentId);
+export function sendVNCKey(streamKey: string, keysym: number, code: string | null, down: boolean) {
+  const state = streams.get(streamKey);
   if (state?.rfb) {
     state.rfb.sendKey(keysym, code, down);
   }
@@ -358,8 +384,8 @@ export function sendVNCKey(agentId: string, keysym: number, code: string | null,
 /**
  * 获取 canvas 尺寸信息
  */
-export function getVNCCanvasSize(agentId: string): { width: number; height: number } | null {
-  const state = streams.get(agentId);
+export function getVNCCanvasSize(streamKey: string): { width: number; height: number } | null {
+  const state = streams.get(streamKey);
   if (state?.rfb) {
     const rfb = state.rfb as any;
     return {
@@ -373,8 +399,8 @@ export function getVNCCanvasSize(agentId: string): { width: number; height: numb
 /**
  * 发送鼠标按下事件
  */
-export function sendVNCMouseDown(agentId: string, x: number, y: number, button: number) {
-  const state = streams.get(agentId);
+export function sendVNCMouseDown(streamKey: string, x: number, y: number, button: number) {
+  const state = streams.get(streamKey);
   if (state?.rfb && !state.viewOnly) {
     const rfb = state.rfb as any;
     if (rfb._rfbConnectionState === 'connected') {
@@ -388,8 +414,8 @@ export function sendVNCMouseDown(agentId: string, x: number, y: number, button: 
 /**
  * 发送鼠标抬起事件
  */
-export function sendVNCMouseUp(agentId: string, x: number, y: number, button: number) {
-  const state = streams.get(agentId);
+export function sendVNCMouseUp(streamKey: string, x: number, y: number, button: number) {
+  const state = streams.get(streamKey);
   if (state?.rfb && !state.viewOnly) {
     const rfb = state.rfb as any;
     if (rfb._rfbConnectionState === 'connected') {
@@ -402,8 +428,8 @@ export function sendVNCMouseUp(agentId: string, x: number, y: number, button: nu
 /**
  * 发送鼠标移动事件
  */
-export function sendVNCMouseMove(agentId: string, x: number, y: number) {
-  const state = streams.get(agentId);
+export function sendVNCMouseMove(streamKey: string, x: number, y: number) {
+  const state = streams.get(streamKey);
   if (state?.rfb && !state.viewOnly) {
     const rfb = state.rfb as any;
     if (rfb._rfbConnectionState === 'connected') {
@@ -414,21 +440,24 @@ export function sendVNCMouseMove(agentId: string, x: number, y: number) {
 
 /**
  * 重新连接
+ * @param streamKey VNC 流标识
+ * @param pcClientId 可选，多 PC 时传入 pc_client_id；不传则使用 state 中持久化的值
  */
-export function reconnectVNCStream(agentId: string) {
-  const state = streams.get(agentId);
+export function reconnectVNCStream(streamKey: string, pcClientId?: string) {
+  const state = streams.get(streamKey);
   if (state) {
     state.retryCount = 0;
-    disconnectStream(agentId);
-    setTimeout(() => connectStream(agentId), 100);
+    if (pcClientId !== undefined) state.deviceId = pcClientId;
+    disconnectStream(streamKey);
+    setTimeout(() => connectStream(streamKey, state.deviceId), 100);
   }
 }
 
 /**
  * 获取 RFB 实例（用于高级操作）
  */
-export function getVNCRFB(agentId: string): RFB | null {
-  const state = streams.get(agentId);
+export function getVNCRFB(streamKey: string): RFB | null {
+  const state = streams.get(streamKey);
   return state?.rfb || null;
 }
 
@@ -436,8 +465,8 @@ export function getVNCRFB(agentId: string): RFB | null {
  * 将 RFB 容器附加到指定的父元素
  * 用于全屏模式，让 RFB 直接处理输入事件
  */
-export function attachVNCContainer(agentId: string, parent: HTMLElement): boolean {
-  const state = streams.get(agentId);
+export function attachVNCContainer(streamKey: string, parent: HTMLElement): boolean {
+  const state = streams.get(streamKey);
   if (!state?.rfbContainer) return false;
   
   // 将容器移动到父元素中
@@ -457,8 +486,8 @@ export function attachVNCContainer(agentId: string, parent: HTMLElement): boolea
 /**
  * 将 RFB 容器从父元素中分离（隐藏）
  */
-export function detachVNCContainer(agentId: string): void {
-  const state = streams.get(agentId);
+export function detachVNCContainer(streamKey: string): void {
+  const state = streams.get(streamKey);
   if (!state?.rfbContainer) return;
   
   // 将容器移回 body 并隐藏

@@ -22,6 +22,12 @@ declare global {
   }
 }
 
+/**
+ * OTA 前端允许的 origin 列表。
+ * 与 remote-frontend.json 的 remote.urls 的 host 必须一致，修改时需同步更新。
+ */
+export const OTA_ORIGINS = ['https://relay.gradievo.com', 'https://api.gradievo.com'] as const;
+
 /** API 配置 */
 const rawGatewayUrl = import.meta.env.VITE_GATEWAY_URL?.trim();
 // iOS/移动端构建时 .env 可能未加载，使用默认 Gateway 避免启动崩溃
@@ -114,8 +120,8 @@ export const VM_CONFIG = {
 
 /** WebSocket/VNC 配置 */
 export const WS_CONFIG = {
-  /** WebSocket 连接超时（毫秒）- P2P 打洞需 5–15s，放宽以支持远端 VNC */
-  CONNECTION_TIMEOUT: 15000,
+  /** WebSocket 连接超时（毫秒）- P2P+relay 耗时匹配，30s 与后端对齐 */
+  CONNECTION_TIMEOUT: 30000,
   
   /** WebSocket 快速超时（毫秒） - 用于健康检查 */
   QUICK_TIMEOUT: 1500,
@@ -123,6 +129,15 @@ export const WS_CONFIG = {
   /** VNC 重连延迟（毫秒） */
   VNC_RECONNECT_DELAY: 500,
   
+  /** useVnc 重连：初始延迟（毫秒），指数退避基数 2 */
+  VNC_RETRY_DELAY_MS: 2000,
+  /** useVnc 重连：最大重试次数 */
+  VNC_MAX_RETRIES: 5,
+  /** 设备启动后等待 VNC 就绪（毫秒） */
+  VNC_START_WAIT_MS: 2000,
+  /** createVncTransport 超时（毫秒），P2P+relay 与后端 30s 对齐 */
+  VNC_TRANSPORT_TIMEOUT_MS: 30000,
+
   /** vmcontrol 服务端口 */
   VMCONTROL_PORT: parseInt(import.meta.env.VITE_VMCONTROL_PORT || '19996'),
 } as const;

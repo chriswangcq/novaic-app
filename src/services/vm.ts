@@ -8,6 +8,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { PortConfig } from './api';
 import { VM_CONFIG, API_CONFIG, DEFAULT_PORTS, LOCAL_ENDPOINTS } from '../config';
+import { shouldUseVncBridge, VncBridgeTransport } from './vncBridge';
 
 // VM 状态类型 - matches Gateway VmStatus
 export interface VmStatus {
@@ -158,11 +159,32 @@ class VmService {
    * 前端始终通过 Tauri VNC 代理连接，代理内部自动路由：
    *   本地设备 → Unix socket
    *   远程设备 → QUIC P2P tunnel（Phase 3）
+   *
+   * @param resourceId - VM/agent 资源标识
+   * @param pcClientId - 可选：vmcontrol_device_id（目标 PC），多 PC 时传入可指定目标；未传则从 my-devices 取第一个在线
    */
-  async getVncUrl(deviceId: string): Promise<string> {
-    const url = await invoke<string>('get_vnc_proxy_url', { deviceId });
-    console.log(`[VM Service] VNC proxy URL: ${url}`);
+  async getVncUrl(resourceId: string, pcClientId?: string): Promise<string> {
+    const url = await invoke<string>('get_vnc_proxy_url', { resourceId, pcClientId });
     return url;
+  }
+
+  /**
+   * 获取 VNC 传输：OTA 模式返回 VncBridgeTransport，否则返回 WebSocket URL。
+   * RFB 支持 string | WebSocket，调用方直接传入 new RFB(container, transportOrUrl, opts)。
+   *
+   * @param resourceId - VM/agent 资源标识
+   * @param pcClientId - 可选：vmcontrol_device_id（目标 PC）
+   */
+  async getVncTransport(
+    resourceId: string,
+    pcClientId?: string
+  ): Promise<string | VncBridgeTransport> {
+    if (shouldUseVncBridge()) {
+      const transport = new VncBridgeTransport(resourceId, pcClientId);
+      await transport.connect();
+      return transport;
+    }
+    return this.getVncUrl(resourceId, pcClientId);
   }
 
   /**

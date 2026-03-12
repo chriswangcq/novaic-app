@@ -368,9 +368,18 @@ function connectStream(deviceSerial: string) {
   state.pendingFrames = [];
 
   // 通过 Tauri proxy command 获取 URL（走 QUIC P2P tunnel）
-  void getScrcpyProxyUrl(deviceSerial).then(wsUrl => {
-    _doConnectStream(deviceSerial, wsUrl);
-  });
+  void getScrcpyProxyUrl(deviceSerial)
+    .then(wsUrl => {
+      _doConnectStream(deviceSerial, wsUrl);
+    })
+    .catch((err: any) => {
+      const s = streams.get(deviceSerial);
+      if (s) {
+        notifySubscribers(s, 'error', err?.message || 'Failed to get Scrcpy proxy URL');
+        s.status = 'error';
+        notifySubscribers(s, 'status');
+      }
+    });
 }
 
 function _doConnectStream(deviceSerial: string, wsUrl: string) {
@@ -392,8 +401,8 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
   ws.binaryType = 'arraybuffer';
   state.ws = ws;
 
-  // 连接超时：15s 内未 open 则关闭并触发重连（解决 "Socket未连接" 场景）
-  const CONNECT_TIMEOUT_MS = 15000;
+  // 连接超时：30s 与后端 P2P+relay 耗时匹配
+  const CONNECT_TIMEOUT_MS = 30000;
   const connectTimeout = setTimeout(() => {
     if (ws.readyState === WebSocket.CONNECTING) {
       console.warn(`[ScrcpyStream] Connect timeout (${CONNECT_TIMEOUT_MS}ms) for ${deviceSerial}`);
@@ -493,11 +502,12 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
     console.error(`[ScrcpyStream] WebSocket error for ${deviceSerial}:`, e);
   };
   
-  ws.onclose = () => {
+  ws.onclose = (e: CloseEvent) => {
     clearTimeout(connectTimeout);
     if (!state) return;
     
-    console.log(`[ScrcpyStream] WebSocket closed for ${deviceSerial}`);
+    const reason = e?.reason;
+    console.log(`[ScrcpyStream] WebSocket closed for ${deviceSerial}`, reason ? `: ${reason}` : '');
     
     if (state.decoder) {
       state.decoder.close();
@@ -506,6 +516,9 @@ function _doConnectStream(deviceSerial: string, wsUrl: string) {
     
     const wasConnected = state.status === 'connected';
     state.status = wasConnected ? 'disconnected' : 'error';
+    if (state.status === 'error' && reason) {
+      notifySubscribers(state, 'error', reason);
+    }
     notifySubscribers(state, 'status');
     
     // 自动重连（如果有订阅者）。指数退避：2s / 4s / 8s

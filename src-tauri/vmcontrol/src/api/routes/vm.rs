@@ -496,8 +496,9 @@ pub async fn start_vm(
     let ga_socket = format!("/tmp/novaic/novaic-ga-{}.sock", agent_id);
     let vnc_socket = format!("/tmp/novaic/novaic-vnc-{}.sock", agent_id);
     
-    // Remove stale QMP socket if it exists
+    // Remove stale QMP and VNC sockets if they exist (VM restart / crash recovery)
     std::fs::remove_file(&qmp_socket).ok();
+    std::fs::remove_file(&vnc_socket).ok();
 
     // Build hostfwd: SSH, VMUSE, and subuser VNC ports (5900 + display_num).
     // Subuser ports must be in QEMU args so they survive VM restart (QMP hostfwd is not persisted).
@@ -808,6 +809,8 @@ pub async fn stop_vm(
     if std::fs::remove_file(&vnc_socket_path).is_ok() {
         tracing::info!("[stop_vm] Removed VNC socket: {}", vnc_socket_path);
     }
+    // Phase 3: 清理 subuser 代理（abort 任务、移除 socket、清理 registry）
+    p2p::vnc_endpoint::shutdown_proxy_for_vm(&id).await;
     let ga_socket_path = format!("{}/novaic-ga-{}.sock", SOCKET_DIR, id);
     std::fs::remove_file(&ga_socket_path).ok();
     let mcp_socket_path = format!("{}/novaic-mcp-{}.sock", SOCKET_DIR, id);

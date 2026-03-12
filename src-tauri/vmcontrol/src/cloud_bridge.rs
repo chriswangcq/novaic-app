@@ -282,24 +282,42 @@ async fn connect_and_run(
                 let did = device_id.to_string();
                 let base = vmcontrol_base_url.to_string();
                 tokio::spawn(async move {
-                    match p2p::relay::connect_via_relay(
-                        &relay_url,
-                        &jwt,
-                        &session_id,
-                        p2p::relay::RelayRole::Pc {
-                            device_id: did.clone(),
-                        },
-                    )
-                    .await
-                    {
-                        Ok(conn) => {
-                            tracing::info!("[CloudBridge] Relay connected, starting tunnel server");
-                            p2p::tunnel::run_tunnel_server(conn, base).await;
-                        }
-                        Err(e) => {
-                            tracing::warn!("[CloudBridge] connect_via_relay failed: {}", e);
+                    let mut last_err = None;
+                    for attempt in 1..=3 {
+                        match p2p::relay::connect_via_relay(
+                            &relay_url,
+                            &jwt,
+                            &session_id,
+                            p2p::relay::RelayRole::Pc {
+                                device_id: did.clone(),
+                            },
+                        )
+                        .await
+                        {
+                            Ok(conn) => {
+                                tracing::info!("[CloudBridge] Relay connected, starting tunnel server");
+                                p2p::tunnel::run_tunnel_server(conn, base).await;
+                                return;
+                            }
+                            Err(e) => {
+                                last_err = Some(e.to_string());
+                                if attempt < 3 {
+                                    let delay_ms = 500 * attempt as u64;
+                                    tracing::warn!(
+                                        "[CloudBridge] connect_via_relay attempt {} failed: {}, retrying in {}ms",
+                                        attempt,
+                                        last_err.as_ref().unwrap(),
+                                        delay_ms
+                                    );
+                                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                                }
+                            }
                         }
                     }
+                    tracing::warn!(
+                        "[CloudBridge] connect_via_relay failed after 3 attempts: {}",
+                        last_err.unwrap_or_else(|| "unknown".into())
+                    );
                 });
                 continue;
             }

@@ -97,6 +97,8 @@ export interface AppState {
   // Bootstrap
   isInitialized: boolean;
   user: UserInfo | null;
+  /** P2-5: 本实例 app_instance_id，供 my-devices 等调用时标注 is_local */
+  appInstanceId: string | null;
 
   // Connection / server URL
   gatewayUrl: string;
@@ -168,6 +170,7 @@ export const useAppStore = create<Store>((set) => ({
   // ── Initial state ──────────────────────────────────────────────────────────
   isInitialized:      false,
   user:               null,
+  appInstanceId:      null,
   gatewayUrl:         API_CONFIG.GATEWAY_URL,
   agents:             [],
   currentAgentId:     null,

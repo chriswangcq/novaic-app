@@ -25,6 +25,10 @@ interface VNCViewSharedProps {
   agentId?: string;
   /** Device ID，主桌面时使用（与 devices.start 一致，VNC socket 为 novaic-vnc-{deviceId}.sock） */
   deviceId?: string;
+  /** 多 PC 时目标 pc_client_id，传给 subscribeToVNCStream 用于正确路由 */
+  pcClientId?: string;
+  /** deviceMode 时替代 vmService.start：使用 api.devices.start(deviceId, pcClientId) */
+  onStart?: () => Promise<void>;
   /** 是否为缩略图模式 */
   isThumbnail?: boolean;
   /** 自定义 className */
@@ -34,6 +38,8 @@ interface VNCViewSharedProps {
 function VNCViewSharedComponent({ 
   agentId: propAgentId,
   deviceId: propDeviceId,
+  pcClientId: propPcClientId,
+  onStart: propOnStart,
   isThumbnail = false,
   className,
 }: VNCViewSharedProps) {
@@ -102,13 +108,13 @@ function VNCViewSharedComponent({
       onError: (error) => {
         setErrorMsg(error);
       },
-    });
+    }, propPcClientId);
     
     return () => {
       console.log(`[VNCViewShared] Unsubscribing from stream for ${streamKey}`);
       unsubscribe();
     };
-  }, [streamKey, copyFrame, setVncConnected, isThumbnail]);
+  }, [streamKey, propPcClientId, copyFrame, setVncConnected, isThumbnail]);
   
   // 更新 viewOnly 模式
   useEffect(() => {
@@ -117,28 +123,32 @@ function VNCViewSharedComponent({
     }
   }, [streamKey, vncLocked]);
   
-  // 启动 VM（仍用 agentId，Gateway 会解析为 device_id）
+  // 启动 VM：deviceMode 用 onStart，否则用 agentId + vmService.start
   const startVm = useCallback(async () => {
-    if (!agentId || isStarting) return;
+    if ((!agentId && !propOnStart) || isStarting) return;
     
     setIsStarting(true);
     setErrorMsg('');
     
     try {
-      await vmService.start(agentId);
+      if (propOnStart) {
+        await propOnStart();
+      } else {
+        await vmService.start(agentId!);
+      }
       await new Promise(r => setTimeout(r, 2000));
-      reconnectVNCStream(streamKey);
-    } catch (e: any) {
-      const msg = e?.message || '';
+      reconnectVNCStream(streamKey, propPcClientId);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
       if (!msg.includes('already running')) {
         setErrorMsg(msg || 'Failed to start VM');
       } else {
-        reconnectVNCStream(streamKey);
+        reconnectVNCStream(streamKey, propPcClientId);
       }
     } finally {
       setIsStarting(false);
     }
-  }, [agentId, streamKey, isStarting]);
+  }, [agentId, propOnStart, streamKey, propPcClientId, isStarting]);
   
   
   // 全屏模式：将 RFB 容器附加到我们的容器中

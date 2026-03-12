@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react';
 import { X, Monitor, Check, AlertCircle, Download, Settings } from 'lucide-react';
 import { api, AvailableImage } from '../../services/api';
 import * as setup from '../../services/setup';
+import { useAppStore } from '../../application/store';
 
 interface Props {
   isOpen: boolean;
@@ -45,6 +46,7 @@ type Phase = 'config' | 'creating' | 'downloading' | 'setting_up' | 'complete' |
 interface Progress { phase: Phase; progress: number; message: string; error?: string }
 
 export function AddLinuxVMUserModal({ isOpen, onClose, onCreated }: Props) {
+  const appInstanceId = useAppStore((s) => s.appInstanceId);
   const [osType, setOsType] = useState('ubuntu');
   const [osVersion, setOsVersion] = useState('24.04');
   const [baseImage, setBaseImage] = useState('');
@@ -75,6 +77,11 @@ export function AddLinuxVMUserModal({ isOpen, onClose, onCreated }: Props) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const pcClientId = await api.p2p.resolveCurrentPcClientId(appInstanceId);
+      if (pcClientId === undefined) {
+        setProg({ phase: 'error', progress: 0, message: 'Setup failed', error: '请选择目标 PC 或确保 Tauri 应用已连接' });
+        return;
+      }
       setProg({ phase: 'creating', progress: 5, message: 'Creating device…' });
       const device = await api.devices.createLinuxForUser({
         name: 'Linux VM', memory: parseInt(memory), cpus,
@@ -88,10 +95,10 @@ export function AddLinuxVMUserModal({ isOpen, onClose, onCreated }: Props) {
       );
 
       setProg({ phase: 'setting_up', progress: 60, message: 'Setting up disk…' });
-      await api.devices.setup(device.id, { source_image: imagePath, use_cn_mirrors: useCnMirrors });
+      await api.devices.setup(device.id, { source_image: imagePath, use_cn_mirrors: useCnMirrors }, pcClientId);
 
       setProg({ phase: 'setting_up', progress: 80, message: 'Starting VM…' });
-      await api.devices.start(device.id);
+      await api.devices.start(device.id, pcClientId);
 
       setProg({ phase: 'complete', progress: 100, message: 'Done!' });
       onCreated?.();

@@ -1,19 +1,18 @@
 //! VNC WebSocket Proxy — 统一 VNC 连接入口
 //!
-//! # 打洞逻辑（统一）
+//! # 连接逻辑（统一）
 //!
-//! 本地与远端均使用 p2p（hole_punch + relay + tunnel）：
+//! 本地与远端均使用 p2p（relay + tunnel，打洞已移除）：
 //! - 本地（device_id == 本机）：connect_direct(127.0.0.1) → tunnel::open_vnc_stream
-//! - 远端：P2pClient::connect（discovery.lookup + punch_or_relay）→ tunnel::open_vnc_stream
+//! - 远端：P2pClient::connect（relay）→ tunnel::open_vnc_stream
 //!
-//! # URL 结构（统一使用 vmcontrol_device_id）
+//! # URL 结构（统一使用 pc_client_id）
 //!
-//!   ws://127.0.0.1:{proxy_port}/vnc/{vmcontrol_device_id}/{agent_id}
+//!   ws://127.0.0.1:{proxy_port}/vnc/{pc_client_id}/{resource_id}
 //!
-//! - `vmcontrol_device_id`：VmControl 实例的唯一身份（Ed25519 公钥 hex），
-//!   用于定位设备（本机判断 / Gateway locate）
-//! - `agent_id`：VM / Android agent 的数据库 ID，
-//!   用于在 VmControl 内部路由到对应的 VNC socket
+//! - `pc_client_id`（即 vmcontrol_device_id）：物理 PC 标识，VmControl 实例的 Ed25519 公钥 hex，
+//!   用于定位设备（本机判断 / Gateway locate）。my-devices 返回的 device_id 即为此值。
+//! - `resource_id` 即 agent_id：maindesk 为 device_id；subuser 为 `{device_id}:{username}`
 //!
 //! # 路由规则
 //!
@@ -21,18 +20,19 @@
 //!       → QUIC loopback 127.0.0.1:19998（桌面 app）
 //!
 //!   device_id != 本机（远端 PC）
-//!       → P2pClient::connect（discovery + punch_or_relay）→ QUIC P2P（手机 app）
+//!       → P2pClient::connect（relay）→ QUIC P2P（手机 app）
 //!
 //! 两条路共用同一个 tunnel::open_vnc_stream 协议，完全对称。
 
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio::net::TcpListener;
 use axum::{
     Router,
     routing::get,
-    extract::{Path, State, ws::{WebSocketUpgrade, Message}},
+    extract::{Path, State, ws::{WebSocketUpgrade, Message, CloseFrame}},
     response::Response,
 };
 use futures_util::sink::Sink;
@@ -57,6 +57,12 @@ pub type SharedP2pSetupError = Arc<RwLock<Option<(String, String)>>>;
 
 // ── Proxy State ───────────────────────────────────────────────────────────────
 
+/// Connection TTL: evict cached conns older than this to avoid NAT timeout / sleep wake.
+const CONN_TTL: Duration = Duration::from_secs(4 * 60);
+
+/// WebSocket upgrade timeout: P2P + relay + tunnel can take time; abort if stuck.
+const WS_UPGRADE_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 struct HandlerState {
     local_vmcontrol: SharedLocalVmControl,
@@ -65,10 +71,10 @@ struct HandlerState {
     cloud_token:     SharedCloudToken,
     vmcontrol_url:   SharedVmcontrolUrl,
     p2p_client:      Arc<p2p::P2pClient>,
-    /// 本地 QUIC 连接缓存（多个 VNC 窗口复用同一条隧道）
-    local_conn:      Arc<Mutex<Option<Connection>>>,
-    /// 远端 QUIC 连接缓存，key = vmcontrol_device_id
-    remote_conns:    Arc<Mutex<HashMap<String, Connection>>>,
+    /// 本地 QUIC 连接缓存（多个 VNC 窗口复用同一条隧道），带创建时间用于 TTL 驱逐
+    local_conn:      Arc<Mutex<Option<(Connection, Instant)>>>,
+    /// 远端 QUIC 连接缓存，key = vmcontrol_device_id，带创建时间用于 TTL 驱逐
+    remote_conns:    Arc<Mutex<HashMap<String, (Connection, Instant)>>>,
 }
 
 pub struct VncProxyServer {
@@ -100,8 +106,8 @@ impl VncProxyServer {
         }
     }
 
-    pub fn start(&mut self) -> tokio::sync::oneshot::Receiver<u16> {
-        let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
+    pub fn start(&mut self) -> tokio::sync::oneshot::Receiver<Result<u16, String>> {
+        let (port_tx, port_rx) = tokio::sync::oneshot::channel::<Result<u16, String>>();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         self.shutdown_tx = Some(shutdown_tx);
 
@@ -119,15 +125,20 @@ impl VncProxyServer {
         tauri::async_runtime::spawn(async move {
             let listener = match TcpListener::bind("127.0.0.1:0").await {
                 Ok(l) => l,
-                Err(e) => { eprintln!("[VncProxy] bind failed: {}", e); return; }
+                Err(e) => {
+                    let msg = e.to_string();
+                    tracing::error!("[VncProxy] bind failed: {}", msg);
+                    let _ = port_tx.send(Err(msg));
+                    return;
+                }
             };
             let actual_port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
             tracing::info!("[VncProxy] Listening on 127.0.0.1:{}", actual_port);
-            let _ = port_tx.send(actual_port);
+            let _ = port_tx.send(Ok(actual_port));
 
             let app = Router::new()
-                .route("/vnc/:device_id/:agent_id",       get(vnc_handler))
-                .route("/scrcpy/:device_id/:device_serial", get(scrcpy_handler))
+                .route("/vnc/:device_id/:agent_id",       get(vnc_handler))       // device_id = pc_client_id（物理 PC 标识）
+                .route("/scrcpy/:device_id/:device_serial", get(scrcpy_handler))  // device_id = pc_client_id
                 .with_state(state);
 
             axum::serve(listener, app)
@@ -171,8 +182,39 @@ async fn vnc_handler(
 ) -> Response {
     ws.on_upgrade(move |socket| async move {
         tracing::info!("[VncProxy] WS: device={} agent={}", &device_id[..8.min(device_id.len())], agent_id);
-        if let Err(e) = route_vnc(socket, &device_id, &agent_id, state).await {
-            tracing::error!("[VncProxy] Error (device={} agent={}): {}", &device_id[..8.min(device_id.len())], agent_id, e);
+        // P0-2: 超时时发送 Close reason，前端可显示明确错误
+        let socket = Arc::new(tokio::sync::Mutex::new(Some(socket)));
+        let socket_for_route = socket.clone();
+        let device_id_route = device_id.clone();
+        let agent_id_route = agent_id.clone();
+        let device_id_err = device_id.clone();
+        let agent_id_err = agent_id.clone();
+        let device_id_timeout = device_id.clone();
+        let agent_id_timeout = agent_id.clone();
+        let route_fut = async move {
+            let mut guard = socket_for_route.lock().await;
+            if let Some(ws) = guard.take() {
+                route_vnc(ws, &device_id_route, &agent_id_route, state).await
+            } else {
+                anyhow::bail!("Connection timed out")
+            }
+        };
+        let timeout_fut = async move {
+            tokio::time::sleep(WS_UPGRADE_TIMEOUT).await;
+            let mut guard = socket.lock().await;
+            if let Some(mut ws) = guard.take() {
+                send_ws_close_with_reason(&mut ws, "VNC connection timed out (30s)").await;
+            }
+        };
+        tokio::select! {
+            r = route_fut => {
+                if let Err(e) = r {
+                    tracing::error!("[VncProxy] Error (device={} agent={}): {}", &device_id_err[..8.min(device_id_err.len())], agent_id_err, e);
+                }
+            }
+            _ = timeout_fut => {
+                tracing::error!("[VncProxy] Timeout (30s) device={} agent={}", &device_id_timeout[..8.min(device_id_timeout.len())], agent_id_timeout);
+            }
         }
     })
 }
@@ -184,8 +226,10 @@ async fn scrcpy_handler(
 ) -> Response {
     ws.on_upgrade(move |socket| async move {
         tracing::info!("[ScrcpyProxy] WS: device={} serial={}", &device_id[..8.min(device_id.len())], device_serial);
-        if let Err(e) = route_scrcpy(socket, &device_id, &device_serial, state).await {
-            tracing::error!("[ScrcpyProxy] Error (device={} serial={}): {}", &device_id[..8.min(device_id.len())], device_serial, e);
+        match tokio::time::timeout(WS_UPGRADE_TIMEOUT, route_scrcpy(socket, &device_id, &device_serial, state)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::error!("[ScrcpyProxy] Error (device={} serial={}): {}", &device_id[..8.min(device_id.len())], device_serial, e),
+            Err(_) => tracing::error!("[ScrcpyProxy] Timeout (30s) device={} serial={}", &device_id[..8.min(device_id.len())], device_serial),
         }
     })
 }
@@ -238,10 +282,21 @@ async fn route_scrcpy(
     }
 }
 
-// ── 辅助：错误时发送 Close 帧，避免客户端看到「连接被对方重置」──────────────────
+// ── 辅助：错误时发送 Close 帧（带 reason），前端可显示 "Device offline" 等具体错误 ───────
 
-async fn send_ws_close(ws: &mut axum::extract::ws::WebSocket) {
-    let _ = ws.send(Message::Close(None)).await;
+/// WebSocket close code 1011 = Internal Error (server encountered unexpected condition)
+const WS_CLOSE_INTERNAL_ERROR: u16 = 1011;
+
+async fn send_ws_close_with_reason(ws: &mut axum::extract::ws::WebSocket, reason: impl AsRef<str>) {
+    let reason_str = reason.as_ref();
+    // WebSocket close reason max 123 bytes; truncate to avoid protocol violation
+    let truncated = if reason_str.len() > 120 {
+        format!("{}...", &reason_str[..117])
+    } else {
+        reason_str.to_string()
+    };
+    let frame = CloseFrame { code: WS_CLOSE_INTERNAL_ERROR, reason: truncated.into() };
+    let _ = ws.send(Message::Close(Some(frame))).await;
 }
 
 // ── 本地路径：QUIC loopback ───────────────────────────────────────────────────
@@ -254,14 +309,15 @@ async fn serve_local_vnc(
     let conn = match get_or_create_local_conn(state).await {
         Ok(c) => c,
         Err(e) => {
-            send_ws_close(&mut ws).await;
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
     let (quic_send, quic_recv) = match p2p::tunnel::open_vnc_stream(&conn, agent_id).await {
         Ok(s) => s,
         Err(e) => {
-            send_ws_close(&mut ws).await;
+            *state.local_conn.lock().await = None;
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
@@ -277,14 +333,15 @@ async fn serve_local_scrcpy(
     let conn = match get_or_create_local_conn(state).await {
         Ok(c) => c,
         Err(e) => {
-            send_ws_close(&mut ws).await;
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
     let (quic_send, quic_recv) = match p2p::tunnel::open_scrcpy_stream(&conn, device_serial).await {
         Ok(s) => s,
         Err(e) => {
-            send_ws_close(&mut ws).await;
+            *state.local_conn.lock().await = None;
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
@@ -301,17 +358,15 @@ async fn serve_remote_scrcpy(
     let conn = match get_or_create_remote_conn(device_id, state).await {
         Ok(c) => c,
         Err(e) => {
-            send_ws_close(&mut ws).await;
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
     let (quic_send, quic_recv) = match p2p::tunnel::open_scrcpy_stream(&conn, device_serial).await {
         Ok(s) => s,
         Err(e) => {
-            let conns = state.remote_conns.clone();
-            let did = device_id.to_string();
-            tauri::async_runtime::spawn(async move { conns.lock().await.remove(&did); });
-            send_ws_close(&mut ws).await;
+            state.remote_conns.lock().await.remove(device_id);
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
@@ -319,12 +374,16 @@ async fn serve_remote_scrcpy(
     bridge_ws_quic_scrcpy(ws, quic_send, quic_recv).await
 }
 
+fn conn_still_valid(conn: &Connection, created_at: Instant) -> bool {
+    conn.close_reason().is_none() && created_at.elapsed() < CONN_TTL
+}
+
 async fn get_or_create_local_conn(state: &HandlerState) -> anyhow::Result<Connection> {
     // 先快速检查缓存（持锁时间极短）
     {
         let guard = state.local_conn.lock().await;
-        if let Some(conn) = guard.as_ref() {
-            if conn.close_reason().is_none() {
+        if let Some((ref conn, created_at)) = guard.as_ref() {
+            if conn_still_valid(conn, *created_at) {
                 return Ok(conn.clone());
             }
         }
@@ -345,8 +404,8 @@ async fn get_or_create_local_conn(state: &HandlerState) -> anyhow::Result<Connec
 
     // 持锁贯穿「再次检查 → 建连 → 写缓存」，防止多个 VNC 窗口并发各自建连
     let mut guard = state.local_conn.lock().await;
-    if let Some(conn) = guard.as_ref() {
-        if conn.close_reason().is_none() {
+    if let Some((ref conn, created_at)) = guard.as_ref() {
+        if conn_still_valid(conn, *created_at) {
             return Ok(conn.clone());
         }
         *guard = None;
@@ -360,7 +419,7 @@ async fn get_or_create_local_conn(state: &HandlerState) -> anyhow::Result<Connec
         .await
         .map_err(|e| anyhow::anyhow!("Local QUIC connect failed: {}", e))?;
 
-    *guard = Some(conn.clone());
+    *guard = Some((conn.clone(), Instant::now()));
     tracing::info!("[VncProxy] Local QUIC connection established");
     Ok(conn)
 }
@@ -376,17 +435,15 @@ async fn serve_remote_vnc(
     let conn = match get_or_create_remote_conn(device_id, state).await {
         Ok(c) => c,
         Err(e) => {
-            send_ws_close(&mut ws).await;
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
     let (quic_send, quic_recv) = match p2p::tunnel::open_vnc_stream(&conn, agent_id).await {
         Ok(s) => s,
         Err(e) => {
-            let conns = state.remote_conns.clone();
-            let did = device_id.to_string();
-            tauri::async_runtime::spawn(async move { conns.lock().await.remove(&did); });
-            send_ws_close(&mut ws).await;
+            state.remote_conns.lock().await.remove(device_id);
+            send_ws_close_with_reason(&mut ws, e.to_string()).await;
             return Err(e);
         }
     };
@@ -399,13 +456,15 @@ async fn get_or_create_remote_conn(
     device_id: &str,
     state: &HandlerState,
 ) -> anyhow::Result<Connection> {
-    // 持锁防止并发对同一 device_id 重复打洞
-    let mut guard = state.remote_conns.lock().await;
-    if let Some(conn) = guard.get(device_id) {
-        if conn.close_reason().is_none() {
-            return Ok(conn.clone());
+    // 快速路径：持锁仅做缓存查找
+    {
+        let mut guard = state.remote_conns.lock().await;
+        if let Some((conn, created_at)) = guard.get(device_id) {
+            if conn_still_valid(conn, *created_at) {
+                return Ok(conn.clone());
+            }
+            guard.remove(device_id);
         }
-        guard.remove(device_id);
     }
 
     let gateway_url = state.gateway_url
@@ -426,6 +485,7 @@ async fn get_or_create_remote_conn(
         &device_id[..8.min(device_id.len())]
     );
 
+    // P2P connect 可能耗时 10–30s，不持锁执行，避免阻塞其他 device 的请求
     let conn = state.p2p_client
         .connect(&gateway_url, &token, device_id)
         .await
@@ -435,7 +495,15 @@ async fn get_or_create_remote_conn(
         "[VncProxy] Remote QUIC connection established: device={}...",
         &device_id[..8.min(device_id.len())]
     );
-    guard.insert(device_id.to_string(), conn.clone());
+
+    let mut guard = state.remote_conns.lock().await;
+    // 再次检查：可能已有并发请求先完成
+    if let Some((existing, created_at)) = guard.get(device_id) {
+        if conn_still_valid(existing, *created_at) {
+            return Ok(existing.clone());
+        }
+    }
+    guard.insert(device_id.to_string(), (conn.clone(), Instant::now()));
     Ok(conn)
 }
 

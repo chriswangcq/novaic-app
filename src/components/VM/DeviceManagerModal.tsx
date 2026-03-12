@@ -212,7 +212,8 @@ export function DeviceManagerModal({ isOpen, onClose }: DeviceManagerModalProps)
   const handleStart = async (id: string) => {
     setBusy(id, true);
     try {
-      await api.devices.start(id);
+      const d = devices.find((x) => x.id === id);
+      await api.devices.start(id, d?.pc_client_id);
       await load();
     } catch (e: any) {
       setError(e?.message ?? 'Failed to start device');
@@ -224,7 +225,8 @@ export function DeviceManagerModal({ isOpen, onClose }: DeviceManagerModalProps)
   const handleStop = async (id: string) => {
     setBusy(id, true);
     try {
-      await api.devices.stop(id);
+      const d = devices.find((x) => x.id === id);
+      await api.devices.stop(id, d?.pc_client_id);
       await load();
     } catch (e: any) {
       setError(e?.message ?? 'Failed to stop device');
@@ -238,8 +240,12 @@ export function DeviceManagerModal({ isOpen, onClose }: DeviceManagerModalProps)
     setDeleteConfirm(null);
     setBusy(id, true);
     try {
-      await api.devices.delete(id);
+      const d = devices.find((x) => x.id === id);
+      const res = await api.devices.delete(id, d?.pc_client_id);
       setDevices(prev => prev.filter(x => x.id !== id));
+      if (res?.status === 'partial_success' && res?.warnings?.length) {
+        setError(res.warnings.join(' '));
+      }
     } catch (e: any) {
       setError(e?.message ?? 'Failed to delete device');
     } finally {

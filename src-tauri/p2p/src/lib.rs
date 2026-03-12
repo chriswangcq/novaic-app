@@ -24,7 +24,7 @@ pub mod types;
 pub use client::P2pClient;
 pub use discovery::{CompositeDiscovery, Discovery, GatewayDiscovery, MdnsDiscovery};
 pub use registry::{CompositeRegistry, GatewayRegistry, MdnsRegistry, Registry};
-pub use config::{ConnectStrategy, P2pClientConfig, P2pServerConfig, resolve_p2p_port};
+pub use config::{P2pClientConfig, P2pServerConfig, resolve_p2p_port};
 pub use server::{P2pServer, P2pServerCloudConfig};
 pub use types::{EndpointInfo, LocalVmControlInfo, ServerDescriptor};
 
@@ -33,7 +33,8 @@ pub mod crypto;
 pub mod hole_punch;
 pub mod rendezvous;
 pub mod tunnel;
+pub mod vnc_endpoint;
 
 // Phase 4
 pub mod relay;
-pub use relay::{RelayRole, connect_via_relay, punch_or_relay};
+pub use relay::{RelayRole, connect_via_relay, connect_via_relay_only};

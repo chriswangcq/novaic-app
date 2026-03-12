@@ -2,7 +2,7 @@
  * DeviceFloatingPanel – per-device floating windows.
  *
  * Data source: agent binding (getAgentBinding + devices.get) instead of agent.devices.
- * Renders by subject_type: main → VNCViewShared, vm_user → VmUserVNCView, default → ScrcpyView.
+ * Renders by subject_type: main → VNCViewShared, vm_user → DeviceDesktopView, default → ScrcpyView.
  *
  * Key design: ONE fixed div per subject that morphs between preview size/position
  * and expanded size/position using CSS transitions.
@@ -14,9 +14,12 @@ import { createPortal } from 'react-dom';
 import { Maximize2, Minimize2, Power, MousePointer2, Monitor, Smartphone, Loader2 } from 'lucide-react';
 import { useAgent } from '../hooks/useAgent';
 import { useAgentBinding } from '../../hooks/useAgentBinding';
+import { useDeviceVncTarget } from '../../hooks/useDeviceVncTarget';
+import { useDeviceStatusPolling } from '../../hooks/useDeviceStatusPolling';
+import { useDeviceStatus } from '../../hooks/useDeviceStatus';
 import { api } from '../../services/api';
 import { VNCViewShared } from '../Visual/VNCViewShared';
-import { VmUserVNCView } from '../VM/VmUserVNCView';
+import { DeviceDesktopView } from '../Visual/DeviceDesktopView';
 import { ScrcpyView } from '../Visual/ScrcpyView';
 import { Device, isLinuxDevice, AndroidDevice as AndroidDeviceType } from '../../types';
 import { setVNCViewOnly } from '../../services/vncStream';
@@ -63,8 +66,10 @@ interface SubjectCardInfo {
     name: string;
     isRunning: boolean;
     serial?: string;
+    /** vm_user 的 displayNum，从 vmUsers.list 解析 */
+    displayNum?: number;
   };
-};
+}
 
 interface Rect { left: number; top: number; width: number; height: number; }
 
@@ -142,14 +147,16 @@ function PowerMenu({ onCancel, onConfirm, align = 'right' }: {
 
 interface CardProps {
   subjectCard: SubjectCardInfo;
-  agentId: string;
+  agentId?: string;
+  /** deviceMode 时替代 vmService.start */
+  onStartVm?: () => Promise<void>;
   bottomOffset: number;
   topOffset?: number;
   spacerWidth: number;
   inline?: boolean;
 }
 
-function DeviceCard({ subjectCard, agentId, bottomOffset, topOffset, spacerWidth, inline = false }: CardProps) {
+function DeviceCard({ subjectCard, agentId, onStartVm, bottomOffset, topOffset, spacerWidth, inline = false }: CardProps) {
   const { device, binding, deviceInfo } = subjectCard;
   const [expanded,       setExpanded]       = useState(false);
   const [operating,      setOperating]      = useState(false);
@@ -297,14 +304,22 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, topOffset, spacerWidth
         <div className="w-full h-full bg-black overflow-hidden relative group/card rounded-[inherit]">
           {isMain ? (
             <div className="w-full h-full">
-              <VNCViewShared agentId={agentId} deviceId={device.id} isThumbnail={!expanded} />
+              <VNCViewShared
+                agentId={agentId}
+                deviceId={device.id}
+                pcClientId={device.pc_client_id}
+                onStart={onStartVm}
+                isThumbnail={!expanded}
+              />
             </div>
           ) : isVmUser ? (
             <div className="w-full h-full">
-              <VmUserVNCView
+              <DeviceDesktopView
+                subjectType="vm_user"
                 deviceId={device.id}
                 username={binding.subject_id}
-                displayNum={0}
+                displayNum={deviceInfo.displayNum ?? 0}
+                pcClientId={device.pc_client_id}
                 onClose={collapse}
                 embedded={!expanded}
               />
@@ -345,7 +360,7 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, topOffset, spacerWidth
                 >
                   <Power size={9} />
                 </button>
-                {showPowerMenu && <PowerMenu onCancel={() => setShowPowerMenu(false)} onConfirm={async () => { setShowPowerMenu(false); try { await api.devices.stop(device.id); } catch(e) { console.error(e); } }} />}
+                {showPowerMenu && <PowerMenu onCancel={() => setShowPowerMenu(false)} onConfirm={async () => { setShowPowerMenu(false); try { await api.devices.stop(device.id, device.pc_client_id); } catch(e) { console.error(e); } }} />}
               </div>
             </div>
           )}
@@ -393,7 +408,7 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, topOffset, spacerWidth
               >
                 <Power size={12} />
               </button>
-              {showPowerMenu && <PowerMenu onCancel={() => setShowPowerMenu(false)} onConfirm={async () => { setShowPowerMenu(false); try { await api.devices.stop(device.id); } catch(e) { console.error(e); } }} />}
+              {showPowerMenu && <PowerMenu onCancel={() => setShowPowerMenu(false)} onConfirm={async () => { setShowPowerMenu(false); try { await api.devices.stop(device.id, device.pc_client_id); } catch(e) { console.error(e); } }} />}
             </div>
           </div>
         </div>
@@ -431,7 +446,7 @@ function DeviceCard({ subjectCard, agentId, bottomOffset, topOffset, spacerWidth
             >
               <Power size={13} />
             </button>
-            {showPowerMenu && <PowerMenu align="left" onCancel={() => setShowPowerMenu(false)} onConfirm={async () => { setShowPowerMenu(false); try { await api.devices.stop(device.id); } catch(e) { console.error(e); } }} />}
+            {showPowerMenu && <PowerMenu align="left" onCancel={() => setShowPowerMenu(false)} onConfirm={async () => { setShowPowerMenu(false); try { await api.devices.stop(device.id, device.pc_client_id); } catch(e) { console.error(e); } }} />}
           </div>
         </div>
       )}
@@ -457,7 +472,7 @@ function StoppedDeviceChip({ subjectCard, bottomOffset, topOffset, inline = fals
     if (starting) return;
     setStarting(true);
     try {
-      await api.devices.start(device.id);
+      await api.devices.start(device.id, device.pc_client_id);
     } catch (err) {
       console.error('[StoppedDeviceChip] start failed:', err);
     } finally {
@@ -519,6 +534,13 @@ function StoppedDeviceChip({ subjectCard, bottomOffset, topOffset, inline = fals
 
 // ─── Container ───────────────────────────────────────────────────────────────
 
+/** deviceMode：不依赖 Agent，直接通过 deviceId + subject 展示 */
+export interface DeviceModeConfig {
+  deviceId: string;
+  subjectType: 'main' | 'vm_user' | 'default';
+  subjectId?: string;
+}
+
 interface DeviceFloatingPanelProps {
   /** 内联模式：嵌入布局中（非浮动） */
   inline?: boolean;
@@ -526,48 +548,93 @@ interface DeviceFloatingPanelProps {
   placement?: 'top' | 'bottom';
   /** 紧凑浮层模式：不占布局空间，纯浮动 overlay */
   compact?: boolean;
+  /** 设备模式：不依赖 Agent，直接展示指定设备 */
+  deviceMode?: DeviceModeConfig;
 }
 
-export function DeviceFloatingPanel({ inline = false, placement = 'bottom', compact = false }: DeviceFloatingPanelProps) {
+export function DeviceFloatingPanel({ inline = false, placement = 'bottom', compact = false, deviceMode }: DeviceFloatingPanelProps) {
   const { currentAgentId, currentAgent } = useAgent();
-  const { binding, device, loading, error } = useAgentBinding(currentAgentId, currentAgent?.binding ?? undefined);
-  const [deviceStatuses, setDeviceStatuses] = useState<Record<string, boolean>>({});
+  const agentBinding = useAgentBinding(currentAgentId, currentAgent?.binding ?? undefined);
+  const deviceVncTarget = useDeviceVncTarget(
+    deviceMode?.deviceId ?? null,
+    deviceMode?.subjectType ?? 'main',
+    deviceMode?.subjectId
+  );
 
-  const fetchDeviceStatus = useCallback(async () => {
-    if (!device?.id) { setDeviceStatuses({}); return; }
-    try {
-      const s = await api.devices.status(device.id);
-      setDeviceStatuses({ [device.id]: s.running });
-    } catch {
-      setDeviceStatuses({ [device.id]: false });
-    }
-  }, [device?.id]);
+  // deviceMode 优先：使用 useDeviceVncTarget
+  const isDeviceMode = !!deviceMode;
+  const device = isDeviceMode ? deviceVncTarget.device : agentBinding.device;
+  const loading = isDeviceMode ? deviceVncTarget.isLoading : agentBinding.loading;
+  const error = isDeviceMode ? deviceVncTarget.error : agentBinding.error;
 
+  const [vmUserDisplayNum, setVmUserDisplayNum] = useState<number | undefined>(undefined);
+
+  // D3: 使用 DeviceStatusStore 替代自建轮询
+  useDeviceStatusPolling(device ? [device] : [], !!device);
+  const deviceStatus = useDeviceStatus(device?.id ?? null);
+  const isRunning = deviceStatus === 'running';
+
+  const binding = isDeviceMode
+    ? null
+    : agentBinding.binding;
+  const subjectType = isDeviceMode ? (deviceMode?.subjectType ?? 'main') : binding?.subject_type;
+  const subjectId = isDeviceMode ? (deviceMode?.subjectId ?? '') : binding?.subject_id;
+
+  // C3: vm_user 时从 vmUsers.list 获取 displayNum
   useEffect(() => {
-    fetchDeviceStatus();
-    const id = setInterval(fetchDeviceStatus, 5000);
-    return () => clearInterval(id);
-  }, [fetchDeviceStatus]);
+    if (!device?.id || device.type !== 'linux' || subjectType !== 'vm_user') {
+      setVmUserDisplayNum(undefined);
+      return;
+    }
+    let cancelled = false;
+    api.vmUsers.list(device.id)
+      .then((list) => {
+        if (cancelled) return;
+        const user = Array.isArray(list) ? list.find((u: { username: string }) => u.username === subjectId) : null;
+        setVmUserDisplayNum(user?.display_num ?? 0);
+      })
+      .catch(() => {
+        if (!cancelled) setVmUserDisplayNum(0);
+      });
+    return () => { cancelled = true; };
+  }, [device?.id, device?.type, subjectType, subjectId]);
 
-  if (!currentAgentId) return null;
+  if (!isDeviceMode && !currentAgentId) return null;
   if (loading) return null;
   if (error) {
     console.warn('[DeviceFloatingPanel] Error:', error);
     return null;
   }
-  if (!binding || !device) return null;
+  if (!device) return null;
 
-  const isRunning = deviceStatuses[device.id] ?? false;
+  const syntheticBinding: AgentDeviceBinding = isDeviceMode
+    ? {
+        agent_id: '',
+        device_id: device.id,
+        subject_type: subjectType ?? 'main',
+        subject_id: subjectId ?? '',
+        mounted_tools: {},
+        created_at: '',
+        updated_at: '',
+        device_name: device.name,
+        subject_label: subjectType === 'vm_user' ? subjectId : undefined,
+      }
+    : binding!;
 
   const deviceInfo = {
     id: device.id,
     type: device.type as 'linux' | 'android',
-    name: binding.device_name || device.name || (device.type === 'linux' ? 'Linux VM' : 'Android'),
+    name: syntheticBinding.device_name || device.name || (device.type === 'linux' ? 'Linux VM' : 'Android'),
     isRunning,
     serial: isLinuxDevice(device) ? undefined : (device as AndroidDeviceType).device_serial,
+    displayNum: syntheticBinding.subject_type === 'vm_user' ? vmUserDisplayNum : undefined,
   };
 
-  const subjectCard: SubjectCardInfo = { device, binding, deviceInfo };
+  const subjectCard: SubjectCardInfo = { device, binding: syntheticBinding, deviceInfo };
+
+  const onStartVm = isDeviceMode
+    ? () => api.devices.start(device.id, device.pc_client_id)
+    : undefined;
 
   const running = isRunning ? [subjectCard] : [];
   const stopped = !isRunning ? [subjectCard] : [];
@@ -600,7 +667,7 @@ export function DeviceFloatingPanel({ inline = false, placement = 'bottom', comp
   const hasAny = running.length > 0 || stopped.length > 0;
   const spacerWidth = (inline || compact) ? 0 : (hasAny ? COL_WIDTH + FLOATING_PANEL_LAYOUT.right + FLOATING_PANEL_LAYOUT.spacerExtra : 0);
 
-  const cardKey = `${binding.device_id}:${binding.subject_type}:${binding.subject_id}`;
+  const cardKey = `${syntheticBinding.device_id}:${syntheticBinding.subject_type}:${syntheticBinding.subject_id}`;
 
   if (inline && !compact) {
     const isTop = placement === 'top';
@@ -615,7 +682,8 @@ export function DeviceFloatingPanel({ inline = false, placement = 'bottom', comp
           >
             <DeviceCard
               subjectCard={sc}
-              agentId={currentAgentId}
+              agentId={isDeviceMode ? undefined : currentAgentId}
+              onStartVm={isDeviceMode ? onStartVm : undefined}
               bottomOffset={runningOffsets[i]}
               spacerWidth={spacerWidth}
               inline
@@ -648,7 +716,8 @@ export function DeviceFloatingPanel({ inline = false, placement = 'bottom', comp
         <DeviceCard
           key={cardKey}
           subjectCard={sc}
-          agentId={currentAgentId}
+          agentId={isDeviceMode ? undefined : currentAgentId}
+          onStartVm={isDeviceMode ? onStartVm : undefined}
           bottomOffset={runningOffsets[i]}
           topOffset={compact ? runningOffsets[i] : undefined}
           spacerWidth={spacerWidth}

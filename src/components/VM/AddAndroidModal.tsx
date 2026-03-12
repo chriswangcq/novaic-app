@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Loader2, Smartphone, Check, AlertCircle, RefreshCw } from 'lucide-react';
 import { useAgent } from '../hooks/useAgent';
 import { api } from '../../services';
+import { useAppStore } from '../../application/store';
 
 // Types for Android API responses (internal use for listing connected devices)
 interface ConnectedAndroidDevice {
@@ -59,6 +60,7 @@ const CPU_OPTIONS = [
 
 export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalProps) {
   const { currentAgentId, loadAgents } = useAgent();
+  const appInstanceId = useAppStore((s) => s.appInstanceId);
   
   // Mode selection
   const [mode, setMode] = useState<ManagementMode>('managed');
@@ -216,11 +218,16 @@ export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalP
     if (!imageCheckRes.available) {
       throw new Error('Android 34 系统镜像未安装。请先安装系统镜像。');
     }
-    
+
+    const pcClientId = await api.p2p.resolveCurrentPcClientId(appInstanceId);
+    if (pcClientId === undefined) {
+      throw new Error('请选择目标 PC 或确保 Tauri 应用已连接');
+    }
+
     // Step 2: Create Android device using unified device API
     setCreationProgress('创建 Android 设备...');
     const finalAvdName = avdName.trim() || generateAvdName();
-    
+
     const device = await api.devices.createAndroidForUser({
       name: finalAvdName,
       memory: parseInt(memory, 10),
@@ -229,18 +236,18 @@ export function AddAndroidModal({ isOpen, onClose, onCreated }: AddAndroidModalP
       managed: true,
       system_image: 'system-images;android-34;google_apis_playstore;arm64-v8a',
     });
-    
+
     console.log('[AddAndroidModal] Created device:', device.id);
-    
+
     // Step 3: Setup device (create AVD)
     setCreationProgress('初始化 AVD...');
-    await api.devices.setup(device.id);
-    
+    await api.devices.setup(device.id, undefined, pcClientId);
+
     // Step 4: Optionally start device
     if (autoStart) {
       setCreationProgress('启动模拟器...');
       try {
-        await api.devices.start(device.id);
+        await api.devices.start(device.id, pcClientId);
         console.log('[AddAndroidModal] Emulator started');
       } catch (startErr) {
         console.warn('[AddAndroidModal] Failed to auto-start emulator:', startErr);

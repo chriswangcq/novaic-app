@@ -18,10 +18,11 @@ import {
 import { api } from '../../services/api';
 import type { Device, DeviceStatus, VmUser } from '../../types';
 import { useAppStore } from '../../application/store';
+import { useDeviceStatus } from '../../hooks/useDeviceStatus';
 import { AddLinuxVMUserModal } from './AddLinuxVMUserModal';
 import { AddAndroidModal } from './AddAndroidModal';
 import { DeviceVNCView } from '../Visual/DeviceVNCView';
-import { VmUserVNCView } from './VmUserVNCView';
+import { DeviceDesktopView } from '../Visual/DeviceDesktopView';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -64,12 +65,15 @@ function DeviceRow({
   deleteConfirm, onDeleteConfirmChange,
   busy, compact = false,
 }: DeviceRowProps) {
+  // P1-14: 优先使用 DeviceStatusStore（5s 轮询），避免 listForUser 状态滞后
+  const storeStatus = useDeviceStatus(device.id);
+  const status = (storeStatus ?? device.status) as DeviceStatus;
   const isLinux  = device.type === 'linux';
   // Linux 'created' means disk not set up yet — can't start directly
   const canStart = isLinux
-    ? ['ready', 'stopped', 'error'].includes(device.status)
-    : ['ready', 'stopped', 'created', 'error'].includes(device.status);
-  const canStop  = device.status === 'running';
+    ? ['ready', 'stopped', 'error'].includes(status)
+    : ['ready', 'stopped', 'created', 'error'].includes(status);
+  const canStop  = status === 'running';
   const confirming = deleteConfirm === device.id;
 
   return (
@@ -93,7 +97,7 @@ function DeviceRow({
           <span className="text-sm font-medium text-nb-text truncate">
             {device.name || (isLinux ? 'Linux VM' : 'Android')}
           </span>
-          {!compact && <StatusBadge status={device.status} />}
+          {!compact && <StatusBadge status={status} />}
         </div>
         <div className="flex items-center gap-1.5 mt-0.5">
           <span className="text-[10px] text-nb-text-secondary/40 font-mono">
@@ -101,9 +105,9 @@ function DeviceRow({
           </span>
           {compact && (
             <span className={`w-1.5 h-1.5 rounded-full ${
-              device.status === 'running'  ? 'bg-emerald-400' :
-              device.status === 'setup'    ? 'bg-amber-400 animate-pulse' :
-              device.status === 'error'    ? 'bg-red-400' :
+              status === 'running'  ? 'bg-emerald-400' :
+              status === 'setup'    ? 'bg-amber-400 animate-pulse' :
+              status === 'error'    ? 'bg-red-400' :
               'bg-white/20'
             }`} />
           )}
@@ -166,8 +170,8 @@ function DeviceRow({
             )}
             <button
               onClick={() => onDeleteConfirmChange(device.id)}
-              disabled={busy || device.status === 'running'}
-              title={device.status === 'running' ? 'Stop first to delete' : 'Delete'}
+              disabled={busy || status === 'running'}
+              title={status === 'running' ? 'Stop first to delete' : 'Delete'}
               className="w-7 h-7 flex items-center justify-center rounded-lg
                          text-nb-text-secondary hover:text-red-400 hover:bg-red-500/10
                          disabled:opacity-40 disabled:cursor-not-allowed transition-colors
@@ -491,7 +495,9 @@ function VmUsersSection({ device, selectedUser, onSelectUser, embedded = false }
   const [addOpen, setAddOpen]       = useState(false);
   const [deletingUser, setDeleting] = useState<string | null>(null);
   const [restartingUser, setRestarting] = useState<string | null>(null);
-  const isRunning = device.status === 'running' || device.status === 'ready';
+  const storeStatus = useDeviceStatus(device.id);
+  const status = storeStatus ?? device.status;
+  const isRunning = status === 'running' || status === 'ready';
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -669,14 +675,29 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
     }
   }, [devices]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // P1: 设备详情以 devices 为主，不依赖 Agent binding；列表未包含时用 devices.get
   useEffect(() => {
     if (!selectedDeviceId) {
       setSelectedDevice(null);
       return;
     }
-    const next = devices.find(d => d.id === selectedDeviceId) ?? null;
-    setSelectedDevice(next);
+    const fromList = devices.find(d => d.id === selectedDeviceId);
+    if (fromList) {
+      setSelectedDevice(fromList);
+      return;
+    }
+    api.devices.get(selectedDeviceId).then(d => {
+      if (selectedDeviceId === useAppStore.getState().selectedDeviceId) {
+        setSelectedDevice(d);
+      }
+    }).catch(() => setSelectedDevice(null));
   }, [devices, selectedDeviceId]);
+
+  // P1-14/CR#4: status 用 DeviceStatusStore 覆盖（避免 30s 缓存滞后）
+  const selectedDeviceStatus = useDeviceStatus(selectedDevice?.id ?? null);
+  const effectiveSelectedDevice = selectedDevice
+    ? { ...selectedDevice, status: (selectedDeviceStatus ?? selectedDevice.status) as DeviceStatus }
+    : null;
 
   useEffect(() => {
     setSelectedVmUser(sharedSelectedVmUser);
@@ -713,14 +734,16 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
     <div className="flex flex-col flex-1 min-h-0">
       {backBar}
       {devicesHeaderBar}
-      {selectedDevice ? (
+      {effectiveSelectedDevice ? (
         <div className="flex flex-1 min-h-0 min-w-0">
           <div className="flex-1 min-w-0 overflow-hidden">
             {selectedVmUser ? (
-              <VmUserVNCView
-                deviceId={selectedDevice.id}
+              <DeviceDesktopView
+                subjectType="vm_user"
+                deviceId={effectiveSelectedDevice.id}
                 username={selectedVmUser.username}
                 displayNum={selectedVmUser.displayNum}
+                pcClientId={effectiveSelectedDevice.pc_client_id}
                 onClose={() => {
                   setSelectedVmUser(null);
                   patchState({ selectedVmUser: null });
@@ -728,7 +751,7 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
               />
             ) : (
               <DeviceVNCView
-                device={selectedDevice}
+                device={effectiveSelectedDevice}
                 onClose={() => {
                   setSelectedDevice(null);
                   patchState({ selectedDeviceId: null, selectedVmUser: null });

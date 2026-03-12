@@ -368,6 +368,9 @@ pub fn run() {
             commands::app_instance::get_local_device_id,
             commands::vnc_urls::get_vnc_proxy_url,
             commands::vnc_urls::get_scrcpy_proxy_url,
+            commands::vnc_bridge::vnc_bridge_connect,
+            commands::vnc_bridge::vnc_bridge_send,
+            commands::vnc_bridge::vnc_bridge_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

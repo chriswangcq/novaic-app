@@ -1,6 +1,6 @@
 //! Relay 连接（Phase 4）
 //!
-//! 打洞失败时通过 relay 服务建立 QUIC 连接。
+//! 通过 relay 服务建立远端 QUIC 连接（打洞已移除）。
 
 use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::sync::Arc;
@@ -114,12 +114,14 @@ pub async fn connect_via_relay(
     send.write_all(b"\n").await?;
     send.finish()?;
 
+    // Relay 端等待 PC 注册最多约 30s，手机需等待更久以免超时
+    const HANDSHAKE_READ_TIMEOUT_SECS: u64 = 40;
     let mut resp = String::new();
     let mut buf = [0u8; 1];
     loop {
-        tokio::time::timeout(Duration::from_secs(15), recv.read_exact(&mut buf))
+        tokio::time::timeout(Duration::from_secs(HANDSHAKE_READ_TIMEOUT_SECS), recv.read_exact(&mut buf))
             .await
-            .map_err(|_| anyhow::anyhow!("Relay handshake response timeout"))??;
+            .map_err(|_| anyhow::anyhow!("Relay handshake response timeout (PC did not connect within {}s)", HANDSHAKE_READ_TIMEOUT_SECS))??;
         if buf[0] == b'\n' {
             break;
         }
@@ -149,48 +151,19 @@ pub async fn connect_via_relay(
     Ok(conn)
 }
 
-/// 打洞优先，超时后走 relay。
+/// 通过 relay 建立远端连接（打洞已移除，仅 relay）。
 /// `relay_url_override`：若提供则覆盖 relay_request 返回的 relay_url（如 NOVAIC_RELAY_URL）。
-pub async fn punch_or_relay(
+pub async fn connect_via_relay_only(
     gateway_url: &str,
     jwt: &str,
     target_device_id: &str,
-    local_port: u16,
-    punch_timeout_secs: u64,
     relay_url_override: Option<&str>,
 ) -> anyhow::Result<Connection> {
-    let timeout = if punch_timeout_secs > 0 {
-        punch_timeout_secs
-    } else {
-        15
-    };
-
-    match hole_punch::punch_and_connect(
-        gateway_url,
-        jwt,
-        target_device_id,
-        local_port,
-        timeout,
-    )
-    .await
-    {
-        Ok(conn) => {
-            info!("[Relay] P2P direct connection succeeded");
-            return Ok(conn);
-        }
-        Err(e) => {
-            tracing::warn!(
-                "[Relay] P2P failed ({}s), falling back to relay: {}",
-                timeout,
-                e
-            );
-        }
-    }
-
     let relay_resp = crate::rendezvous::relay_request(gateway_url, jwt, target_device_id).await?;
     let relay_url = relay_url_override
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or(&relay_resp.relay_url);
+        .map(String::from)
+        .unwrap_or_else(|| relay_resp.relay_url.clone());
     info!(
         "[Relay] Relay requested: session={}",
         &relay_resp.session_id[..8.min(relay_resp.session_id.len())]
@@ -198,14 +171,17 @@ pub async fn punch_or_relay(
 
     // Relay 端已实现「长等待」：手机 ConnectRequest 时若 PC 未注册，relay 轮询等待最多 30s。
     // 手机无需固定延迟，立即连接即可；失败时重试（2s/4s/8s 指数退避）应对网络抖动。
+    // Session TTL 约 10s，若错误含 invalid/expired/session 则重新 relay_request 获取新 session 再重试。
     const RETRY_DELAYS: [u64; 3] = [2, 4, 8];
 
     let mut last_err = None;
+    let mut current_relay_resp = relay_resp;
+    let mut current_relay_url = relay_url;
     for attempt in 1..=4 {
         match connect_via_relay(
-            relay_url,
+            &current_relay_url,
             jwt,
-            &relay_resp.session_id,
+            &current_relay_resp.session_id,
             RelayRole::Mobile {
                 target_device_id: target_device_id.to_string(),
             },
@@ -214,8 +190,40 @@ pub async fn punch_or_relay(
         {
             Ok(conn) => return Ok(conn),
             Err(e) => {
-                last_err = Some(e);
-                if attempt < 4 {
+                let err_str = e.to_string();
+                last_err = Some(anyhow::anyhow!("{}", err_str));
+                let err_lower = err_str.to_lowercase();
+                // Only treat as session error when message clearly refers to session.
+                // Exclude "Invalid JWT", "Invalid handshake" which are auth/protocol errors.
+                let is_session_error = err_lower.contains("session")
+                    || (err_lower.contains("expired") && !err_lower.contains("certificate"));
+                let mut retry_immediately = false;
+                if is_session_error && attempt < 4 {
+                    tracing::warn!(
+                        "[Relay] connect_via_relay attempt {} failed (session error): {}, refreshing session",
+                        attempt,
+                        err_str
+                    );
+                    match crate::rendezvous::relay_request(gateway_url, jwt, target_device_id).await {
+                        Ok(new_resp) => {
+                            current_relay_resp = new_resp;
+                            current_relay_url = relay_url_override
+                                .filter(|s| !s.trim().is_empty())
+                                .map(String::from)
+                                .unwrap_or_else(|| current_relay_resp.relay_url.clone());
+                            info!(
+                                "[Relay] Session refreshed: {}",
+                                &current_relay_resp.session_id[..8.min(current_relay_resp.session_id.len())]
+                            );
+                            retry_immediately = true;
+                        }
+                        Err(refresh_e) => {
+                            tracing::warn!("[Relay] relay_request refresh failed: {}", refresh_e);
+                            last_err = Some(anyhow::anyhow!("{}", refresh_e));
+                        }
+                    }
+                }
+                if attempt < 4 && !retry_immediately {
                     let delay = RETRY_DELAYS[attempt - 1];
                     tracing::warn!(
                         "[Relay] connect_via_relay attempt {} failed: {}, retrying in {}s",

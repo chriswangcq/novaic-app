@@ -43,35 +43,25 @@ impl Default for P2pServerConfig {
     }
 }
 
-/// 连接策略：直连 / Relay 兜底 / 仅 Relay
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConnectStrategy {
-    DirectOnly,
-    DirectThenRelay,
-    RelayOnly,
-}
-
-/// P2P 客户端配置
+/// P2P 客户端配置（打洞已移除，远端仅 relay）
 #[derive(Clone)]
 pub struct P2pClientConfig {
-    pub connect_strategy: ConnectStrategy,
-    pub punch_timeout_secs: u64,
-    /// Relay URL 覆盖（如 NOVAIC_RELAY_URL）。若设置，punch_or_relay 使用此 URL 替代 relay_request 返回的 relay_url。
+    /// 本地 loopback 连接超时秒数
+    pub connect_timeout_secs: u64,
+    /// Relay URL 覆盖（如 NOVAIC_RELAY_URL）。若设置，使用此 URL 替代 relay_request 返回的 relay_url。
     pub relay_url: Option<String>,
-    /// 发现后端（None 时 connect 需传入 gateway_url + token）
+    /// 发现后端（打洞移除后未使用，保留以兼容构造）
     pub discovery: Option<Arc<dyn Discovery>>,
 }
 
 impl Default for P2pClientConfig {
     fn default() -> Self {
-        // NOVAIC_RELAY_URL：可选，覆盖 relay_request 返回的 relay 地址（用于自建 relay 或调试）
         let relay_url = std::env::var("NOVAIC_RELAY_URL")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.trim().to_string());
         Self {
-            connect_strategy: ConnectStrategy::DirectThenRelay,
-            punch_timeout_secs: 15,
+            connect_timeout_secs: 15,
             relay_url,
             discovery: None,
         }

@@ -1,0 +1,35 @@
+# Permission for OTA frontend (remote CDN) to invoke app commands.
+# Required when WebView navigates to https://relay.gradievo.com/* or https://api.gradievo.com/*
+# Without this, invoke() fails with "Not allowed to request resource".
+
+[[permission]]
+identifier = "allow-app-commands"
+description = "Allow OTA frontend to invoke app commands (get_gateway_url, gateway_*, vnc, etc.)"
+commands.allow = [
+  "get_gateway_url",
+  "set_gateway_url",
+  "get_gateway_status",
+  "update_cloud_token",
+  "secure_storage_get",
+  "secure_storage_set",
+  "secure_storage_delete",
+  "gateway_get",
+  "gateway_post",
+  "gateway_patch",
+  "gateway_put",
+  "gateway_delete",
+  "gateway_health",
+  "gateway_sse_connect",
+  "gateway_sse_disconnect",
+  "fetch_authenticated_bytes",
+  "download_file_to_cache",
+  "open_file",
+  "show_in_folder",
+  "get_app_instance",
+  "get_local_device_id",
+  "get_vnc_proxy_url",
+  "get_scrcpy_proxy_url",
+  "vnc_bridge_connect",
+  "vnc_bridge_send",
+  "vnc_bridge_close",
+]
