@@ -2,7 +2,7 @@
  * DeviceFloatingPanel – per-device floating windows.
  *
  * Data source: agent binding (getAgentBinding + devices.get) instead of agent.devices.
- * Renders by subject_type: main → VNCViewShared, vm_user → DeviceDesktopView, default → ScrcpyView.
+ * Renders by subject_type: main → DeviceDesktopView, vm_user → DeviceDesktopView, default → ScrcpyView.
  *
  * Key design: ONE fixed div per subject that morphs between preview size/position
  * and expanded size/position using CSS transitions.
@@ -18,11 +18,9 @@ import { useDeviceVncTarget } from '../../hooks/useDeviceVncTarget';
 import { useDeviceStatusPolling } from '../../hooks/useDeviceStatusPolling';
 import { useDeviceStatus } from '../../hooks/useDeviceStatus';
 import { api } from '../../services/api';
-import { VNCViewShared } from '../Visual/VNCViewShared';
 import { DeviceDesktopView } from '../Visual/DeviceDesktopView';
 import { ScrcpyView } from '../Visual/ScrcpyView';
 import { Device, isLinuxDevice, AndroidDevice as AndroidDeviceType } from '../../types';
-import { setVNCViewOnly } from '../../services/vncStream';
 import type { AgentDeviceBinding } from '../../services/api';
 
 // ─── 浮窗布局配置（所有参数集中在此，修改此处即可）──────────────────────────────
@@ -156,7 +154,7 @@ interface CardProps {
   inline?: boolean;
 }
 
-function DeviceCard({ subjectCard, agentId, onStartVm, bottomOffset, topOffset, spacerWidth, inline = false }: CardProps) {
+function DeviceCard({ subjectCard, agentId: _agentId, onStartVm: _onStartVm, bottomOffset, topOffset, spacerWidth, inline = false }: CardProps) {
   const { device, binding, deviceInfo } = subjectCard;
   const [expanded,       setExpanded]       = useState(false);
   const [operating,      setOperating]      = useState(false);
@@ -215,17 +213,6 @@ function DeviceCard({ subjectCard, agentId, onStartVm, bottomOffset, topOffset, 
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [expanded, operating]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // VNC viewOnly for main subject (uses deviceId as stream key)
-  useEffect(() => {
-    if (isMain && device.id) {
-      setVNCViewOnly(device.id, !operating);
-      if (operating) {
-        setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
-      }
-    }
-    return () => { if (isMain && device.id) setVNCViewOnly(device.id, true); };
-  }, [device.id, isMain, operating]);
 
   const expand = useCallback(() => {
     setRect(overlayRect(deviceInfo.type, inline ? 0 : spacerWidth));
@@ -314,12 +301,12 @@ function DeviceCard({ subjectCard, agentId, onStartVm, bottomOffset, topOffset, 
         <div className="w-full h-full bg-black overflow-hidden relative group/card rounded-[inherit]">
           {isMain ? (
             <div className="w-full h-full">
-              <VNCViewShared
-                agentId={agentId}
-                deviceId={device.id}
-                pcClientId={device.pc_client_id}
-                onStart={onStartVm}
-                isThumbnail={!expanded}
+              <DeviceDesktopView
+                subjectType="main"
+                device={device}
+                onClose={collapse}
+                embedded={!expanded}
+                viewOnly={!operating}
               />
             </div>
           ) : isVmUser ? (

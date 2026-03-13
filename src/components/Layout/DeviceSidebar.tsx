@@ -3,7 +3,7 @@ import { Monitor, Smartphone, Plus, Play, Square, Trash2, X, ExternalLink, MoreH
 import { useAgent } from '../hooks/useAgent';
 import { useLayout } from '../hooks/useLayout';
 import { api } from '../../services/api';
-import { VNCViewShared } from '../Visual/VNCViewShared';
+import { DeviceDesktopView } from '../Visual/DeviceDesktopView';
 import { ScrcpyView } from '../Visual/ScrcpyView';
 import { AddLinuxVMModal } from '../VM/AddLinuxVMModal';
 import { AddAndroidModal } from '../VM/AddAndroidModal';
@@ -32,6 +32,8 @@ interface DeviceInfo {
 // 设备卡片组件
 interface DeviceCardProps {
   device: DeviceInfo;
+  /** Linux 设备需传入真实 Device，供 VNC 缩略图复用 DeviceDesktopView */
+  deviceForVnc?: Device;
   onStart?: () => void;
   onStop?: () => void;
   onOpenDisplay?: () => void;
@@ -40,6 +42,7 @@ interface DeviceCardProps {
 
 function DeviceCard({ 
   device, 
+  deviceForVnc,
   onStart,
   onStop,
   onOpenDisplay,
@@ -115,15 +118,20 @@ function DeviceCard({
               className="w-full overflow-hidden rounded border border-nb-border bg-black relative"
               style={{ aspectRatio: device.type === 'linux' ? '16/10' : '9/20' }}
             >
-              {device.type === 'linux' ? (
-                <VNCViewShared isThumbnail />
-              ) : (
+              {device.type === 'linux' && deviceForVnc ? (
+                <DeviceDesktopView
+                  subjectType="main"
+                  device={deviceForVnc}
+                  embedded
+                  viewOnly
+                />
+              ) : device.type === 'android' ? (
                 <ScrcpyView 
                   deviceSerial={device.serial} 
                   isThumbnail 
                   autoConnect={true}
                 />
-              )}
+              ) : null}
               <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-nb-surface bg-nb-success" />
             </div>
           ) : (
@@ -256,14 +264,15 @@ function AddDeviceButton({ type, onClick }: AddDeviceButtonProps) {
   );
 }
 
-// 设备显示弹窗组件
+// 设备显示弹窗组件（复用 DeviceDesktopView，与 Device tab 统一）
 interface DeviceDisplayModalProps {
-  device: DeviceInfo | null;
+  displayData: { info: DeviceInfo; device: Device } | null;
   onClose: () => void;
 }
 
-function DeviceDisplayModal({ device, onClose }: DeviceDisplayModalProps) {
-  if (!device) return null;
+function DeviceDisplayModal({ displayData, onClose }: DeviceDisplayModalProps) {
+  if (!displayData) return null;
+  const { info, device } = displayData;
   
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -271,17 +280,17 @@ function DeviceDisplayModal({ device, onClose }: DeviceDisplayModalProps) {
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-nb-border bg-nb-surface-2">
           <div className="flex items-center gap-2">
-            {device.type === 'linux' ? (
+            {info.type === 'linux' ? (
               <Monitor size={18} className="text-blue-400" />
             ) : (
               <Smartphone size={18} className="text-green-400" />
             )}
-            <span className="text-sm font-medium text-nb-text">{device.name}</span>
+            <span className="text-sm font-medium text-nb-text">{info.name}</span>
             <span className={`
               px-2 py-0.5 text-[10px] rounded-full
-              ${device.status === 'online' ? 'bg-nb-success/20 text-nb-success' : 'bg-nb-text-secondary/20 text-nb-text-secondary'}
+              ${info.status === 'online' ? 'bg-nb-success/20 text-nb-success' : 'bg-nb-text-secondary/20 text-nb-text-secondary'}
             `}>
-              {device.status === 'online' ? '运行中' : '已停止'}
+              {info.status === 'online' ? '运行中' : '已停止'}
             </span>
           </div>
           <button
@@ -292,13 +301,18 @@ function DeviceDisplayModal({ device, onClose }: DeviceDisplayModalProps) {
           </button>
         </div>
         
-        {/* 内容区域 */}
+        {/* 内容区域：Linux 用 DeviceDesktopView（与 Device tab 复用），Android 用 ScrcpyView */}
         <div className="flex-1 overflow-hidden">
-          {device.type === 'linux' ? (
-            <VNCViewShared />
+          {info.type === 'linux' ? (
+            <DeviceDesktopView
+              subjectType="main"
+              device={device}
+              onClose={onClose}
+              embedded
+            />
           ) : (
             <ScrcpyView 
-              deviceSerial={device.serial} 
+              deviceSerial={info.serial!} 
               autoConnect={true}
             />
           )}
@@ -314,7 +328,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
   const sidebarWidth = propsSidebarWidth ?? storeSidebarWidth ?? 208;
   const isLgOrAbove = useIsLgOrAbove();
   const isOverlay = !isLgOrAbove;
-  const [displayDevice, setDisplayDevice] = useState<DeviceInfo | null>(null);
+  const [displayDevice, setDisplayDevice] = useState<{ info: DeviceInfo; device: Device } | null>(null);
   
   // 设备状态（使用统一设备 API）
   const [deviceStatuses, setDeviceStatuses] = useState<Record<string, boolean>>({});
@@ -436,7 +450,8 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
   };
   
   const handleOpenDisplay = (device: DeviceInfo) => {
-    setDisplayDevice(device);
+    const real = findDevice(device);
+    if (real) setDisplayDevice({ info: device, device: real });
   };
   
   const handleAddLinux = () => {
@@ -511,6 +526,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
                       <DeviceCard
                         key={device.id}
                         device={device}
+                        deviceForVnc={realDevice}
                         onStart={realDevice ? () => handleStartDevice(realDevice) : undefined}
                         onStop={realDevice ? () => handleStopDevice(realDevice) : undefined}
                         onOpenDisplay={() => handleOpenDisplay(device)}
@@ -529,6 +545,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
                       <DeviceCard
                         key={device.id}
                         device={device}
+                        deviceForVnc={realDevice}
                         onStart={realDevice ? () => handleStartDevice(realDevice) : undefined}
                         onStop={realDevice ? () => handleStopDevice(realDevice) : undefined}
                         onOpenDisplay={() => handleOpenDisplay(device)}
@@ -648,6 +665,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
                   <DeviceCard
                     key={device.id}
                     device={device}
+                    deviceForVnc={realDevice}
                     onStart={realDevice ? () => handleStartDevice(realDevice) : undefined}
                     onStop={realDevice ? () => handleStopDevice(realDevice) : undefined}
                     onOpenDisplay={() => handleOpenDisplay(device)}
@@ -672,6 +690,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
                   <DeviceCard
                     key={device.id}
                     device={device}
+                    deviceForVnc={realDevice}
                     onStart={realDevice ? () => handleStartDevice(realDevice) : undefined}
                     onStop={realDevice ? () => handleStopDevice(realDevice) : undefined}
                     onOpenDisplay={() => handleOpenDisplay(device)}
@@ -705,7 +724,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
       
       {/* 设备显示弹窗 */}
       <DeviceDisplayModal 
-        device={displayDevice} 
+        displayData={displayDevice} 
         onClose={() => setDisplayDevice(null)} 
       />
       

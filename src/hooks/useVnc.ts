@@ -84,6 +84,13 @@ export function useVnc(
     const t = transportRef.current;
     if (!t || !containerRef.current) return;
     if (!mountedRef.current) return;
+    // 已连接：仅更新 options，不重建 RFB（展开时 viewOnly 变化会触发 effect，重建会导致 "Unexpected server connection while connecting"）
+    if (rfbRef.current) {
+      rfbRef.current.viewOnly = viewOnly;
+      rfbRef.current.scaleViewport = scaleViewport;
+      rfbRef.current.clipViewport = clipViewport;
+      return;
+    }
     console.log(`${VNC_FLOW} [3-useVnc] doConnect 开始 transport=${typeof t === 'string' ? t : '(VncBridgeTransport)'}`);
     setStatus('connecting');
     setErrorMsg('');

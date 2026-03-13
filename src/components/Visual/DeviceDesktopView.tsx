@@ -21,6 +21,8 @@ import { WS_CONFIG } from '../../config';
 interface DeviceDesktopViewBaseProps {
   onClose?: () => void;
   embedded?: boolean;
+  /** 只读模式，不转发键盘鼠标 */
+  viewOnly?: boolean;
 }
 
 /** maindesk：需要 device 以支持 start/stop */
@@ -43,7 +45,7 @@ export type DeviceDesktopViewProps = DeviceDesktopViewMainProps | DeviceDesktopV
 const VNC_START_WAIT_MS = WS_CONFIG.VNC_START_WAIT_MS ?? 2000;
 
 export function DeviceDesktopView(props: DeviceDesktopViewProps) {
-  const { onClose, embedded = false } = props;
+  const { onClose, embedded = false, viewOnly = false } = props;
   const subjectType = props.subjectType;
   const deviceId = subjectType === 'vm_user' ? (props as DeviceDesktopViewVmUserProps).deviceId : (props as DeviceDesktopViewMainProps).device?.id;
   const pcClientId = subjectType === 'vm_user' ? (props as DeviceDesktopViewVmUserProps).pcClientId : (props as DeviceDesktopViewMainProps).device?.pc_client_id;
@@ -306,7 +308,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
       <div className={`flex-1 overflow-hidden ${!embedded ? 'mt-8' : ''}`}>
         <VncCanvas
           transport={transport}
-          options={{ scaleViewport: true, clipViewport: true }}
+          options={{ scaleViewport: true, clipViewport: true, viewOnly }}
           renderOverlay={renderOverlay}
           className="h-full"
         />
