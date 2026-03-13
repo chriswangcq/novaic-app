@@ -224,6 +224,7 @@ pub async fn vnc_stream_connect(
     let device_id_clone = device_id.clone();
     let vm_id_clone = vm_id.clone();
     let username_clone = username.clone();
+    let pool_key_clone = pool_key.clone();
 
     tauri::async_runtime::spawn(async move {
         tracing::info!("[VNC-FLOW] [4-vnc_stream] spawn 任务开始 route_vnc_to_channel device_id={}.. vm_id={} username={:?}", &device_id_clone[..8.min(device_id_clone.len())], vm_id_clone, username_clone);
@@ -263,7 +264,7 @@ pub async fn vnc_stream_connect(
         }
         streams.write().await.remove(&stream_id_clone);
         by_resource.write().await.retain(|_, (s, _)| s != &stream_id_clone);
-        tracing::info!("[VNC-FLOW] [4-vnc_stream] stream 已从注册表移除 stream_id={}..", &stream_id_clone[..8.min(stream_id_clone.len())]);
+        tracing::info!("[VNC-FLOW] [4-vnc_stream] stream 已从注册表移除 stream_id={}.. pool_key={}", &stream_id_clone[..8.min(stream_id_clone.len())], pool_key_clone);
     });
 
     tracing::info!("[VNC-FLOW] [4-vnc_stream] vnc_stream_connect 返回 stream_id={}..", &stream_id[..8.min(stream_id.len())]);
@@ -285,7 +286,10 @@ pub async fn vnc_stream_send(
         let streams = stream_state.streams.read().await;
         let entry = streams
             .get(&streamId)
-            .ok_or_else(|| format!("VNC stream {} not found", &streamId[..8.min(streamId.len())]))?;
+            .ok_or_else(|| {
+                tracing::warn!("[VNC-FLOW] [4-vnc_stream] vnc_stream_send 失败 stream_id={}.. 不在注册表", &streamId[..8.min(streamId.len())]);
+                format!("VNC stream {} not found", &streamId[..8.min(streamId.len())])
+            })?;
         (entry.0.clone(), entry.1.clone())
     };
     stream_state.touch(&resource_id).await;

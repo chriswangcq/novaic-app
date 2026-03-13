@@ -63,20 +63,18 @@ export function useVnc(
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
-    if (rfbRef.current) {
-      try {
-        rfbRef.current.disconnect();
-      } catch { /* ignore */ }
-      rfbRef.current = null;
-    }
-    // 仅关闭已使用的 transport，不关闭尚未 doConnect 的新 transport（避免 canConnect=false 时误关 transportRef）
+    // 先关闭 transport，再 disconnect RFB，避免 transport 已关时 rfb.disconnect() 导致 "Disconnection timed out"
     const t = lastTransportRef.current;
     if (t && typeof t !== 'string' && 'close' in t) {
       const br = t as VncBridgeTransport;
-      console.log(`${VNC_FLOW} [3-useVnc] disconnect 关闭 prevTransport resourceId=${br.resourceId ?? '?'}`);
+      console.log(`${VNC_FLOW} [3-useVnc] disconnect 关闭 prevTransport resourceId=${br.resourceId ?? '?'} username=${br.username ?? '(maindesk)'}`);
       br.close();
     }
     lastTransportRef.current = null;
+    if (rfbRef.current) {
+      // transport.close() 已触发 onclose，RFB 会收到；不再调用 rfb.disconnect() 避免 "Disconnection timed out"
+      rfbRef.current = null;
+    }
     setStatus('disconnected');
     setErrorMsg('');
   }, []);
@@ -90,22 +88,22 @@ export function useVnc(
     setStatus('connecting');
     setErrorMsg('');
     try {
-      // C1: 关闭旧 RFB 和旧 transport（VncBridgeTransport 需显式 close）
-      if (rfbRef.current) {
-        try {
-          rfbRef.current.disconnect();
-        } catch { /* ignore */ }
-        rfbRef.current = null;
-      }
+      // C1: 先关闭旧 transport 再清 RFB；关闭前设 userInitiated=true 并取消重试，避免旧 RFB 的 disconnect 触发重试（重试会关掉新 transport）
       const prevTransport = lastTransportRef.current;
       if (prevTransport && prevTransport !== t && typeof prevTransport !== 'string' && 'close' in prevTransport) {
+        userInitiatedDisconnectRef.current = true;
+        if (retryTimerRef.current) {
+          clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
         const br = prevTransport as VncBridgeTransport;
         console.log(`${VNC_FLOW} [3-useVnc] doConnect 关闭 prevTransport resourceId=${br.resourceId ?? '?'} (transport 已切换)`);
         br.close();
       }
-      // 竞态：effect cleanup 可能已关闭当前 transport，RFB 不能使用已关闭的 channel
+      rfbRef.current = null;
+      // 竞态：effect cleanup 可能已关闭当前 transport；CONNECTING 允许（延迟连接，RFB attach 后 onopen 触发连接）
       const bridge = typeof t !== 'string' && 'readyState' in t ? (t as VncBridgeTransport) : null;
-      if (bridge && bridge.readyState !== bridge.OPEN) {
+      if (bridge && (bridge.readyState === bridge.CLOSED || bridge.readyState === bridge.CLOSING)) {
         console.warn(`${VNC_FLOW} [3-useVnc] transport 已关闭(readyState=${bridge.readyState})，跳过`);
         if (mountedRef.current) {
           setStatus('failed');
@@ -176,6 +174,7 @@ export function useVnc(
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      console.log(`${VNC_FLOW} [3-useVnc] unmount cleanup → disconnect()`);
       disconnect();
     };
   }, [disconnect]);
@@ -192,12 +191,15 @@ export function useVnc(
     const hasTransport = !!transport;
     const hasContainer = !!containerRef.current;
     const canConnect = hasTransport && containerReady && hasContainer;
-    console.log(`${VNC_FLOW} [3-useVnc] effect 运行 transport=${hasTransport} containerReady=${containerReady} containerRef=${hasContainer} canConnect=${canConnect}`);
+    const transportId = transport && typeof transport !== 'string' && 'resourceId' in transport
+      ? `${(transport as VncBridgeTransport).resourceId?.slice(0, 8)}:${(transport as VncBridgeTransport).username || 'main'}`
+      : 'null';
+    console.log(`${VNC_FLOW} [3-useVnc] effect 运行 transport=${hasTransport}(${transportId}) containerReady=${containerReady} containerRef=${hasContainer} canConnect=${canConnect}`);
     if (canConnect) {
       doConnect();
     } else {
       if (!hasTransport) {
-        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 transport，disconnect`);
+        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 transport → disconnect() lastTransportRef=${lastTransportRef.current ? '有' : '无'}`);
         disconnect();
       } else if (!containerReady) {
         console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：containerReady=false，不 disconnect（等待容器）`);

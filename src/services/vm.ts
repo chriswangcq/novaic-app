@@ -186,8 +186,10 @@ class VmService {
     username: string,
     pcClientId?: string
   ): Promise<VncBridgeTransport> {
+    console.log(`[VNC-FLOW] [vmService] getVncTransport 调用 resourceId=${resourceId?.slice(0, 8)}.. username=${username === '' ? '(maindesk)' : username} pcClientId=${pcClientId ?? 'null'}`);
     const transport = new VncBridgeTransport(resourceId, username, pcClientId);
     await transport.connect();
+    console.log(`[VNC-FLOW] [vmService] getVncTransport 完成 resourceId=${resourceId?.slice(0, 8)}..`);
     return transport;
   }
 

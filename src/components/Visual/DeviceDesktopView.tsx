@@ -73,14 +73,22 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
     }
     return null;
   }, [subjectType, deviceId, username, pcClientId]);
+  const prevVncTargetRef = useRef<VncTarget | null>(null);
+  useEffect(() => {
+    const prev = prevVncTargetRef.current;
+    prevVncTargetRef.current = vncTarget;
+    if (prev !== vncTarget) {
+      console.log('[VNC-FLOW] [DeviceDesktopView] vncTarget 变化', prev ? `${prev.resourceId}:${prev.username || 'main'}` : 'null', '->', vncTarget ? `${vncTarget.resourceId}:${vncTarget.username || 'main'}` : 'null');
+    }
+  }, [vncTarget]);
   const isMaindesk = subjectType !== 'vm_user';
   const device = isMaindesk ? (props as DeviceDesktopViewMainProps).device : null;
 
   // 日志：挂载/卸载（排查切回 maindesk 连不上）
   useEffect(() => {
-    console.log('[VNC-FLOW] [DeviceDesktopView] 挂载 subjectType=', subjectType, 'deviceId=', deviceId?.slice(0, 8), 'resourceId=', vncTarget?.resourceId?.slice(0, 16));
+    console.log('[VNC-FLOW] [DeviceDesktopView] 挂载 subjectType=', subjectType, 'deviceId=', deviceId?.slice(0, 8), 'username=', username ?? '(maindesk)', 'resourceId=', vncTarget?.resourceId?.slice(0, 16));
     return () => {
-      console.log('[VNC-FLOW] [DeviceDesktopView] 卸载 subjectType=', subjectType, 'resourceId=', vncTarget?.resourceId?.slice(0, 16));
+      console.log('[VNC-FLOW] [DeviceDesktopView] 卸载 subjectType=', subjectType, 'username=', username ?? '(maindesk)', 'resourceId=', vncTarget?.resourceId?.slice(0, 16), '→ useVnc disconnect 将关闭 transport');
     };
   }, []);
 
@@ -128,13 +136,13 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
   useEffect(() => {
     const reqId = ++requestIdRef.current;
     if (!vncTarget) {
-      console.log('[VNC-FLOW] [DeviceDesktopView] effect 跳过：无 vncTarget');
+      console.log('[VNC-FLOW] [DeviceDesktopView] effect 跳过：无 vncTarget → setTransport(null) reqId=', reqId, 'subjectType=', subjectType, 'deviceId=', deviceId);
       setTransport(null);
       setTransportError(null);
       return;
     }
     // 不再要求 deviceStatus===running 才建连，maindesk/subuser 统一：有 vncTarget 即尝试连接
-    console.log('[VNC-FLOW] [DeviceDesktopView] effect 调用 createVncTransport resourceId=', vncTarget.resourceId, 'deviceStatus=', deviceStatus);
+    console.log('[VNC-FLOW] [DeviceDesktopView] effect 调用 createVncTransport reqId=', reqId, 'resourceId=', vncTarget.resourceId, 'username=', vncTarget.username || '(maindesk)');
     setTransportError(null);
     createVncTransport(vncTarget)
       .then((t) => {
@@ -151,7 +159,8 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
           setTransportError(e instanceof Error ? e.message : '创建传输失败');
         }
       });
-  }, [vncTarget, deviceStatus]);
+    // 仅依赖 vncTarget：deviceStatus 变化不应触发 createVncTransport 重跑，否则会关闭刚建立的连接
+  }, [vncTarget]);
 
   // M5: 可取消的 startDevice delay
   const startAbortRef = useRef<AbortController | null>(null);

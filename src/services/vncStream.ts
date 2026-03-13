@@ -137,7 +137,7 @@ async function connectStream(streamKey: string, pcClientId?: string) {
 
   // 如果已经连接或正在连接，不重复连接
   if (state.status === 'connected' || state.status === 'connecting') {
-    console.log(`${VNC_FLOW} [2-vncStream] 跳过（已连接或连接中）streamKey=${streamKey}`);
+    console.log(`${VNC_FLOW} [2-vncStream] connectStream 跳过（已连接或连接中）streamKey=${streamKey.slice(0, 8)}.. status=${state.status}`);
     return;
   }
 
@@ -206,7 +206,9 @@ async function connectStream(streamKey: string, pcClientId?: string) {
     rfb.addEventListener('disconnect', (e: any) => {
       const reason = e?.detail?.reason ?? e?.reason;
       const clean = e?.detail?.clean;
-      console.log(`${VNC_FLOW} [2-vncStream] RFB disconnect streamKey=${streamKey} clean=${clean} reason=${reason || '(empty)'}`);
+      const rfbAlreadyNull = !state?.rfb;
+      const subCount = state?.subscribers.size ?? 0;
+      console.log(`${VNC_FLOW} [2-vncStream] RFB disconnect 事件 streamKey=${streamKey.slice(0, 8)}.. clean=${clean} reason=${reason || '(empty)'} rfbAlreadyNull=${rfbAlreadyNull} subscribers=${subCount} status=${state?.status}`);
       if (state) {
         stopFrameCapture(state);
         state.rfb = null;
@@ -284,8 +286,12 @@ async function connectStream(streamKey: string, pcClientId?: string) {
 
 function disconnectStream(streamKey: string) {
   const state = streams.get(streamKey);
-  if (!state) return;
+  if (!state) {
+    console.log(`${VNC_FLOW} [2-vncStream] disconnectStream 跳过：无 state streamKey=${streamKey}`);
+    return;
+  }
 
+  console.log(`${VNC_FLOW} [2-vncStream] disconnectStream 开始 streamKey=${streamKey.slice(0, 8)}.. status=${state.status} transportOrUrl=${state.transportOrUrl ? '有' : '无'}`);
   if (state.status === 'connected') {
     useDeviceStatusStore.getState().decrementVncConnectionCount();
   }
@@ -308,6 +314,7 @@ function disconnectStream(streamKey: string) {
   }
   state.transportOrUrl = null;
   notifySubscribers(state, 'status');
+  console.log(`${VNC_FLOW} [2-vncStream] disconnectStream 完成 streamKey=${streamKey}`);
 }
 
 // ==================== 公共 API ====================
@@ -325,25 +332,30 @@ export function subscribeToVNCStream(streamKey: string, subscriber: StreamSubscr
     state = createStreamState();
     streams.set(streamKey, state);
   }
-  
+  const beforeCount = state.subscribers.size;
   state.subscribers.add(subscriber);
-  
+  console.log(`${VNC_FLOW} [2-vncStream] subscribe streamKey=${streamKey.slice(0, 8)}.. pcClientId=${pcClientId ?? 'null'} 订阅者 ${beforeCount}→${state.subscribers.size} 当前status=${state.status}`);
+
   // 立即通知当前状态
   subscriber.onStatusChange(state.status);
-  
+
   // 如果还没连接，开始连接
   if (state.status === 'disconnected' || state.status === 'error') {
+    console.log(`${VNC_FLOW} [2-vncStream] subscribe 触发 connectStream streamKey=${streamKey.slice(0, 8)}..`);
     connectStream(streamKey, pcClientId);
   }
-  
+
   // 返回取消订阅函数
   return () => {
     if (state) {
+      const beforeCount = state.subscribers.size;
       state.subscribers.delete(subscriber);
-      
+      const afterCount = state.subscribers.size;
+      console.log(`${VNC_FLOW} [2-vncStream] unsubscribe streamKey=${streamKey.slice(0, 8)}.. 订阅者 ${beforeCount}→${afterCount} 当前status=${state.status}`);
+
       // 如果没有订阅者了，断开连接
-      if (state.subscribers.size === 0) {
-        console.log(`[VNCStream] No subscribers left for ${streamKey}, disconnecting`);
+      if (afterCount === 0) {
+        console.log(`${VNC_FLOW} [2-vncStream] 无订阅者 streamKey=${streamKey} → disconnectStream`);
         disconnectStream(streamKey);
       }
     }

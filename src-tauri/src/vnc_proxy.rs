@@ -555,6 +555,7 @@ use tauri::Emitter;
 
 /// 方案 B：mpsc channel ↔ QUIC 双向桥接，通过 Tauri emit 将 QUIC 数据发往前端
 /// on_activity: 收到 quic 数据时调用，用于连接池 idle 计时
+/// stream_id_short, username: 诊断日志用，用于定位 newtest 等 subuser 连不上的原因
 pub async fn bridge_channel_quic(
     mut rx: mpsc::Receiver<Vec<u8>>,
     mut quic_send: quinn::SendStream,
@@ -563,11 +564,15 @@ pub async fn bridge_channel_quic(
     data_event: &str,
     close_event: &str,
     on_activity: Option<Box<dyn Fn() + Send + Sync>>,
+    stream_id_short: &str,
+    username: &str,
 ) -> anyhow::Result<()> {
     let data_event = data_event.to_string();
     let close_event = close_event.to_string();
+    let stream_id_short = stream_id_short.to_string();
+    let username = username.to_string();
 
-    tracing::info!("[VNC-FLOW] [5-Bridge] bridge_channel_quic 开始");
+    tracing::info!("[VNC-FLOW] [5-Bridge] bridge_channel_quic 开始 stream_id={}.. username={}", stream_id_short, if username.is_empty() { "(maindesk)" } else { &username });
 
     let channel_to_quic = async {
         let mut send_count: u64 = 0;
@@ -584,7 +589,7 @@ pub async fn bridge_channel_quic(
                 break;
             }
         }
-        tracing::info!("[VNC-FLOW] [5-Bridge] channel→quic 结束 rx 关闭 send_count={}", send_count);
+        tracing::info!("[VNC-FLOW] [5-Bridge] channel→quic 结束 stream_id={}.. username={} rx关闭 send_count={}", stream_id_short, if username.is_empty() { "(maindesk)" } else { &username }, send_count);
         let _ = quic_send.finish();
         Ok::<(), anyhow::Error>(())
     };
@@ -612,7 +617,7 @@ pub async fn bridge_channel_quic(
                     }
                 }
                 _ => {
-                    tracing::info!("[VNC-FLOW] [5-Bridge] quic→channel 结束 recv_count={}", recv_count);
+                    tracing::info!("[VNC-FLOW] [5-Bridge] quic→channel 结束 stream_id={}.. username={} recv_count={} (quic流关闭)", stream_id_short, if username.is_empty() { "(maindesk)" } else { &username }, recv_count);
                     break;
                 }
             }
@@ -636,7 +641,7 @@ pub async fn bridge_channel_quic(
         r = quic_to_channel => r?,
         _ = heartbeat => (), // 永不完成，仅当 channel/quic 一方结束时 select 才返回
     }
-    tracing::info!("[VNC-FLOW] [5-Bridge] bridge_channel_quic 结束，emit close");
+    tracing::info!("[VNC-FLOW] [5-Bridge] bridge_channel_quic 结束 stream_id={}.. username={} emit close", stream_id_short, if username.is_empty() { "(maindesk)" } else { &username });
     let _ = app.emit(&close_event, "Stream ended");
     Ok(())
 }
@@ -691,5 +696,5 @@ pub async fn route_vnc_to_channel(
     tracing::info!("[VNC-FLOW] [5-VncStream] 进入 bridge_channel_quic stream_id={}..", &stream_id[..8.min(stream_id.len())]);
     let data_event = format!("vnc_stream:{}:data", stream_id);
     let close_event = format!("vnc_stream:{}:close", stream_id);
-    bridge_channel_quic(rx, quic_send, quic_recv, app, &data_event, &close_event, on_activity).await
+    bridge_channel_quic(rx, quic_send, quic_recv, app, &data_event, &close_event, on_activity, &stream_id[..8.min(stream_id.len())], username).await
 }

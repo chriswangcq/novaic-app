@@ -92,11 +92,12 @@ function VNCViewSharedComponent({
   useEffect(() => {
     if (!streamKey) return;
     
-    console.log(`[VNCViewShared] Subscribing to stream for ${streamKey}, thumbnail=${isThumbnail}`);
+    console.log(`[VNC-FLOW] [VNCViewShared] mount 订阅 maindesk streamKey=${streamKey.slice(0, 8)}.. pcClientId=${propPcClientId ?? 'null'} thumbnail=${isThumbnail}`);
     
     const unsubscribe = subscribeToVNCStream(streamKey, {
       onFrame: copyFrame,
       onStatusChange: (newStatus) => {
+        console.log(`[VNC-FLOW] [VNCViewShared] onStatusChange streamKey=${streamKey.slice(0, 8)}.. status=${newStatus}`);
         setStatus(newStatus);
         if (newStatus === 'connected') {
           setErrorMsg('');
@@ -106,12 +107,13 @@ function VNCViewSharedComponent({
         }
       },
       onError: (error) => {
+        console.warn(`[VNC-FLOW] [VNCViewShared] onError streamKey=${streamKey.slice(0, 8)}..`, error);
         setErrorMsg(error);
       },
     }, propPcClientId);
     
     return () => {
-      console.log(`[VNCViewShared] Unsubscribing from stream for ${streamKey}`);
+      console.log(`[VNC-FLOW] [VNCViewShared] unmount 取消订阅 maindesk streamKey=${streamKey.slice(0, 8)}..`);
       unsubscribe();
     };
   }, [streamKey, propPcClientId, copyFrame, setVncConnected, isThumbnail]);

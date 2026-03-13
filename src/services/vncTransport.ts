@@ -9,7 +9,6 @@
 
 import { VncBridgeTransport } from './vncBridge';
 import type { VncTarget } from '../types/vnc';
-import { WS_CONFIG } from '../config';
 
 export type VncTransport = VncBridgeTransport;
 
@@ -34,50 +33,34 @@ function cacheKey(target: VncTarget): string {
 export async function createVncTransport(target: VncTarget): Promise<VncTransport> {
   const { resourceId, username, pcClientId } = target;
   const key = cacheKey(target);
-  const timeoutMs = WS_CONFIG.VNC_TRANSPORT_TIMEOUT_MS ?? 60000;
 
   const cached = transportCache.get(key);
-  if (cached && cached.readyState === cached.OPEN) {
-    console.log(`${VNC_FLOW} [1-前端] 复用缓存 transport key=${key.slice(0, 20)}..`);
-    // 复用缓存时也需延后触发 onopen，确保 RFB.attach 先设置 handler
-    setTimeout(() => cached.onopen?.(), 0);
-    return cached;
+  if (cached && (cached.readyState === cached.OPEN || cached.readyState === cached.CONNECTING)) {
+    console.log(`${VNC_FLOW} [1-前端] 复用缓存 transport key=${key.slice(0, 20)}.. state=${cached.readyState}`);
+    return Promise.resolve(cached);
   }
   if (cached) {
     transportCache.delete(key);
   }
 
-  // 并发去重：Strict Mode 双挂载时，第二次调用等待第一次结果
+  // 并发去重：Strict Mode 双挂载时，第二次调用复用第一次的 transport
   const pending = pendingByKey.get(key);
   if (pending) {
-    console.log(`${VNC_FLOW} [1-前端] 复用进行中 promise key=${key.slice(0, 20)}..`);
+    console.log(`${VNC_FLOW} [1-前端] 复用进行中 transport key=${key.slice(0, 20)}..`);
     return pending;
   }
 
-  console.log(`${VNC_FLOW} [1-前端] createVncTransport 开始 resourceId=${resourceId} username=${username === '' ? '(maindesk)' : username} pcClientId=${pcClientId ?? 'null'} timeoutMs=${timeoutMs}`);
+  console.log(`${VNC_FLOW} [1-前端] createVncTransport 开始 resourceId=${resourceId} username=${username === '' ? '(maindesk)' : username} pcClientId=${pcClientId ?? 'null'}`);
 
   const transport = new VncBridgeTransport(resourceId, username, pcClientId, () => {
     transportCache.delete(key);
   });
-  const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('VNC 连接超时，请重试')), timeoutMs);
-  });
+  transport.connect(); // 仅设 CONNECTING，实际连接在 onopen set 时由 _doConnect 触发
 
-  const promise = (async () => {
-    try {
-      await Promise.race([transport.connect(), timeout]);
-      transportCache.set(key, transport);
-      console.log(`${VNC_FLOW} [1-前端] VncStreamTransport 连接成功`);
-      return transport;
-    } catch (e) {
-      transportCache.delete(key);
-      console.error(`${VNC_FLOW} [1-前端] createVncTransport 失败 resourceId=${resourceId}`, e);
-      throw e;
-    } finally {
-      pendingByKey.delete(key);
-    }
-  })();
-
+  transportCache.set(key, transport);
+  const promise = Promise.resolve(transport);
   pendingByKey.set(key, promise);
+  promise.finally(() => pendingByKey.delete(key));
+  console.log(`${VNC_FLOW} [1-前端] createVncTransport 返回 transport（延迟连接）`);
   return promise;
 }

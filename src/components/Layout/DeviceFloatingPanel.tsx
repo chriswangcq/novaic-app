@@ -182,6 +182,16 @@ function DeviceCard({ subjectCard, agentId, onStartVm, bottomOffset, topOffset, 
   const isVmUser = deviceInfo.type === 'linux' && binding.subject_type === 'vm_user';
   const isAndroid = deviceInfo.type === 'android';
 
+  // 日志：maindesk ↔ subuser 切换
+  const prevViewRef = useRef<string>('');
+  useEffect(() => {
+    const view = isMain ? 'maindesk' : isVmUser ? `subuser:${binding.subject_id}` : 'other';
+    if (prevViewRef.current && prevViewRef.current !== view) {
+      console.log(`[VNC-FLOW] [DeviceCard] 切换 ${prevViewRef.current} → ${view} deviceId=${device.id?.slice(0, 8)}`);
+    }
+    prevViewRef.current = view;
+  }, [isMain, isVmUser, binding.subject_id, device.id]);
+
   const recompute = useCallback(() => {
     if (expanded) setRect(overlayRect(deviceInfo.type, inline ? 0 : spacerWidth));
     else if (inline) {
