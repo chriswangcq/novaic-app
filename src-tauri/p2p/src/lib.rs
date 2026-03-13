@@ -33,7 +33,6 @@ pub mod crypto;
 pub mod hole_punch;
 pub mod rendezvous;
 pub mod tunnel;
-pub mod vnc_endpoint;
 
 // Phase 4
 pub mod relay;

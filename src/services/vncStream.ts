@@ -149,7 +149,7 @@ async function connectStream(streamKey: string, pcClientId?: string) {
     // P1-2: 移除 testWebSocket，设计 §3.3 要求依赖后端 ensure_vnc_endpoint
     if (!state.transportOrUrl) {
       console.log(`${VNC_FLOW} [2-vncStream] getVncTransport streamKey=${streamKey} pcClientId=${pcClientId ?? 'null'}`);
-      state.transportOrUrl = await vmService.getVncTransport(streamKey, pcClientId).catch((err: any) => {
+      state.transportOrUrl = await vmService.getVncTransport(streamKey, '', pcClientId).catch((err: any) => {
         console.error(`${VNC_FLOW} [2-vncStream] getVncTransport 失败 streamKey=${streamKey}`, err);
         notifySubscribers(state, 'error', err?.message || '获取 VNC 传输失败');
         state.status = 'error';

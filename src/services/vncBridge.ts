@@ -56,13 +56,16 @@ export class VncBridgeTransport {
 
   /** 供日志使用 */
   readonly resourceId: string;
+  readonly username: string;
 
   constructor(
     resourceId: string,
+    username: string,
     private pcClientId?: string,
     evictFromCache?: () => void
   ) {
     this.resourceId = resourceId;
+    this.username = username;
     this._evictFromCache = evictFromCache ?? null;
   }
 
@@ -70,11 +73,12 @@ export class VncBridgeTransport {
 
   async connect(): Promise<void> {
     const VNC_FLOW = '[VNC-FLOW]';
-    console.log(`${VNC_FLOW} [1-Bridge] connect 开始 resourceId=${this.resourceId} pcClientId=${this.pcClientId ?? 'null'}`);
+    console.log(`${VNC_FLOW} [1-Bridge] connect 开始 resourceId=${this.resourceId} username=${this.username === '' ? '(maindesk)' : this.username} pcClientId=${this.pcClientId ?? 'null'}`);
     this.readyState = this.CONNECTING;
     try {
       this.bridgeId = await invoke<string>('vnc_stream_connect', {
         resourceId: this.resourceId,
+        username: this.username,
         pcClientId: this.pcClientId ?? null,
       });
       console.log(`${VNC_FLOW} [1-Bridge] vnc_stream_connect 成功 streamId=${this.bridgeId?.slice(0, 8)}`);

@@ -155,6 +155,8 @@ pub fn create_router(state: AppState, data_dir: Option<PathBuf>, process_state: 
         .route("/api/vmuse/:agent_id/:tool/:operation", post(vmuse::vmuse_agent_proxy))
         // VNC WebSocket endpoint
         .route("/api/vms/:id/vnc", get(vnc::vnc_websocket))
+        // VNC endpoint 解析（tunnel 调用，中间件无分支）
+        .route("/api/vms/vnc-endpoint", post(vnc::vnc_endpoint_resolve))
         // Scrcpy endpoints (legacy, for backward compatibility)
         .route("/api/android/scrcpy", get(scrcpy::scrcpy_websocket))
         .route("/api/android/scrcpy/status", get(scrcpy::scrcpy_status))

@@ -135,8 +135,8 @@ export const WS_CONFIG = {
   VNC_MAX_RETRIES: 5,
   /** 设备启动后等待 VNC 就绪（毫秒） */
   VNC_START_WAIT_MS: 2000,
-  /** createVncTransport 超时（毫秒），P2P+relay 与后端 30s 对齐 */
-  VNC_TRANSPORT_TIMEOUT_MS: 30000,
+  /** createVncTransport 超时（毫秒），maindesk/subuser 统一 60s，subuser ensure_vnc_endpoint 需更长时间 */
+  VNC_TRANSPORT_TIMEOUT_MS: 60000,
 
   /** vmcontrol 服务端口 */
   VMCONTROL_PORT: parseInt(import.meta.env.VITE_VMCONTROL_PORT || '19996'),

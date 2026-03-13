@@ -643,10 +643,12 @@ pub async fn bridge_channel_quic(
 
 /// 方案 B：直接建立 VNC 流并桥接到 channel，供 vnc_stream_connect 调用
 /// on_activity: 收到 quic 数据时调用，用于连接池 idle 计时
+/// vm_id: 设备 ID；username: maindesk 传 ""，subuser 传实际用户名
 pub async fn route_vnc_to_channel(
     state: HandlerState,
     device_id: &str,
-    agent_id: &str,
+    vm_id: &str,
+    username: &str,
     app: tauri::AppHandle,
     stream_id: &str,
     rx: mpsc::Receiver<Vec<u8>>,
@@ -658,14 +660,14 @@ pub async fn route_vnc_to_channel(
 
     let local_short = local_id.as_deref().map(|s| &s[..8.min(s.len())]).unwrap_or("(none)");
     let dev_short = &device_id[..8.min(device_id.len())];
-    tracing::info!("[VNC-FLOW] [5-VncStream] route_vnc_to_channel local_id={} device_id={} agent_id={}", local_short, dev_short, agent_id);
+    tracing::info!("[VNC-FLOW] [5-VncStream] route_vnc_to_channel local_id={} device_id={} vm_id={} username={:?}", local_short, dev_short, vm_id, username);
 
     let (quic_send, quic_recv) = if local_id.as_deref() == Some(device_id) {
         tracing::info!("[VNC-FLOW] [5-VncStream] 路由: 本机 → get_or_create_local_conn");
         let conn = get_or_create_local_conn(&state).await?;
-        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 开始 agent_id={}", agent_id);
-        let s = p2p::tunnel::open_vnc_stream(&conn, agent_id).await?;
-        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 成功 agent_id={}", agent_id);
+        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 开始 vm_id={} username={:?}", vm_id, username);
+        let s = p2p::tunnel::open_vnc_stream(&conn, vm_id, username).await?;
+        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 成功 vm_id={}", vm_id);
         s
     } else if let Some((failed_did, err)) = state.p2p_setup_error.read().await.as_ref() {
         if failed_did == device_id {
@@ -673,16 +675,16 @@ pub async fn route_vnc_to_channel(
         }
         tracing::info!("[VNC-FLOW] [5-VncStream] 路由: 远端 → get_or_create_remote_conn");
         let conn = get_or_create_remote_conn(device_id, &state).await?;
-        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 开始 agent_id={}", agent_id);
-        let s = p2p::tunnel::open_vnc_stream(&conn, agent_id).await?;
-        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 成功 agent_id={}", agent_id);
+        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 开始 vm_id={} username={:?}", vm_id, username);
+        let s = p2p::tunnel::open_vnc_stream(&conn, vm_id, username).await?;
+        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 成功 vm_id={}", vm_id);
         s
     } else {
         tracing::info!("[VNC-FLOW] [5-VncStream] 路由: 远端 → get_or_create_remote_conn");
         let conn = get_or_create_remote_conn(device_id, &state).await?;
-        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 开始 agent_id={}", agent_id);
-        let s = p2p::tunnel::open_vnc_stream(&conn, agent_id).await?;
-        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 成功 agent_id={}", agent_id);
+        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 开始 vm_id={} username={:?}", vm_id, username);
+        let s = p2p::tunnel::open_vnc_stream(&conn, vm_id, username).await?;
+        tracing::info!("[VNC-FLOW] [5-VncStream] open_vnc_stream 成功 vm_id={}", vm_id);
         s
     };
 

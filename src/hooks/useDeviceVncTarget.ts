@@ -45,15 +45,11 @@ export function useDeviceVncTarget(
       const d = await api.devices.get(id);
       if (deviceIdRef.current !== id) return;
       setDevice(d);
-      const resourceId =
-        subjectType === 'vm_user' && subjectId
-          ? `${id}:${subjectId}`
-          : id;
       setVncTarget({
-        resourceId,
+        resourceId: id,
         subjectType,
         deviceId: id,
-        username: subjectType === 'vm_user' ? (subjectId ?? undefined) : undefined,
+        username: subjectType === 'vm_user' ? (subjectId ?? '') : '',
         pcClientId: d.pc_client_id != null ? d.pc_client_id : undefined,
       });
     } catch (e: unknown) {

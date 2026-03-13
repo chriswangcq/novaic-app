@@ -70,30 +70,6 @@ const SOCKET_DIR: &str = "/tmp/novaic";
 const QMP_SOCKET_PREFIX: &str = "novaic-qmp-";
 const QMP_SOCKET_SUFFIX: &str = ".sock";
 
-fn is_qemu_process_alive(agent_id: &str) -> bool {
-    let vm_name = format!("novaic-vm-{}", agent_id);
-    std::process::Command::new("ps")
-        .args(["-axo", "command="])
-        .output()
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .map(|stdout| stdout.lines().any(|line| line.contains(&vm_name)))
-        .unwrap_or(false)
-}
-
-fn is_vnc_socket_live(agent_id: &str) -> bool {
-    use std::os::unix::net::UnixStream as StdUnix;
-
-    // 统一路径 vnc-{id}.sock；fallback 兼容旧 VM 的 novaic-vnc-{id}.sock
-    for name in [format!("vnc-{}.sock", agent_id), format!("novaic-vnc-{}.sock", agent_id)] {
-        let vnc_socket = PathBuf::from(format!("{}/{}", SOCKET_DIR, name));
-        if vnc_socket.exists() && StdUnix::connect(&vnc_socket).is_ok() {
-            return true;
-        }
-    }
-    false
-}
-
 /// Discover all running VMs by scanning QMP socket files
 fn discover_running_vms() -> Vec<(String, PathBuf)> {
     let socket_dir = PathBuf::from(SOCKET_DIR);
@@ -119,14 +95,10 @@ fn discover_running_vms() -> Vec<(String, PathBuf)> {
     vms
 }
 
-/// Check if a specific VM is running by verifying QMP socket exists AND is live.
+/// Check if a specific VM is running via QMP query-status.
 ///
-/// 通过非阻塞连接探测 socket 是否有进程在监听：
-/// - ECONNREFUSED → stale socket（QEMU 已死），删除文件并返回 None
-/// - 连接成功或 EWOULDBLOCK/EAGAIN → QEMU 还活着
-fn is_vm_running_sync(agent_id: &str) -> Option<PathBuf> {
-    use std::os::unix::net::UnixStream as StdUnix;
-
+/// 仅通过 QMP 连接并 query-status 判断，running/paused 视为可管理。
+async fn is_vm_running(agent_id: &str) -> Option<PathBuf> {
     let qmp_socket = PathBuf::from(format!("{}/{}{}{}", SOCKET_DIR, QMP_SOCKET_PREFIX, agent_id, QMP_SOCKET_SUFFIX));
 
     if !qmp_socket.exists() {
@@ -134,7 +106,7 @@ fn is_vm_running_sync(agent_id: &str) -> Option<PathBuf> {
         return None;
     }
 
-    // Check if the socket file is a valid socket (not a stale regular file)
+    #[cfg(unix)]
     match std::fs::metadata(&qmp_socket) {
         Ok(meta) if !meta.file_type().is_socket() => {
             tracing::warn!("[is_vm_running] {} exists but is not a socket", qmp_socket.display());
@@ -147,47 +119,26 @@ fn is_vm_running_sync(agent_id: &str) -> Option<PathBuf> {
         _ => {}
     }
 
-    // Liveness check: try a non-blocking connect.
-    // ECONNREFUSED → no listener (stale); success or WouldBlock → listener present.
-    match StdUnix::connect(&qmp_socket) {
-        Ok(_) => {
-            // Connected immediately — QEMU is listening
-            tracing::debug!("[is_vm_running] VM {} live (connect succeeded)", agent_id);
-            Some(qmp_socket)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-            // QMP 在启动窗口期偶尔会短暂拒绝连接，但此时 QEMU 进程或 VNC
-            // 可能已经活着。不要把这种情况误删成 stale socket。
-            if is_qemu_process_alive(agent_id) || is_vnc_socket_live(agent_id) {
-                tracing::warn!(
-                    "[is_vm_running] QMP connect refused for VM {} but process/VNC is alive; keeping socket",
-                    agent_id
-                );
-                return Some(qmp_socket);
+    let socket_str = qmp_socket.to_string_lossy();
+    // 启动窗口期 QMP 可能短暂不可用，重试 3 次（间隔 500ms）
+    for attempt in 0..3 {
+        if let Ok(mut qmp) = QmpClient::connect(socket_str.as_ref()).await {
+            if let Ok(status) = qmp.query_status().await {
+                // running/paused/prelaunch 均视为 VM 可管理（prelaunch = QEMU 已起、guest 未启动）
+                let ok = status.running
+                    || matches!(status.status.as_str(), "running" | "paused" | "prelaunch");
+                if ok {
+                    tracing::debug!("[is_vm_running] VM {} live (QMP query-status: {})", agent_id, status.status);
+                    return Some(qmp_socket);
+                }
             }
-            tracing::warn!(
-                "[is_vm_running] Stale socket for VM {} — removing ({})",
-                agent_id, e
-            );
-            let _ = std::fs::remove_file(&qmp_socket);
-            None
         }
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
-            || e.raw_os_error() == Some(11) /* EAGAIN */ =>
-        {
-            // Socket exists and has a listener but is busy — treat as live
-            Some(qmp_socket)
-        }
-        Err(_) => {
-            // Other errors (permission etc.) — assume live to avoid false negatives
-            Some(qmp_socket)
+        if attempt < 2 {
+            sleep(Duration::from_millis(500)).await;
         }
     }
-}
 
-/// Async wrapper for is_vm_running_sync (for API compatibility)
-async fn is_vm_running(agent_id: &str) -> Option<PathBuf> {
-    is_vm_running_sync(agent_id)
+    None
 }
 
 /// Get SSH port from Gateway API
@@ -816,7 +767,7 @@ pub async fn stop_vm(
         }
     }
     // Phase 3: 清理 subuser 代理（abort 任务、移除 socket、清理 registry）
-    p2p::vnc_endpoint::shutdown_proxy_for_vm(&id).await;
+    crate::vnc_endpoint::shutdown_proxy_for_vm(&id).await;
     let ga_socket_path = format!("{}/novaic-ga-{}.sock", SOCKET_DIR, id);
     std::fs::remove_file(&ga_socket_path).ok();
     let mcp_socket_path = format!("{}/novaic-mcp-{}.sock", SOCKET_DIR, id);

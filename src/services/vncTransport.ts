@@ -22,7 +22,7 @@ const transportCache = new Map<string, VncBridgeTransport>();
 const pendingByKey = new Map<string, Promise<VncTransport>>();
 
 function cacheKey(target: VncTarget): string {
-  return `${target.resourceId}|${target.pcClientId ?? ''}`;
+  return `${target.resourceId}|${target.username}|${target.pcClientId ?? ''}`;
 }
 
 /**
@@ -32,10 +32,9 @@ function cacheKey(target: VncTarget): string {
  * @returns VncStreamTransport（方案 B 统一 IPC）
  */
 export async function createVncTransport(target: VncTarget): Promise<VncTransport> {
-  const { resourceId, pcClientId } = target;
+  const { resourceId, username, pcClientId } = target;
   const key = cacheKey(target);
-  const isSubuser = resourceId.includes(':');
-  const timeoutMs = isSubuser ? 60000 : (WS_CONFIG.VNC_TRANSPORT_TIMEOUT_MS ?? 30000);
+  const timeoutMs = WS_CONFIG.VNC_TRANSPORT_TIMEOUT_MS ?? 60000;
 
   const cached = transportCache.get(key);
   if (cached && cached.readyState === cached.OPEN) {
@@ -55,9 +54,9 @@ export async function createVncTransport(target: VncTarget): Promise<VncTranspor
     return pending;
   }
 
-  console.log(`${VNC_FLOW} [1-前端] createVncTransport 开始 resourceId=${resourceId} pcClientId=${pcClientId ?? 'null'} isSubuser=${isSubuser} timeoutMs=${timeoutMs}`);
+  console.log(`${VNC_FLOW} [1-前端] createVncTransport 开始 resourceId=${resourceId} username=${username === '' ? '(maindesk)' : username} pcClientId=${pcClientId ?? 'null'} timeoutMs=${timeoutMs}`);
 
-  const transport = new VncBridgeTransport(resourceId, pcClientId, () => {
+  const transport = new VncBridgeTransport(resourceId, username, pcClientId, () => {
     transportCache.delete(key);
   });
   const timeout = new Promise<never>((_, reject) => {

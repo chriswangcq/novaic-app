@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  Monitor, Loader2, AlertCircle, X, Play, Square, Users, RefreshCw,
+  Loader2, AlertCircle, X, Play, Square, Users, RefreshCw,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { createVncTransport } from '../../services/vncTransport';
@@ -51,13 +51,13 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
   const vncTarget = useMemo((): VncTarget | null => {
     if (subjectType === 'vm_user' && deviceId && username !== undefined) {
       const t: VncTarget = {
-        resourceId: `${deviceId}:${username}`,
+        resourceId: deviceId,
         subjectType: 'vm_user',
         deviceId,
         username,
         pcClientId,
       };
-      console.log('[VNC-FLOW] [DeviceDesktopView] vncTarget 来源 subjectType=', subjectType, 'deviceId=', deviceId, 'resourceId=', t.resourceId);
+      console.log('[VNC-FLOW] [DeviceDesktopView] vncTarget 来源 subjectType=', subjectType, 'deviceId=', deviceId, 'username=', username);
       return t;
     }
     if (subjectType !== 'vm_user' && deviceId) {
@@ -65,9 +65,10 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
         resourceId: deviceId,
         subjectType: subjectType as 'main' | 'default',
         deviceId,
+        username: '',
         pcClientId,
       };
-      console.log('[VNC-FLOW] [DeviceDesktopView] vncTarget 来源 subjectType=', subjectType, 'deviceId=', deviceId, 'resourceId=', t.resourceId);
+      console.log('[VNC-FLOW] [DeviceDesktopView] vncTarget 来源 subjectType=', subjectType, 'deviceId=', deviceId);
       return t;
     }
     return null;
@@ -89,7 +90,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
   const [deviceStatus, setDeviceStatus] = useState<'unknown' | 'stopped' | 'starting' | 'running' | 'error'>(
     () => (isMaindesk && device?.status === 'running' ? 'running' : 'unknown')
   );
-  const [startError, setStartError] = useState<string | null>(null);
+  const [, setStartError] = useState<string | null>(null);
 
   // 日志：deviceStatus 变化（排查切回 maindesk 连不上）
   const prevDeviceStatusRef = useRef(deviceStatus);
@@ -132,12 +133,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
       setTransportError(null);
       return;
     }
-    if (isMaindesk && deviceStatus !== 'running') {
-      console.log('[VNC-FLOW] [DeviceDesktopView] effect 跳过：maindesk 且 deviceStatus=', deviceStatus, '≠running，不创建 transport');
-      setTransport(null);
-      setTransportError(null);
-      return;
-    }
+    // 不再要求 deviceStatus===running 才建连，maindesk/subuser 统一：有 vncTarget 即尝试连接
     console.log('[VNC-FLOW] [DeviceDesktopView] effect 调用 createVncTransport resourceId=', vncTarget.resourceId, 'deviceStatus=', deviceStatus);
     setTransportError(null);
     createVncTransport(vncTarget)
@@ -155,7 +151,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
           setTransportError(e instanceof Error ? e.message : '创建传输失败');
         }
       });
-  }, [vncTarget, isMaindesk, deviceStatus]);
+  }, [vncTarget, deviceStatus]);
 
   // M5: 可取消的 startDevice delay
   const startAbortRef = useRef<AbortController | null>(null);
@@ -216,106 +212,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
     }
   }, [vncTarget]);
 
-  // maindesk: show start/stop overlay when not running
-  if (isMaindesk && deviceStatus !== 'running') {
-    const statusLabel = {
-      unknown: '',
-      stopped: 'Stopped',
-      starting: 'Starting…',
-      running: '',
-      error: 'Error',
-    }[deviceStatus];
-
-    return (
-      <div className="relative flex flex-col h-full bg-black select-none">
-        {!embedded && (
-          <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between
-                          px-3 py-2 bg-nb-surface/80 border-b border-nb-border/60 shrink-0">
-            <div className="flex items-center gap-2">
-              <Monitor size={13} className="text-blue-400" />
-              <span className="text-sm font-medium text-nb-text truncate">
-                {device?.name || 'Linux VM'}
-              </span>
-              {statusLabel && (
-                <span className="text-[11px] text-nb-text-secondary">{statusLabel}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              {deviceStatus !== 'starting' && (
-                <button
-                  onClick={deviceStatus === 'stopped' || deviceStatus === 'unknown' ? startDevice : stopDevice}
-                  title={deviceStatus === 'stopped' || deviceStatus === 'unknown' ? 'Start' : 'Stop'}
-                  className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors
-                    ${deviceStatus === 'stopped' || deviceStatus === 'unknown'
-                      ? 'text-emerald-400/70 hover:text-emerald-400 hover:bg-emerald-500/10'
-                      : 'text-amber-400/70 hover:text-amber-400 hover:bg-amber-500/10'}`}
-                >
-                  {deviceStatus === 'stopped' || deviceStatus === 'unknown' ? (
-                    <Play size={13} />
-                  ) : (
-                    <Square size={13} />
-                  )}
-                </button>
-              )}
-              {deviceStatus === 'starting' && (
-                <Loader2 size={13} className="animate-spin text-nb-text-secondary" />
-              )}
-              {onClose && (
-                <button
-                  onClick={onClose}
-                  title="Close"
-                  className="w-7 h-7 flex items-center justify-center rounded-md
-                             text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.06]"
-                >
-                  <X size={13} />
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-        <div className={`flex-1 flex flex-col items-center justify-center gap-4 ${!embedded ? 'pt-12' : ''}`}>
-          {deviceStatus === 'starting' ? (
-            <>
-              <Loader2 size={36} className="animate-spin text-white/20" />
-              <p className="text-sm text-white/40">Connecting to desktop…</p>
-            </>
-          ) : deviceStatus === 'error' ? (
-            <>
-              <Monitor size={36} className="text-red-400/40" />
-              <p className="text-sm text-red-400/60">{startError || 'Connection failed'}</p>
-              <button
-                onClick={startDevice}
-                className="px-4 py-1.5 rounded-lg text-sm bg-white/[0.08] hover:bg-white/[0.12]
-                           text-white/60 hover:text-white transition-colors"
-              >
-                Retry
-              </button>
-            </>
-          ) : (
-            <>
-              <Monitor size={48} className="text-white/10" />
-              <p className="text-sm text-white/30">
-                {deviceStatus === 'stopped' ? 'VM is stopped' : 'Waiting for VM…'}
-              </p>
-              {(deviceStatus === 'stopped' || deviceStatus === 'unknown') && (
-                <button
-                  onClick={startDevice}
-                  className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium
-                             bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400
-                             border border-emerald-500/20 transition-colors"
-                >
-                  <Play size={14} />
-                  Start VM
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // vm_user or maindesk running: show VNC canvas
+  // maindesk/subuser 统一：有 vncTarget 即显示 VNC canvas，不再要求 deviceStatus===running
   if (transportError) {
     return (
       <div className="flex flex-col h-full items-center justify-center bg-black text-red-400 gap-3">
@@ -349,14 +246,36 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
       </div>
       <div className="flex items-center gap-1">
         {isMaindesk && (
-          <button
-            onClick={stopDevice}
-            title="Stop"
-            className="w-6 h-6 flex items-center justify-center rounded text-amber-400/70
-                       hover:text-amber-400 hover:bg-amber-500/10 transition-colors"
-          >
-            <Square size={12} />
-          </button>
+          deviceStatus === 'running' ? (
+            <button
+              onClick={stopDevice}
+              title="Stop"
+              className="w-6 h-6 flex items-center justify-center rounded text-amber-400/70
+                         hover:text-amber-400 hover:bg-amber-500/10 transition-colors"
+            >
+              <Square size={12} />
+            </button>
+          ) : deviceStatus === 'starting' ? (
+            <Loader2 size={12} className="animate-spin text-nb-text-secondary" />
+          ) : (deviceStatus === 'stopped' || deviceStatus === 'unknown') ? (
+            <button
+              onClick={startDevice}
+              title="Start"
+              className="w-6 h-6 flex items-center justify-center rounded text-emerald-400/70
+                         hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+            >
+              <Play size={12} />
+            </button>
+          ) : deviceStatus === 'error' ? (
+            <button
+              onClick={startDevice}
+              title="Retry"
+              className="w-6 h-6 flex items-center justify-center rounded text-emerald-400/70
+                         hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+            >
+              <Play size={12} />
+            </button>
+          ) : null
         )}
         {onClose && (
           <button

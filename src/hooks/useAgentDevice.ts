@@ -43,10 +43,10 @@ function bindingToVncTarget(binding: AgentDeviceBinding, device: Device | null):
   const pcClientId = device?.pc_client_id;
   if (subject_type === 'vm_user') {
     return {
-      resourceId: `${device_id}:${subject_id}`,
+      resourceId: device_id,
       subjectType: 'vm_user',
       deviceId: device_id,
-      username: subject_id,
+      username: subject_id ?? '',
       pcClientId,
     };
   }
@@ -54,6 +54,7 @@ function bindingToVncTarget(binding: AgentDeviceBinding, device: Device | null):
     resourceId: device_id,
     subjectType: subject_type as 'main' | 'default',
     deviceId: device_id,
+    username: '',
     pcClientId,
   };
 }

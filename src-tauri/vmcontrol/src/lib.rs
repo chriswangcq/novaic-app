@@ -2,6 +2,7 @@ pub mod error;
 pub mod config;
 pub mod qemu;
 pub mod vnc;
+pub mod vnc_endpoint;
 pub mod scrcpy;
 pub mod android;
 pub mod cloud_bridge;

@@ -2,12 +2,8 @@
 //!
 //! ## 流协议（Stream Header）
 //!
-//! 每个 QUIC 双向流（bidi stream）以 3 字节头部开始：
-//! ```text
-//! [stream_type: u8][id_len: u8][id: id_len bytes]
-//! ```
-//! - `0x01`（VNC）：后接 `vm_id` 字符串
-//! - `0x02`（Scrcpy）：后接 Android `device_id` 字符串
+//! - `0x01`（VNC）：`[vm_id_len][vm_id][username_len][username]`，username_len=0 为 maindesk
+//! - `0x02`（Scrcpy）：`[id_len][id]`，单段 device_id
 //!
 //! ## PC 侧（Tunnel Server）
 //! 监听 QUIC incoming streams，根据头部路由到 VmControl 本地端口。
@@ -27,12 +23,42 @@ const CONNECT_TIMEOUT_SECS: u64 = 5;
 const OPEN_BI_TIMEOUT_SECS: u64 = 15;
 const VNC_RETRY_ATTEMPTS: u32 = 3;
 const VNC_RETRY_DELAY_MS: u64 = 200;
+/// 协议限制，与 vmcontrol 一致
+const MAX_ID_LEN: usize = 80;
 
 /// 流类型标识（首字节）
 #[repr(u8)]
 pub enum StreamType {
     Vnc = 0x01,
     Scrcpy = 0x02,
+}
+
+/// 通过 vmcontrol HTTP API 解析 VNC endpoint，中间件无 maindesk/subuser 分支
+async fn resolve_vnc_endpoint_via_http(
+    base_url: &str,
+    vm_id: &str,
+    username: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let url = format!("{}/api/vms/vnc-endpoint", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "vm_id": vm_id, "username": username }))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("VNC endpoint resolve HTTP failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("VNC endpoint resolve failed ({}): {}", status, body);
+    }
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| anyhow::anyhow!("VNC endpoint response parse failed: {}", e))?;
+    let path = json
+        .get("socket_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("VNC endpoint response missing socket_path"))?;
+    Ok(std::path::PathBuf::from(path))
 }
 
 // ─── PC 侧（Tunnel Server）────────────────────────────────────────────────────
@@ -73,36 +99,42 @@ async fn handle_incoming_stream(
     mut recv: RecvStream,
     vmcontrol_base_url: &str,
 ) -> anyhow::Result<()> {
-    // 读取流头部：[stream_type: u8][id_len: u8][id: bytes]
     let stream_type = recv.read_u8().await?;
-    let id_len = recv.read_u8().await? as usize;
-    if id_len == 0 || id_len > crate::vnc_endpoint::MAX_RESOURCE_ID_LEN {
-        anyhow::bail!(
-            "Invalid resource_id length: {} (max {})",
-            id_len,
-            crate::vnc_endpoint::MAX_RESOURCE_ID_LEN
-        );
-    }
-    let mut id_bytes = vec![0u8; id_len];
-    recv.read_exact(&mut id_bytes).await?;
-    let resource_id = String::from_utf8(id_bytes)
-        .map_err(|e| anyhow::anyhow!("Invalid resource_id UTF-8: {}", e))?;
-
-    info!(
-        "[VNC-FLOW] [6-Tunnel] handle_incoming_stream type=0x{:02x} resource_id={}",
-        stream_type, resource_id
-    );
 
     match stream_type {
         0x01 => {
-            // VNC: ensure_vnc_endpoint 统一 maindesk/subuser，返回 Unix socket 路径
-            info!("[VNC-FLOW] [6-Tunnel] VNC stream 调用 ensure_vnc_endpoint resource_id={}", resource_id);
+            // VNC: [vm_id_len][vm_id][username_len][username]
+            let vm_id_len = recv.read_u8().await? as usize;
+            if vm_id_len == 0 || vm_id_len > MAX_ID_LEN {
+                anyhow::bail!("Invalid vm_id length: {}", vm_id_len);
+            }
+            let mut vm_id_bytes = vec![0u8; vm_id_len];
+            recv.read_exact(&mut vm_id_bytes).await?;
+            let vm_id = String::from_utf8(vm_id_bytes)
+                .map_err(|e| anyhow::anyhow!("Invalid vm_id UTF-8: {}", e))?;
+
+            let username_len = recv.read_u8().await? as usize;
+            let username = if username_len == 0 {
+                String::new()
+            } else if username_len > MAX_ID_LEN {
+                anyhow::bail!("Invalid username length: {}", username_len);
+            } else {
+                let mut un_bytes = vec![0u8; username_len];
+                recv.read_exact(&mut un_bytes).await?;
+                String::from_utf8(un_bytes).map_err(|e| anyhow::anyhow!("Invalid username UTF-8: {}", e))?
+            };
+
+            info!(
+                "[VNC-FLOW] [6-Tunnel] handle_incoming_stream VNC vm_id={} username={}",
+                vm_id, if username.is_empty() { "(maindesk)" } else { &username }
+            );
+
             let mut last_err = None;
             for attempt in 0..VNC_RETRY_ATTEMPTS {
-                match crate::vnc_endpoint::ensure_vnc_endpoint(&resource_id).await {
+                match resolve_vnc_endpoint_via_http(vmcontrol_base_url, &vm_id, &username).await {
                     Ok(socket_path) => {
-                        let path_str: std::borrow::Cow<'_, str> = socket_path.to_string_lossy();
-                        info!("[VNC-FLOW] [6-Tunnel] ensure_vnc_endpoint 成功 resource_id={} socket={} (attempt {})", resource_id, path_str, attempt + 1);
+                        let path_str = socket_path.to_string_lossy();
+                        info!("[VNC-FLOW] [6-Tunnel] resolve_vnc_endpoint 成功 vm_id={} socket={} (attempt {})", vm_id, path_str, attempt + 1);
                         match tokio::time::timeout(
                             Duration::from_secs(CONNECT_TIMEOUT_SECS),
                             UnixStream::connect(&socket_path),
@@ -110,7 +142,7 @@ async fn handle_incoming_stream(
                         .await
                         {
                             Ok(Ok(unix)) => {
-                                info!("[VNC-FLOW] [6-Tunnel] Unix socket 连接成功，开始 proxy_quic_to_unix resource_id={}", resource_id);
+                                info!("[VNC-FLOW] [6-Tunnel] Unix socket 连接成功，开始 proxy_quic_to_unix vm_id={}", vm_id);
                                 proxy_quic_to_unix(send, recv, unix).await?;
                                 return Ok(());
                             }
@@ -119,7 +151,7 @@ async fn handle_incoming_stream(
                         }
                     }
                     Err(msg) => {
-                        warn!("[VNC-FLOW] [6-Tunnel] ensure_vnc_endpoint attempt {} 失败: {}", attempt + 1, msg);
+                        warn!("[VNC-FLOW] [6-Tunnel] resolve_vnc_endpoint attempt {} 失败: {}", attempt + 1, msg);
                         last_err = Some(anyhow::anyhow!("{}", msg));
                     }
                 }
@@ -128,11 +160,20 @@ async fn handle_incoming_stream(
                 }
             }
             let err = last_err.unwrap_or_else(|| anyhow::anyhow!("VNC target not found"));
-            error!("[VNC-FLOW] [6-Tunnel] VNC 全部重试失败 resource_id={}: {}", resource_id, err);
+            error!("[VNC-FLOW] [6-Tunnel] VNC 全部重试失败 vm_id={}: {}", vm_id, err);
             return Err(err);
         }
         0x02 => {
-            // scrcpy：连接 VmControl 的 WS 端点，做 QUIC ↔ WS 桥接
+            // Scrcpy: [id_len][id]
+            let id_len = recv.read_u8().await? as usize;
+            if id_len == 0 || id_len > MAX_ID_LEN {
+                anyhow::bail!("Invalid scrcpy device_id length: {}", id_len);
+            }
+            let mut id_bytes = vec![0u8; id_len];
+            recv.read_exact(&mut id_bytes).await?;
+            let resource_id = String::from_utf8(id_bytes)
+                .map_err(|e| anyhow::anyhow!("Invalid device_id UTF-8: {}", e))?;
+
             let ws_url = format!(
                 "{}/api/android/scrcpy?device={}",
                 vmcontrol_base_url.replace("http://", "ws://"),
@@ -269,10 +310,11 @@ async fn proxy_quic_to_ws(
 
 /// 手机侧：发起 VNC 隧道连接。
 ///
-/// 返回 `(send, recv)` QUIC 双向流，调用方将其桥接到本地 WebSocket。
+/// 返回 `(send, recv)` QUIC 双向流。maindesk 传 username=""，subuser 传实际用户名。
 pub async fn open_vnc_stream(
     conn: &Connection,
     vm_id: &str,
+    username: &str,
 ) -> anyhow::Result<(SendStream, RecvStream)> {
     let (mut send, recv) = tokio::time::timeout(
         Duration::from_secs(OPEN_BI_TIMEOUT_SECS),
@@ -280,8 +322,8 @@ pub async fn open_vnc_stream(
     )
     .await
     .map_err(|_| anyhow::anyhow!("open_vnc_stream timed out after {}s", OPEN_BI_TIMEOUT_SECS))??;
-    write_stream_header(&mut send, StreamType::Vnc as u8, vm_id).await?;
-    info!("[VNC-FLOW] [6-Tunnel] open_vnc_stream 成功 vm_id={}", vm_id);
+    write_vnc_header(&mut send, vm_id, username).await?;
+    info!("[VNC-FLOW] [6-Tunnel] open_vnc_stream 成功 vm_id={} username={}", vm_id, if username.is_empty() { "(maindesk)" } else { username });
     Ok((send, recv))
 }
 
@@ -304,16 +346,39 @@ pub async fn open_scrcpy_stream(
     Ok((send, recv))
 }
 
+async fn write_vnc_header(
+    send: &mut SendStream,
+    vm_id: &str,
+    username: &str,
+) -> anyhow::Result<()> {
+    let vm_bytes = vm_id.as_bytes();
+    if vm_bytes.len() > MAX_ID_LEN {
+        anyhow::bail!("vm_id too long (max {}): {}", MAX_ID_LEN, vm_bytes.len());
+    }
+    send.write_u8(StreamType::Vnc as u8).await?;
+    send.write_u8(vm_bytes.len() as u8).await?;
+    send.write_all(vm_bytes).await?;
+    let un_bytes = username.as_bytes();
+    if un_bytes.len() > MAX_ID_LEN {
+        anyhow::bail!("username too long (max {}): {}", MAX_ID_LEN, un_bytes.len());
+    }
+    send.write_u8(un_bytes.len() as u8).await?;
+    if !un_bytes.is_empty() {
+        send.write_all(un_bytes).await?;
+    }
+    Ok(())
+}
+
 async fn write_stream_header(
     send: &mut SendStream,
     stream_type: u8,
     resource_id: &str,
 ) -> anyhow::Result<()> {
     let id_bytes = resource_id.as_bytes();
-    if id_bytes.len() > crate::vnc_endpoint::MAX_RESOURCE_ID_LEN {
+    if id_bytes.len() > MAX_ID_LEN {
         anyhow::bail!(
             "resource_id too long (max {}): {}",
-            crate::vnc_endpoint::MAX_RESOURCE_ID_LEN,
+            MAX_ID_LEN,
             id_bytes.len()
         );
     }

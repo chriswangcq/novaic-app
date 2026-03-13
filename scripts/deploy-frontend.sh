@@ -2,16 +2,18 @@
 # 将 novaic-app 前端构建产物部署到 relay 服务器 relay.gradievo.com/resource/frontend/
 #
 # 用法:
-#   ./scripts/deploy-frontend.sh [relay_server] [version]
+#   ./scripts/deploy-frontend.sh [relay_server] [version] [ssh_port]
 #   ./scripts/deploy-frontend.sh root@relay.gradievo.com 0.3.0
+#   ./scripts/deploy-frontend.sh root@47.243.221.45 0.3.0 52222
 #
 # 前置:
 #   1. relay 服务器已配置 nginx (deploy/setup-cnd-frontend-nginx.sh)
 #   2. relay.gradievo.com 证书已存在（复用 relay 证书，无需额外域名）
 
 set -e
-RELAY_SERVER="${1:-root@relay.gradievo.com}"
+RELAY_SERVER="${1:-root@47.243.221.45}"
 VERSION="${2:-0.3.0}"
+SSH_PORT="${3:-52222}"
 STATIC_DIR="/opt/novaic/static"
 TARGET_DIR="${STATIC_DIR}/v${VERSION}"
 # CDN 路径: relay.gradievo.com/resource/frontend/v{version}/
@@ -30,9 +32,9 @@ if [ ! -f dist/index.html ]; then
 fi
 
 echo ""
-echo "=== 部署到 $RELAY_SERVER:$TARGET_DIR ==="
-ssh "$RELAY_SERVER" "mkdir -p $TARGET_DIR"
-rsync -avz --delete dist/ "$RELAY_SERVER:$TARGET_DIR/"
+echo "=== 部署到 $RELAY_SERVER:$TARGET_DIR (port $SSH_PORT) ==="
+ssh -p "$SSH_PORT" "$RELAY_SERVER" "mkdir -p $TARGET_DIR"
+rsync -avz --delete -e "ssh -p $SSH_PORT" dist/ "$RELAY_SERVER:$TARGET_DIR/"
 
 echo ""
 echo "=== 完成 ==="

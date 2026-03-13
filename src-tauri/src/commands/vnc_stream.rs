@@ -72,41 +72,6 @@ impl VncStreamState {
         }
     }
 
-    /// 每秒打印连接池状态（调试用）
-    pub fn spawn_status_log_task(&self) {
-        let streams = self.streams.clone();
-        let by_resource = self.by_resource.clone();
-        tauri::async_runtime::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                interval.tick().await;
-                let by = by_resource.read().await;
-                let now = Instant::now();
-                let entries: Vec<_> = by
-                    .iter()
-                    .map(|(rid, (sid, last))| {
-                        let idle_secs = now.duration_since(*last).as_secs();
-                        (rid.clone(), sid.clone(), idle_secs)
-                    })
-                    .collect();
-                drop(by);
-                let count = streams.read().await.len();
-                if !entries.is_empty() {
-                    let summary: Vec<String> = entries
-                        .iter()
-                        .map(|(rid, sid, idle)| format!("{}={}..(idle{}s)", rid, &sid[..8.min(sid.len())], idle))
-                        .collect();
-                    tracing::info!(
-                        "[VNC-FLOW] [4-vnc_stream] 连接池 状态 streams={} by_resource={} {:?}",
-                        count,
-                        entries.len(),
-                        summary
-                    );
-                }
-            }
-        });
-    }
-
     /// 启动空闲驱逐后台任务（每 5s 检查，30s 无活动则关闭）
     pub fn spawn_idle_eviction_task(&self, app: tauri::AppHandle) {
         let streams = self.streams.clone();
@@ -211,7 +176,8 @@ async fn resolve_device_id(
 }
 
 /// 建立 VNC Stream：直接调用 route_vnc_to_channel，无 WebSocket
-/// 连接池：同一 resource_id 仅一个活跃连接，新连接踢掉旧连接
+/// 连接池：同一 pool_key (vm_id 或 vm_id:username) 仅一个活跃连接
+/// resourceId = vm_id；username 必传，maindesk 传 ""，subuser 传实际用户名
 #[tauri::command]
 pub async fn vnc_stream_connect(
     proxy: tauri::State<'_, VncProxyState>,
@@ -223,17 +189,20 @@ pub async fn vnc_stream_connect(
     #[allow(non_snake_case)]
     resourceId: String,
     #[allow(non_snake_case)]
+    username: String,
+    #[allow(non_snake_case)]
     pcClientId: Option<String>,
 ) -> Result<String, String> {
-    tracing::info!("[VNC-FLOW] [4-vnc_stream] vnc_stream_connect 开始 resourceId={} pcClientId={:?}", resourceId, pcClientId);
+    tracing::info!("[VNC-FLOW] [4-vnc_stream] vnc_stream_connect 开始 resourceId={} username={:?} pcClientId={:?}", resourceId, username, pcClientId);
 
     let device_id = resolve_device_id(&proxy, &gw_url, &cloud_token, &app_instance, pcClientId).await?;
     tracing::info!("[VNC-FLOW] [4-vnc_stream] resolve_device_id 成功 device_id={}..", &device_id[..8.min(device_id.len())]);
 
-    let resource_id = resourceId.clone();
+    let vm_id = resourceId.clone();
+    let pool_key = format!("{}:{}", vm_id, username);
 
-    // 连接池：新连接踢掉同一 resource_id 的旧连接
-    let had_old = stream_state.evict_for_resource(&resource_id, &app).await;
+    // 连接池：新连接踢掉同一 pool_key 的旧连接
+    let had_old = stream_state.evict_for_resource(&pool_key, &app).await;
     // maindesk 重连：旧连接 drop(tx) 后，proxy_quic_to_unix 需时间退出并关闭 QEMU Unix socket；
     // 立即建新连会导致 UnixStream::connect 在 QEMU 仍持有旧连接时失败（仅首次重启后能连）
     if had_old {
@@ -243,8 +212,8 @@ pub async fn vnc_stream_connect(
     let stream_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
 
-    stream_state.streams.write().await.insert(stream_id.clone(), (tx.clone(), resource_id.clone()));
-    stream_state.by_resource.write().await.insert(resource_id.clone(), (stream_id.clone(), Instant::now()));
+    stream_state.streams.write().await.insert(stream_id.clone(), (tx.clone(), pool_key.clone()));
+    stream_state.by_resource.write().await.insert(pool_key.clone(), (stream_id.clone(), Instant::now()));
 
     let state = proxy.lock().await.handler_state.clone();
     let app_clone = app.clone();
@@ -253,19 +222,20 @@ pub async fn vnc_stream_connect(
     let by_resource = stream_state.by_resource.clone();
     let close_event = format!("vnc_stream:{}:close", stream_id);
     let device_id_clone = device_id.clone();
-    let resource_id_clone = resource_id.clone();
+    let vm_id_clone = vm_id.clone();
+    let username_clone = username.clone();
 
     tauri::async_runtime::spawn(async move {
-        tracing::info!("[VNC-FLOW] [4-vnc_stream] spawn 任务开始 route_vnc_to_channel device_id={}.. resource_id={}", &device_id_clone[..8.min(device_id_clone.len())], resource_id_clone);
+        tracing::info!("[VNC-FLOW] [4-vnc_stream] spawn 任务开始 route_vnc_to_channel device_id={}.. vm_id={} username={:?}", &device_id_clone[..8.min(device_id_clone.len())], vm_id_clone, username_clone);
         let touch = {
             let br = by_resource.clone();
-            let rid = resource_id_clone.clone();
+            let pk = pool_key.clone();
             move || {
                 let br = br.clone();
-                let rid = rid.clone();
+                let pk = pk.clone();
                 tauri::async_runtime::spawn(async move {
                     let mut by = br.write().await;
-                    if let Some((_, ref mut last)) = by.get_mut(&rid) {
+                    if let Some((_, ref mut last)) = by.get_mut(&pk) {
                         *last = Instant::now();
                     }
                 });
@@ -274,7 +244,8 @@ pub async fn vnc_stream_connect(
         match route_vnc_to_channel(
             state,
             &device_id_clone,
-            &resource_id_clone,
+            &vm_id_clone,
+            &username_clone,
             app_clone.clone(),
             &stream_id_clone,
             rx,

@@ -84,7 +84,6 @@ pub fn setup_shared(
     app.manage(vnc_bridge_state);
     let vnc_stream_state = crate::commands::vnc_stream::VncStreamState::new();
     vnc_stream_state.spawn_idle_eviction_task(app.clone());
-    vnc_stream_state.spawn_status_log_task();
     app.manage(vnc_stream_state);
     {
         let port_rx = {

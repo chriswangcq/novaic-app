@@ -177,14 +177,16 @@ class VmService {
   /**
    * 获取 VNC 传输：方案 B 一律使用 VncStreamTransport（IPC 模式）。
    *
-   * @param resourceId - VM/agent 资源标识
+   * @param resourceId - vm_id
+   * @param username - 必传：maindesk 传 ""，subuser 传实际用户名
    * @param pcClientId - 可选：vmcontrol_device_id（目标 PC）
    */
   async getVncTransport(
     resourceId: string,
+    username: string,
     pcClientId?: string
   ): Promise<VncBridgeTransport> {
-    const transport = new VncBridgeTransport(resourceId, pcClientId);
+    const transport = new VncBridgeTransport(resourceId, username, pcClientId);
     await transport.connect();
     return transport;
   }

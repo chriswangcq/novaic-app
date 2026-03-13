@@ -563,6 +563,8 @@ impl QmpClient {
 pub struct VmStatus {
     pub running: bool,
     pub status: String,
+    /// 部分 QEMU 版本不返回此字段，用 default 兼容
+    #[serde(default)]
     pub singlestep: bool,
 }
 
