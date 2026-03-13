@@ -166,6 +166,87 @@ pub async fn start_cloud_bridge(
     }
 }
 
+/// 获取本机托管的设备列表（含 stopped，供 vm_status_report 上报）
+/// 返回 (vm_ids, android_serials, android_avd_names)：
+/// - vm_ids: Linux device.id（含 data_dir/agents 下 stopped 的 VM）
+/// - android_serials: Android device.device_serial（adb 可见的设备）
+/// - android_avd_names: Android device.avd_name（所有 AVD，含 stopped）
+async fn fetch_managed_device_ids(
+    base_url: &str,
+    client: &reqwest::Client,
+) -> Result<(Vec<String>, Vec<String>, Vec<String>), Box<dyn std::error::Error + Send + Sync>> {
+    let mut vm_ids = Vec::new();
+    let mut android_serials = Vec::new();
+    let mut android_avd_names = Vec::new();
+
+    let base = base_url.trim_end_matches('/');
+
+    // Linux VMs: 优先 GET /api/vms/managed-ids（含 stopped），fallback 到 /api/vms
+    let managed_url = format!("{}/api/vms/managed-ids", base);
+    match client.get(&managed_url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(ids) = resp.json::<Vec<String>>().await {
+                vm_ids = ids.into_iter().filter(|s| !s.is_empty()).collect();
+            }
+        }
+        _ => {
+            // fallback: 仅 running
+            let url = format!("{}/api/vms", base);
+            if let Ok(resp) = client.get(&url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(vms) = resp.json::<Vec<serde_json::Value>>().await {
+                        for vm in vms {
+                            if let Some(id) = vm.get("id").and_then(|v| v.as_str()) {
+                                if !id.is_empty() {
+                                    vm_ids.push(id.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Android devices: 全部（含 offline），Gateway 按 device_serial 映射
+    let url = format!("{}/api/android/devices", base);
+    if let Ok(resp) = client.get(&url).send().await {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(devices) = body.get("devices").and_then(|v| v.as_array()) {
+                    for d in devices {
+                        if let Some(serial) = d.get("serial").and_then(|v| v.as_str()) {
+                            if !serial.is_empty() {
+                                android_serials.push(serial.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Android AVDs: 所有 AVD 名称（含 stopped），Gateway 按 avd_name 映射
+    let url = format!("{}/api/android/avds", base);
+    if let Ok(resp) = client.get(&url).send().await {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(avds) = body.get("avds").and_then(|v| v.as_array()) {
+                    for a in avds {
+                        if let Some(name) = a.get("name").and_then(|v| v.as_str()) {
+                            if !name.is_empty() {
+                                android_avd_names.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((vm_ids, android_serials, android_avd_names))
+}
+
 /// 建立 WebSocket 并处理消息，直到连接断开。
 async fn connect_and_run(
     ws_url: &str,
@@ -218,6 +299,30 @@ async fn connect_and_run(
 
     let (sink, mut stream) = ws_stream.split();
     let sink = Arc::new(Mutex::new(sink));
+
+    // 连接后立即上报当前托管的 VM/AVD 列表（含 stopped），供 Gateway 持久化 devices.pc_client_id
+    if let Ok((vm_ids, android_serials, android_avd_names)) =
+        fetch_managed_device_ids(vmcontrol_base_url, http_client).await
+    {
+        let report = serde_json::json!({
+            "type": "vm_status_report",
+            "vm_ids": vm_ids,
+            "android_serials": android_serials,
+            "android_avd_names": android_avd_names
+        });
+        if let Ok(json) = serde_json::to_string(&report) {
+            match sink.lock().await.send(Message::Text(json)).await {
+                Ok(_) => tracing::info!(
+                    "[CloudBridge] Sent vm_status_report: {} Linux VM(s) + {} Android device(s) + {} AVD(s)",
+                    vm_ids.len(),
+                    android_serials.len(),
+                    android_avd_names.len()
+                ),
+                Err(e) => tracing::warn!("[CloudBridge] Initial vm_status_report send failed: {}", e),
+            }
+        }
+    }
+
     let mut heartbeat = tokio::time::interval(Duration::from_secs(45));
     heartbeat.tick().await;
     let read_timeout = Duration::from_secs(90);
@@ -227,8 +332,26 @@ async fn connect_and_run(
             biased;
             _ = heartbeat.tick() => {
                 let s = Arc::clone(&sink);
+                let base = vmcontrol_base_url.to_string();
+                let client = http_client.clone();
                 tokio::spawn(async move {
                     let _ = s.lock().await.send(Message::Ping(vec![])).await;
+                    // 心跳时同步上报 vm_ids + android_serials + android_avd_names
+                    if let Ok((vm_ids, android_serials, android_avd_names)) =
+                        fetch_managed_device_ids(&base, &client).await
+                    {
+                        let report = serde_json::json!({
+                            "type": "vm_status_report",
+                            "vm_ids": vm_ids,
+                            "android_serials": android_serials,
+                            "android_avd_names": android_avd_names
+                        });
+                        if let Ok(json) = serde_json::to_string(&report) {
+                            if let Err(e) = s.lock().await.send(Message::Text(json)).await {
+                                tracing::warn!("[CloudBridge] vm_status_report heartbeat send failed: {}", e);
+                            }
+                        }
+                    }
                 });
                 continue;
             }

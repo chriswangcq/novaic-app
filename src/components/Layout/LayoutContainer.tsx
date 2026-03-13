@@ -15,12 +15,16 @@ import { Resizer } from './Resizer';
 import { Header } from './Header';
 import { ChatPanel } from '../Chat/ChatPanel';
 import { DeviceManagerPage } from '../VM/DeviceManagerPage';
+import { DeviceFloatingPanel } from './DeviceFloatingPanel';
 import { MorePage } from '../More/MorePage';
 import { SettingsModal, type SettingsTab } from '../Settings/SettingsModal';
+import { ChatsEmptyState, AgentsEmptyState } from './ThirdColumnEmptyState';
+import { CreateAgentPage } from '../Agent/CreateAgentPage';
 import { useIsSidebarLayout } from '../../hooks/useMediaQuery';
 import { useAppStore } from '../../application/store';
+import { useAgent } from '../hooks/useAgent';
 
-type NarrowPage = 'sidebar' | 'chat' | 'devices' | 'settings' | 'more';
+type NarrowPage = 'sidebar' | 'chat' | 'agents' | 'create-agent' | 'devices' | 'settings' | 'more';
 
 interface LayoutContainerProps {
   drawerWidth: number;
@@ -30,7 +34,6 @@ interface LayoutContainerProps {
   onDrawerDoubleClick?: () => void;
   onDrawerToggle?: () => void;
   onSelectAgent: (agentId: string, needsSetup: boolean) => void;
-  onCreateNew: () => void;
   narrowPage: NarrowPage;
   onNarrowPageChange: (page: NarrowPage) => void;
   onOpenSettings?: () => void;
@@ -38,7 +41,7 @@ interface LayoutContainerProps {
   onLogout?: () => void | Promise<void>;
 }
 
-type ActiveView = 'chat' | 'devices';
+type ActiveView = 'chat' | 'agents' | 'devices';
 
 export function LayoutContainer({
   drawerWidth,
@@ -48,7 +51,6 @@ export function LayoutContainer({
   onDrawerDoubleClick,
   onDrawerToggle,
   onSelectAgent,
-  onCreateNew,
   narrowPage,
   onNarrowPageChange,
   onOpenSettings,
@@ -56,30 +58,41 @@ export function LayoutContainer({
   onLogout,
 }: LayoutContainerProps) {
   const isPcLayout = useIsSidebarLayout();
-  const [primaryTab, setPrimaryTab] = useState<PrimaryTab>('agents');
+  const { currentAgentId, agents } = useAgent();
+  const currentAgent = agents.find(a => a.id === currentAgentId);
+  const chatViewShowDevice = useAppStore(s => s.chatViewShowDevice);
+  const [primaryTab, setPrimaryTab] = useState<PrimaryTab>('chats');
   const [settingsSubTab, setSettingsSubTab] = useState<SettingsTab | null>(null);
+
+  const clearAgentSelection = () => useAppStore.getState().patchState({ currentAgentId: null });
 
   const handlePrimaryTabChange = (tab: PrimaryTab) => {
     setPrimaryTab(tab);
     if (tab === 'devices') {
       useAppStore.getState().patchState({ selectedDeviceId: null, selectedVmUser: null });
       setSettingsSubTab(null);
-      // PC：直接进第三栏 DeviceManagerPage；手机式：进第二栏显示 devices 列表
       onNarrowPageChange(isPcLayout ? 'devices' : 'sidebar');
     } else if (tab === 'setting') {
       setSettingsSubTab('models');
-      // PC：setting 在第三栏；手机式：进第二栏显示 settings 列表
       onNarrowPageChange(isPcLayout ? 'settings' : 'sidebar');
-    } else {
+    } else if (tab === 'chats') {
       setSettingsSubTab(null);
-      // PC：进第三栏 ChatPanel；手机式：进第二栏显示 agents 列表
       onNarrowPageChange(isPcLayout ? 'chat' : 'sidebar');
+    } else if (tab === 'agents') {
+      setSettingsSubTab(null);
+      onNarrowPageChange(isPcLayout ? 'agents' : 'sidebar');
     }
   };
 
-  const handleSelectAgent = (agentId: string, needsSetup: boolean) => {
-    setPrimaryTab('agents');
+  const handleSelectChat = (agentId: string, needsSetup: boolean) => {
+    setPrimaryTab('chats');
     onNarrowPageChange('chat');
+    onSelectAgent(agentId, needsSetup);
+  };
+
+  const handleSelectAgentForTools = (agentId: string, needsSetup: boolean) => {
+    setPrimaryTab('agents');
+    onNarrowPageChange('agents');
     onSelectAgent(agentId, needsSetup);
   };
 
@@ -88,9 +101,15 @@ export function LayoutContainer({
     onNarrowPageChange('devices');
   };
 
+  /** 添加 agent：切换到 Agents tab，第三栏显示新建页面 */
+  const handleCreateNewAgent = () => {
+    setPrimaryTab('agents');
+    onNarrowPageChange('create-agent');
+  };
+
   const activeView: ActiveView = isPcLayout
-    ? (narrowPage === 'devices' ? 'devices' : 'chat')
-    : (narrowPage === 'devices' ? 'devices' : 'chat');
+    ? (narrowPage === 'devices' ? 'devices' : narrowPage === 'agents' ? 'agents' : narrowPage === 'sidebar' && primaryTab === 'agents' ? 'agents' : 'chat')
+    : (narrowPage === 'devices' ? 'devices' : narrowPage === 'agents' ? 'agents' : narrowPage === 'sidebar' && primaryTab === 'agents' ? 'agents' : 'chat');
 
   const isSecondColumn = narrowPage === 'sidebar';
   const isThirdColumn = !isSecondColumn;
@@ -105,9 +124,10 @@ export function LayoutContainer({
             resizerPlacement="external"
             isOpen={true}
             onClose={() => {}}
-            onSelectAgent={handleSelectAgent}
-            onCreateNew={onCreateNew}
-            activeView="chat"
+            onSelectChat={handleSelectChat}
+            onSelectAgentForTools={handleSelectAgentForTools}
+            onCreateNew={handleCreateNewAgent}
+            activeView={activeView}
             onOpenDevices={handleOpenDevices}
             asPrimaryPage
             primaryTab={primaryTab}
@@ -149,24 +169,75 @@ export function LayoutContainer({
               onBackToChat={() => onNarrowPageChange('sidebar')}
             />
           ) : narrowPage === 'more' ? (
-            <MorePage onBack={() => onNarrowPageChange('chat')} />
-          ) : (
-            <>
-              <Header
-                compact
-                onOpenSettings={onOpenSettings ?? (() => {})}
-                onHeaderMore={() => onNarrowPageChange('more')}
-                onToggleDrawer={onDrawerToggle ?? (() => {})}
-                isDrawerOpen={drawerOpen}
-                onAgentCreated={onAgentCreated}
-                isSidebarLayout={false}
-                narrowPage={narrowPage}
-                onBackToSidebar={() => onNarrowPageChange('sidebar')}
+            <MorePage onBack={() => onNarrowPageChange(activeView === 'agents' ? 'agents' : 'chat')} />
+          ) : narrowPage === 'create-agent' ? (
+            <CreateAgentPage
+              onBack={() => onNarrowPageChange('sidebar')}
+              onCreated={onAgentCreated}
+            />
+          ) : activeView === 'agents' ? (
+            !currentAgentId ? (
+              <>
+                <div
+                  data-tauri-drag-region
+                  className="h-11 shrink-0 flex items-center px-4 border-b border-nb-border/60 bg-nb-surface/95 backdrop-blur-sm cursor-default"
+                >
+                  <h1 className="text-sm font-semibold text-nb-text">Agents</h1>
+                </div>
+                <AgentsEmptyState />
+              </>
+            ) : (
+              <SettingsModal
+                open={true}
+                onClose={() => {}}
+                embedded
+                embeddedMode="content"
+                embeddedTab="agent-tools"
+                embeddedTitle={currentAgent ? `${currentAgent.name} · 配置` : undefined}
+                onEmbeddedBack={() => {
+                  clearAgentSelection();
+                  onNarrowPageChange('sidebar');
+                }}
+                onLogout={onLogout}
               />
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <ChatPanel />
-              </div>
-            </>
+            )
+          ) : (
+            !currentAgentId ? (
+              <>
+                <Header
+                  compact
+                  onOpenSettings={onOpenSettings ?? (() => {})}
+                  usePopoverInsteadOfMore={narrowPage === 'chat'}
+                  onHeaderMore={() => onNarrowPageChange('more')}
+                  onToggleDrawer={onDrawerToggle ?? (() => {})}
+                  isDrawerOpen={drawerOpen}
+                  onAgentCreated={onAgentCreated}
+                  isSidebarLayout={false}
+                  narrowPage={narrowPage}
+                  onBackToSidebar={() => onNarrowPageChange('sidebar')}
+                />
+                <ChatsEmptyState />
+              </>
+            ) : (
+              <>
+                <Header
+                  compact
+                  onOpenSettings={onOpenSettings ?? (() => {})}
+                  usePopoverInsteadOfMore={narrowPage === 'chat'}
+                  onHeaderMore={() => onNarrowPageChange('more')}
+                  onToggleDrawer={onDrawerToggle ?? (() => {})}
+                  isDrawerOpen={drawerOpen}
+                  onAgentCreated={onAgentCreated}
+                  isSidebarLayout={false}
+                  narrowPage={narrowPage}
+                  onBackToSidebar={() => onNarrowPageChange('sidebar')}
+                />
+                <div className="flex-1 min-h-0 overflow-hidden relative">
+                  <ChatPanel />
+                  {chatViewShowDevice && <DeviceFloatingPanel compact />}
+                </div>
+              </>
+            )
           )}
         </main>
       </div>
@@ -180,12 +251,13 @@ export function LayoutContainer({
       style={{ '--drawer-width': `${drawerWidth}px` } as React.CSSProperties}
     >
       <PrimaryNav activeTab={primaryTab} onTabChange={handlePrimaryTabChange} />
-      <AgentDrawer
+        <AgentDrawer
         resizerPlacement="external"
         isOpen={drawerOpen}
         onClose={onDrawerClose}
-        onSelectAgent={handleSelectAgent}
-        onCreateNew={onCreateNew}
+        onSelectChat={handleSelectChat}
+        onSelectAgentForTools={handleSelectAgentForTools}
+        onCreateNew={handleCreateNewAgent}
         activeView={activeView}
         onOpenDevices={handleOpenDevices}
         primaryTab={primaryTab}
@@ -222,24 +294,75 @@ export function LayoutContainer({
               onBackToChat={() => onNarrowPageChange('sidebar')}
             />
           ) : narrowPage === 'more' ? (
-            <MorePage onBack={() => onNarrowPageChange('chat')} />
-          ) : (
-            <>
-              <Header
-                compact
-                onOpenSettings={onOpenSettings ?? (() => {})}
-                onHeaderMore={() => onNarrowPageChange('more')}
-                onToggleDrawer={onDrawerToggle ?? (() => {})}
-                isDrawerOpen={drawerOpen}
-                onAgentCreated={onAgentCreated}
-                isSidebarLayout={true}
-                narrowPage={narrowPage}
-                onBackToSidebar={() => onNarrowPageChange('sidebar')}
+            <MorePage onBack={() => onNarrowPageChange(activeView === 'agents' ? 'agents' : 'chat')} />
+          ) : narrowPage === 'create-agent' ? (
+            <CreateAgentPage
+              onBack={() => onNarrowPageChange('sidebar')}
+              onCreated={onAgentCreated}
+            />
+          ) : activeView === 'agents' ? (
+            !currentAgentId ? (
+              <>
+                <div
+                  data-tauri-drag-region
+                  className="h-11 shrink-0 flex items-center px-4 border-b border-nb-border/60 bg-nb-surface/95 backdrop-blur-sm cursor-default"
+                >
+                  <h1 className="text-sm font-semibold text-nb-text">Agents</h1>
+                </div>
+                <AgentsEmptyState />
+              </>
+            ) : (
+              <SettingsModal
+                open={true}
+                onClose={() => {}}
+                embedded
+                embeddedMode="content"
+                embeddedTab="agent-tools"
+                embeddedTitle={currentAgent ? `${currentAgent.name} · 配置` : undefined}
+                onEmbeddedBack={() => {
+                  clearAgentSelection();
+                  onNarrowPageChange('sidebar');
+                }}
+                onLogout={onLogout}
               />
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <ChatPanel />
-              </div>
-            </>
+            )
+          ) : (
+            !currentAgentId ? (
+              <>
+                <Header
+                  compact
+                  onOpenSettings={onOpenSettings ?? (() => {})}
+                  usePopoverInsteadOfMore={narrowPage === 'chat'}
+                  onHeaderMore={() => onNarrowPageChange('more')}
+                  onToggleDrawer={onDrawerToggle ?? (() => {})}
+                  isDrawerOpen={drawerOpen}
+                  onAgentCreated={onAgentCreated}
+                  isSidebarLayout={true}
+                  narrowPage={narrowPage}
+                  onBackToSidebar={() => onNarrowPageChange('sidebar')}
+                />
+                <ChatsEmptyState />
+              </>
+            ) : (
+              <>
+                <Header
+                  compact
+                  onOpenSettings={onOpenSettings ?? (() => {})}
+                  usePopoverInsteadOfMore={narrowPage === 'chat'}
+                  onHeaderMore={() => onNarrowPageChange('more')}
+                  onToggleDrawer={onDrawerToggle ?? (() => {})}
+                  isDrawerOpen={drawerOpen}
+                  onAgentCreated={onAgentCreated}
+                  isSidebarLayout={true}
+                  narrowPage={narrowPage}
+                  onBackToSidebar={() => onNarrowPageChange('sidebar')}
+                />
+                <div className="flex-1 min-h-0 overflow-hidden relative">
+                  <ChatPanel />
+                  {chatViewShowDevice && <DeviceFloatingPanel compact />}
+                </div>
+              </>
+            )
           )}
         </div>
       </main>

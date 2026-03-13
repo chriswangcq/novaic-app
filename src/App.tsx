@@ -177,7 +177,7 @@ function App() {
   const currentAgentId = useAppStore(s => s.currentAgentId);
   const drawerWidth = useAppStore(s => s.drawerWidth);
   const drawerOpen = useAppStore(s => s.drawerOpen);
-  const [narrowPage, setNarrowPage] = useState<'sidebar' | 'chat' | 'devices' | 'settings' | 'more'>('sidebar');
+  const [narrowPage, setNarrowPage] = useState<'sidebar' | 'chat' | 'agents' | 'create-agent' | 'devices' | 'settings' | 'more'>('sidebar');
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const [initTimeout, setInitTimeout] = useState(false);
 
@@ -438,7 +438,11 @@ function App() {
           isOpen={drawerOpen}
           onClose={() => getLayoutService().setDrawerOpen(false)}
           onSelectAgent={handleSelectAgent}
-          onCreateNew={() => useAppStore.getState().patchState({ createAgentModalOpen: true })}
+          onCreateNew={() => {
+            setSetupConfig(null);
+            setCurrentPage('workspace');
+            setNarrowPage('create-agent');
+          }}
         />
       </>
     );
@@ -456,7 +460,6 @@ function App() {
         onDrawerDoubleClick={() => getLayoutService().setDrawerWidth(LAYOUT_CONFIG.DRAWER_WIDTH)}
         onDrawerToggle={() => getLayoutService().setDrawerOpen(!drawerOpen)}
         onSelectAgent={handleSelectAgent}
-        onCreateNew={() => useAppStore.getState().patchState({ createAgentModalOpen: true })}
         narrowPage={narrowPage}
         onNarrowPageChange={setNarrowPage}
         onOpenSettings={() => useAppStore.getState().patchState({ settingsOpen: true })}

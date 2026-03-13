@@ -1,14 +1,37 @@
-import { useMemo } from 'react';
-import { Menu, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
+import { useMemo, useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { Menu, ChevronLeft, ChevronRight, MoreVertical, HardDrive, Terminal, Users } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { CreateAgentModal } from '../Agent/CreateAgentModal';
 import { useAgent } from '../hooks/useAgent';
+import { useAppStore } from '../../application/store';
 
-type NarrowPage = 'sidebar' | 'chat' | 'devices' | 'settings' | 'more';
+type NarrowPage = 'sidebar' | 'chat' | 'agents' | 'devices' | 'settings' | 'more';
+
+function ToggleRow({ icon, label, checked, onToggle }: { icon: React.ReactNode; label: string; checked: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-nb-text hover:bg-white/[0.04] cursor-pointer transition-colors text-left"
+    >
+      {icon}
+      <span className="flex-1">{label}</span>
+      <span className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+        checked ? 'bg-nb-accent' : 'bg-nb-surface-2'
+      }`}>
+        <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+          checked ? 'translate-x-5' : 'translate-x-1'
+        }`} />
+      </span>
+    </button>
+  );
+}
 
 interface HeaderProps {
   onOpenSettings?: () => void;
-  /** 右上角 ... 按钮回调（预留，具体功能待定） */
+  /** 右上角 ... 按钮：true 时弹窗，false 时调用 onHeaderMore */
+  usePopoverInsteadOfMore?: boolean;
+  /** 右上角 ... 按钮回调（usePopoverInsteadOfMore 为 false 时） */
   onHeaderMore?: () => void;
   onToggleDrawer: () => void;
   isDrawerOpen: boolean;
@@ -22,12 +45,29 @@ interface HeaderProps {
 }
 
 export function Header(props: HeaderProps) {
-  const { onOpenSettings: _onOpenSettings, onHeaderMore, onToggleDrawer, isDrawerOpen, onAgentCreated, isSidebarLayout = true, narrowPage = 'sidebar', onBackToSidebar, compact = false } = props;
+  const { onOpenSettings: _onOpenSettings, usePopoverInsteadOfMore = false, onHeaderMore, onToggleDrawer, isDrawerOpen, onAgentCreated: _onAgentCreated, isSidebarLayout = true, narrowPage = 'sidebar', onBackToSidebar, compact = false } = props;
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const popoverAnchorRef = useRef<HTMLButtonElement>(null);
+  const chatViewShowDevice = useAppStore(s => s.chatViewShowDevice);
+  const chatViewShowExecutionLog = useAppStore(s => s.chatViewShowExecutionLog);
+  const chatViewShowSubagents = useAppStore(s => s.chatViewShowSubagents);
+  const patchState = useAppStore(s => s.patchState);
+
+  useEffect(() => {
+    if (!popoverOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const anchor = popoverAnchorRef.current;
+      if (anchor && !anchor.contains(e.target as Node) && !(e.target as Element).closest('[data-chat-view-popover]')) {
+        setPopoverOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [popoverOpen]);
   const showBackButton = !isSidebarLayout && narrowPage !== 'sidebar' && onBackToSidebar;
   const showHamburger = isSidebarLayout && !isDrawerOpen;
   const isMacOS = useMemo(() => navigator.userAgent.includes('Mac'), []);
-  const { createModalOpen: createAgentModalOpen, setCreateModal, agents, currentAgentId, select: selectAgent } = useAgent();
-  const setCreateAgentModalOpen = (open: boolean) => setCreateModal(open);
+  const { agents, currentAgentId, select: selectAgent } = useAgent();
   const currentAgent = agents.find(a => a.id === currentAgentId);
 
   // 左右切换使用 agents 的固定顺序，支持循环
@@ -135,25 +175,65 @@ export function Header(props: HeaderProps) {
         {/* Spacer — 非按钮区域可拖动（宽屏） */}
         {!isNarrow && <div data-tauri-drag-region className="flex-1 cursor-default" />}
 
-        {/* 右上角 ... 按钮（预留） */}
-        <div className={isNarrow ? 'flex justify-end min-w-0' : ''}>
-        <button
-          onClick={() => onHeaderMore?.()}
-          className="w-7 h-7 flex items-center justify-center rounded-md
-                     text-nb-text-muted hover:text-nb-text hover:bg-white/[0.06] transition-all shrink-0"
-          title="更多"
-        >
-          <MoreVertical size={15} strokeWidth={1.6} />
-        </button>
+        {/* 右上角 ... 按钮：chat 页面弹窗，否则回调 */}
+        <div className={`relative ${isNarrow ? 'flex justify-end min-w-0' : ''}`}>
+          <button
+            ref={popoverAnchorRef}
+            onClick={() => {
+              if (usePopoverInsteadOfMore) {
+                setPopoverOpen(v => !v);
+              } else {
+                onHeaderMore?.();
+              }
+            }}
+            className="w-7 h-7 flex items-center justify-center rounded-md
+                       text-nb-text-muted hover:text-nb-text hover:bg-white/[0.06] transition-all shrink-0"
+            title="更多"
+          >
+            <MoreVertical size={15} strokeWidth={1.6} />
+          </button>
+          {usePopoverInsteadOfMore && popoverOpen && createPortal(
+            (() => {
+              const rect = popoverAnchorRef.current?.getBoundingClientRect();
+              const style: React.CSSProperties = rect
+                ? { position: 'fixed', top: rect.bottom + 6, right: window.innerWidth - rect.right, zIndex: 10001 }
+                : {};
+              return (
+                <div
+                  data-chat-view-popover
+                  className="w-52 py-2 rounded-lg bg-nb-surface border border-nb-border shadow-xl"
+                  style={style}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-3 py-1.5 text-[11px] font-medium text-nb-text-secondary/80 uppercase tracking-wider">
+                    视图选项
+                  </div>
+                  <ToggleRow
+                    icon={<HardDrive size={14} className="text-nb-text-secondary shrink-0" />}
+                    label="展示设备"
+                    checked={chatViewShowDevice}
+                    onToggle={() => patchState({ chatViewShowDevice: !chatViewShowDevice })}
+                  />
+                  <ToggleRow
+                    icon={<Terminal size={14} className="text-nb-text-secondary shrink-0" />}
+                    label="展示 Execution Log"
+                    checked={chatViewShowExecutionLog}
+                    onToggle={() => patchState({ chatViewShowExecutionLog: !chatViewShowExecutionLog })}
+                  />
+                  <ToggleRow
+                    icon={<Users size={14} className="text-nb-text-secondary shrink-0" />}
+                    label="展示 Subagents"
+                    checked={chatViewShowSubagents}
+                    onToggle={() => patchState({ chatViewShowSubagents: !chatViewShowSubagents })}
+                  />
+                </div>
+              );
+            })(),
+            document.body
+          )}
         </div>
       </header>
-
-      <CreateAgentModal
-        isOpen={createAgentModalOpen}
-        onClose={() => setCreateAgentModalOpen(false)}
-        onCreated={onAgentCreated}
-      />
-
     </>
   );
 }

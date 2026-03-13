@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Monitor, Smartphone, Plus, Play, Square, Trash2, X, ExternalLink, MoreHorizontal, PanelRightOpen, PanelRightClose, EyeOff } from 'lucide-react';
 import { useAgent } from '../hooks/useAgent';
+import { useAgentBinding } from '../../hooks/useAgentBinding';
 import { useLayout } from '../hooks/useLayout';
-import { api } from '../../services/api';
+import { api, type AgentDeviceBinding } from '../../services/api';
 import { DeviceDesktopView } from '../Visual/DeviceDesktopView';
 import { ScrcpyView } from '../Visual/ScrcpyView';
 import { AddLinuxVMModal } from '../VM/AddLinuxVMModal';
@@ -344,9 +345,11 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
     ? agents.find(a => a.id === currentAgentId) 
     : null;
   
-  // 从 agent.devices 获取设备列表
-  const linuxDevices = currentAgent?.devices?.filter(isLinuxDevice) || [];
-  const androidDevices = currentAgent?.devices?.filter(isAndroidDevice) || [];
+  // 使用 listForUser + getAgentBinding 替代已废弃的 agent.devices
+  const agentBinding = useAgentBinding(currentAgentId, (currentAgent as { binding?: AgentDeviceBinding | null } | undefined)?.binding ?? undefined);
+  const boundDevices: Device[] = agentBinding.device ? [agentBinding.device] : [];
+  const linuxDevices = boundDevices.filter(isLinuxDevice);
+  const androidDevices = boundDevices.filter(isAndroidDevice);
   
   // 判断是否有设备
   const hasLinuxDevice = linuxDevices.length > 0;
@@ -357,13 +360,13 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
   
   // 获取所有设备状态（使用统一设备 API）
   const fetchDeviceStatuses = useCallback(async () => {
-    if (!currentAgent?.devices || currentAgent.devices.length === 0) {
+    if (boundDevices.length === 0) {
       setDeviceStatuses({});
       return;
     }
     
     const statuses: Record<string, boolean> = {};
-    for (const device of currentAgent.devices) {
+    for (const device of boundDevices) {
       try {
         const status = await api.devices.status(device.id);
         statuses[device.id] = status.running;
@@ -372,7 +375,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
       }
     }
     setDeviceStatuses(statuses);
-  }, [currentAgent?.devices]);
+  }, [currentAgentId, agentBinding.device?.id]);
   
   // 定期轮询状态
   useEffect(() => {
@@ -385,8 +388,8 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
     return () => clearInterval(interval);
   }, [fetchDeviceStatuses]);
   
-  // 构建设备列表（从 agent.devices 转换为 DeviceInfo）
-  const devices: DeviceInfo[] = (currentAgent?.devices || []).map((device: Device) => {
+  // 构建设备列表（从 binding 获取的 boundDevices 转换为 DeviceInfo）
+  const devices: DeviceInfo[] = boundDevices.map((device: Device) => {
     const isRunning = deviceStatuses[device.id] || false;
     const isDeviceLoading = loadingDevices.has(device.id);
     const status: DeviceStatus = isRunning 
@@ -481,7 +484,7 @@ export function DeviceSidebar({ className = '', sidebarWidth: propsSidebarWidth 
   
   // 根据 DeviceInfo 找到对应的 Device 对象
   const findDevice = (deviceInfo: DeviceInfo): Device | undefined => {
-    return currentAgent?.devices?.find(d => d.id === deviceInfo.id);
+    return boundDevices.find(d => d.id === deviceInfo.id);
   };
 
   const displayWidth = effectiveMode === 'expanded' ? sidebarWidth : effectiveMode === 'collapsed' ? LAYOUT_CONFIG.SIDEBAR_COLLAPSED_WIDTH : 0;

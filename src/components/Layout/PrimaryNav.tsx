@@ -5,9 +5,9 @@
  */
 
 import { useMemo } from 'react';
-import { Bot, HardDrive, Settings } from 'lucide-react';
+import { MessageCircle, Bot, HardDrive, Settings } from 'lucide-react';
 
-export type PrimaryTab = 'agents' | 'devices' | 'setting';
+export type PrimaryTab = 'chats' | 'agents' | 'devices' | 'setting';
 
 interface PrimaryNavProps {
   activeTab: PrimaryTab;
@@ -17,6 +17,7 @@ interface PrimaryNavProps {
 }
 
 const TABS: { id: PrimaryTab; icon: typeof Bot; label: string }[] = [
+  { id: 'chats', icon: MessageCircle, label: 'Chats' },
   { id: 'agents', icon: Bot, label: 'Agents' },
   { id: 'devices', icon: HardDrive, label: 'Devices' },
   { id: 'setting', icon: Settings, label: '设置' },

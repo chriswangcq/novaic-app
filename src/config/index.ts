@@ -69,12 +69,14 @@ export const LOCAL_ENDPOINTS = {
 
 /** SSE 连接配置 */
 export const SSE_CONFIG = {
-  /** SSE 重连延迟（毫秒） */
+  /** SSE 首次重连延迟（毫秒） */
   RECONNECT_DELAY: 3000,
-  
-  /** 最大重连次数（0 = 无限重试） */
-  MAX_RECONNECT_ATTEMPTS: 0,
-  
+  /** 指数退避倍数，第 n 次重试延迟 = RECONNECT_DELAY * BACKOFF_MULTIPLIER^(n-1) */
+  BACKOFF_MULTIPLIER: 2,
+  /** 最大重连延迟（毫秒），避免退避过长 */
+  RECONNECT_MAX_DELAY: 60000,
+  /** 最大重连次数（0 = 无限重试，建议设上限避免打挂服务端） */
+  MAX_RECONNECT_ATTEMPTS: 20,
   /** 心跳间隔（毫秒） */
   HEARTBEAT_INTERVAL: 30000,
 } as const;

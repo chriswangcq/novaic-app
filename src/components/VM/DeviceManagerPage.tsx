@@ -481,7 +481,113 @@ function AddVmUserModal({ deviceId, onClose, onCreated }: AddVmUserModalProps) {
   );
 }
 
-// ─── VM Users section (inside left panel, below selected Linux device) ────────
+// ─── Linux Desktop Switcher（第三栏顶部，Main/Subuser 切换）────────────────────
+
+interface LinuxDesktopSwitcherProps {
+  device: Device;
+  selectedUser: string | null;
+  onSelectUser: (username: string | null, displayNum?: number) => void;
+  onOpenAddModal: () => void;
+  /** 变化时触发重新加载 users（如添加 subuser 后） */
+  refreshTrigger?: number;
+}
+
+function LinuxDesktopSwitcher({ device, selectedUser, onSelectUser, onOpenAddModal, refreshTrigger }: LinuxDesktopSwitcherProps) {
+  const [users, setUsers] = useState<VmUser[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [deletingUser, setDeleting] = useState<string | null>(null);
+  const [restartingUser, setRestarting] = useState<string | null>(null);
+  const storeStatus = useDeviceStatus(device.id, device.pc_client_id);
+  const status = storeStatus ?? device.status;
+  const isRunning = status === 'running' || status === 'ready';
+
+  const loadUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const list = await api.vmUsers.list(device.id);
+      setUsers(Array.isArray(list) ? list : []);
+    } catch { setUsers([]); }
+    finally { setLoading(false); }
+  }, [device.id]);
+
+  useEffect(() => { if (isRunning) loadUsers(); }, [loadUsers, isRunning, refreshTrigger]);
+
+  const handleDelete = async (username: string) => {
+    setDeleting(username);
+    try {
+      await api.vmUsers.delete(device.id, username);
+      if (selectedUser === username) onSelectUser(null, undefined);
+      await loadUsers();
+    } finally { setDeleting(null); }
+  };
+
+  const handleRestartVnc = async (username: string) => {
+    setRestarting(username);
+    try {
+      await api.vmUsers.restartVnc(device.id, username);
+    } catch { /* best-effort */ }
+    finally { setRestarting(null); }
+  };
+
+  if (!isRunning) return null;
+
+  return (
+    <div className="h-10 shrink-0 flex items-center gap-1 px-4 border-b border-nb-border/60 bg-nb-surface/80">
+      <div className="flex items-center gap-1.5 overflow-x-auto min-w-0">
+        <button
+          onClick={() => onSelectUser(null)}
+          className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
+            ${selectedUser === null ? 'bg-white/10 text-nb-text' : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'}`}
+        >
+          <Home size={12} />
+          Main Desktop
+        </button>
+        {users.map((u) => (
+          <div
+            key={u.username}
+            className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors group
+              ${selectedUser === u.username ? 'bg-white/10 text-nb-text' : 'text-nb-text-secondary hover:bg-white/[0.04] hover:text-nb-text'}`}
+          >
+            <button
+              onClick={() => onSelectUser(u.username, u.display_num)}
+              className="flex items-center gap-1.5 min-w-0"
+            >
+              <Users size={12} className="shrink-0" />
+              <span className="truncate">{u.username}</span>
+              <span className="opacity-50">:{u.display_num}</span>
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleRestartVnc(u.username); }}
+              disabled={restartingUser === u.username}
+              title="Restart VNC"
+              className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:text-amber-400 transition-all disabled:opacity-50"
+            >
+              {restartingUser === u.username ? <Loader2 size={10} className="animate-spin" /> : <RotateCcw size={10} />}
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDelete(u.username); }}
+              disabled={deletingUser === u.username}
+              title="Remove user"
+              className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:text-red-400 transition-all disabled:opacity-50"
+            >
+              {deletingUser === u.username ? <Loader2 size={10} className="animate-spin" /> : <UserMinus size={10} />}
+            </button>
+          </div>
+        ))}
+        {loading && <Loader2 size={12} className="animate-spin shrink-0 text-nb-text-secondary" />}
+      </div>
+      <button
+        onClick={onOpenAddModal}
+        title="Add sub-user"
+        className="ml-auto shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.06] transition-colors"
+      >
+        <UserPlus size={14} />
+      </button>
+    </div>
+  );
+}
+
+// ─── VM Users section (legacy, used in DeviceListPanel compact mode) ───────────
 
 interface VmUsersSectionProps {
   device: Device;
@@ -636,6 +742,7 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   // null = main desktop, object = sub-user's desktop
   const [selectedVmUser, setSelectedVmUser] = useState<{ username: string; displayNum: number } | null>(null);
+  const [vmUsersRefreshTrigger, setVmUsersRefreshTrigger] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -738,20 +845,44 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
       {backBar}
       {devicesHeaderBar}
       {effectiveSelectedDevice ? (
-        <div className="flex flex-1 min-h-0 min-w-0">
-          <div className="flex-1 min-w-0 overflow-hidden">
-            {selectedVmUser ? (
-              <DeviceDesktopView
-                subjectType="vm_user"
-                deviceId={effectiveSelectedDevice.id}
-                username={selectedVmUser.username}
-                displayNum={selectedVmUser.displayNum}
-                pcClientId={effectiveSelectedDevice.pc_client_id}
-                onClose={() => {
-                  setSelectedVmUser(null);
-                  patchState({ selectedVmUser: null });
-                }}
-              />
+        <div className="flex flex-1 min-h-0 min-w-0 flex-col">
+          {effectiveSelectedDevice.type === 'linux' && (
+            <LinuxDesktopSwitcher
+              device={effectiveSelectedDevice}
+              selectedUser={selectedVmUser?.username ?? null}
+              onSelectUser={(username, displayNum) => {
+                const v = username && displayNum != null ? { username, displayNum } : null;
+                setSelectedVmUser(v);
+                patchState({ selectedVmUser: v });
+              }}
+              onOpenAddModal={() => patchState({ addVmSubuserDeviceId: effectiveSelectedDevice.id })}
+              refreshTrigger={vmUsersRefreshTrigger}
+            />
+          )}
+          <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+            {effectiveSelectedDevice.type === 'linux' ? (
+              selectedVmUser ? (
+                <DeviceDesktopView
+                  subjectType="vm_user"
+                  deviceId={effectiveSelectedDevice.id}
+                  username={selectedVmUser.username}
+                  displayNum={selectedVmUser.displayNum}
+                  pcClientId={effectiveSelectedDevice.pc_client_id}
+                  onClose={() => {
+                    setSelectedDevice(null);
+                    patchState({ selectedDeviceId: null, selectedVmUser: null });
+                  }}
+                />
+              ) : (
+                <DeviceDesktopView
+                  subjectType="main"
+                  device={effectiveSelectedDevice}
+                  onClose={() => {
+                    setSelectedDevice(null);
+                    patchState({ selectedDeviceId: null, selectedVmUser: null });
+                  }}
+                />
+              )
             ) : (
               <DeviceVNCView
                 device={effectiveSelectedDevice}
@@ -820,6 +951,7 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
           onClose={() => patchState({ addVmSubuserDeviceId: null })}
           onCreated={() => {
             patchState({ addVmSubuserDeviceId: null });
+            setVmUsersRefreshTrigger((t) => t + 1);
             load();
           }}
         />

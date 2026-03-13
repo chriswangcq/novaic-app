@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Bot, Monitor, Zap, Wrench, Eye, Edit3, Smartphone, User, LogOut } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Eye, Edit3, Smartphone, User, LogOut } from 'lucide-react';
 import type { ApiKeyInfo, CandidateModel, AICAgent } from '../../services/api';
 import { useAgent } from '../hooks/useAgent';
 import { useSettings } from '../hooks/useSettings';
@@ -15,7 +15,7 @@ import type { Device } from '../../types';
 
 // ==================== Tab Types ====================
 
-export type SettingsTab = 'models' | 'agents' | 'skills' | 'agent-tools' | 'cache' | 'user';
+export type SettingsTab = 'models' | 'skills' | 'agent-tools' | 'cache' | 'user';
 
 // ==================== Types ====================
 
@@ -771,116 +771,6 @@ function ApiKeyForm({
   );
 }
 
-// ==================== Agents Tab ====================
-
-function AgentsTab() {
-  const { agents, loadAgents, delete: deleteAgent, currentAgentId } = useAgent();
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const [vmStatuses, setVmStatuses] = useState<Record<string, { running: boolean }>>({});
-
-  useEffect(() => {
-    loadAgents();
-    const loadStatuses = async () => {
-      try {
-        const statuses = await vmService.getAllStatus();
-        setVmStatuses(statuses || {});
-      } catch { /* ignore */ }
-    };
-    loadStatuses();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleDelete = async (agent: AICAgent) => {
-    if (!confirm(`确定删除 "${agent.name}" 吗？这将同时删除关联的虚拟机和所有数据。`)) return;
-    
-    setDeleting(agent.id);
-    try {
-      // Stop VM first if running
-      if (vmStatuses[agent.id]?.running) {
-        try {
-          await vmService.stop(agent.id);
-          await new Promise(r => setTimeout(r, 1000));
-        } catch { /* ignore */ }
-      }
-      await deleteAgent(agent.id);
-    } catch (e) {
-      alert(`删除失败: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  return (
-    <>
-      {/* Tab Header */}
-      <div className="px-4 py-3 border-b border-nb-border flex-shrink-0">
-        <div className="text-xs text-nb-text-muted">
-          {agents.length} 个 Agent
-        </div>
-      </div>
-
-      {/* Tab Content */}
-      <div className="p-4 overflow-y-auto flex-1 space-y-2">
-        {agents.length === 0 ? (
-          <div className="text-sm text-nb-text-muted py-8 text-center">
-            No agents yet
-          </div>
-        ) : (
-          agents.map(agent => {
-            const isRunning = vmStatuses[agent.id]?.running;
-            const isCurrent = agent.id === currentAgentId;
-            const isDeleting = deleting === agent.id;
-            
-            return (
-              <div
-                key={agent.id}
-                className={`border rounded-lg p-3 flex items-center gap-3 ${
-                  isCurrent ? 'border-nb-accent/50 bg-nb-accent/5' : 'border-nb-border'
-                }`}
-              >
-                {/* Icon */}
-                <div className="w-9 h-9 rounded-lg bg-white/5 flex items-center justify-center shrink-0 border border-white/10">
-                  <Bot size={18} className="text-white/60" />
-                </div>
-                
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-nb-text truncate">{agent.name}</span>
-                    {isCurrent && (
-                      <span className="text-[9px] bg-nb-accent/20 text-nb-accent px-1.5 py-0.5 rounded shrink-0">
-                        Current
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-xs text-nb-text-muted">
-                      {agent.vm.os_type} {agent.vm.os_version}
-                    </span>
-                    <span className="text-xs text-nb-text-muted">·</span>
-                    <span className={`text-xs ${isRunning ? 'text-emerald-400' : 'text-slate-400'}`}>
-                      {!agent.setup_complete ? 'Needs setup' : isRunning ? 'Running' : 'Stopped'}
-                    </span>
-                  </div>
-                </div>
-                
-                {/* Delete */}
-                <button
-                  onClick={() => handleDelete(agent)}
-                  disabled={isDeleting}
-                  className="px-2.5 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50 shrink-0"
-                >
-                  {isDeleting ? '删除中...' : '删除'}
-                </button>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </>
-  );
-}
-
 // ==================== Skills Tab ====================
 
 function SkillsTab() {
@@ -1562,11 +1452,16 @@ function ToolCategorySection({
 
 // ==================== Agent Tools Tab ====================
 
-function AgentToolsTab() {
+function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: boolean }) {
   const settings = useSettings();
-  const { agents, currentAgentId } = useAgent();
+  const { agents, currentAgentId, delete: deleteAgent } = useAgent();
   const { availableModels, apiKeys } = useModels();
   const [selectedAgentId, setSelectedAgentId] = useState<string>(currentAgentId || '');
+  const effectiveAgentId = hideAgentSelector ? (currentAgentId ?? '') : selectedAgentId;
+  const effectiveAgentIdRef = useRef(effectiveAgentId);
+  useEffect(() => {
+    effectiveAgentIdRef.current = effectiveAgentId;
+  }, [effectiveAgentId]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1602,6 +1497,7 @@ function AgentToolsTab() {
   // Skills
   const [allSkills, setAllSkills] = useState<any[]>([]);
   const [assignedSkillIds, setAssignedSkillIds] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
 
   // Prompts
   const [prompts, setPrompts] = useState<{ system_prompt: string; wake_message: string; system_prompt_length: number; wake_message_length: number } | null>(null);
@@ -1627,13 +1523,13 @@ function AgentToolsTab() {
         subjectId?: string;
         mountedTools?: MountedToolsByCategory;
       }
-    ) => {
+    ): Promise<boolean> => {
       if (!deviceId) {
         setDeviceSubjects([]);
         setSelectedSubjectType('');
         setSelectedSubjectId('');
         setMountedTools({});
-        return;
+        return true;
       }
 
       setLoadingSubjects(true);
@@ -1655,7 +1551,7 @@ function AgentToolsTab() {
           setSelectedSubjectType('');
           setSelectedSubjectId('');
           setMountedTools({});
-          return;
+          return false;
         }
 
         setSelectedSubjectType(fallbackSubject.subject_type);
@@ -1670,12 +1566,14 @@ function AgentToolsTab() {
           merged[cat] = chosen.length > 0 ? chosen : [...allowed];
         }
         setMountedTools(merged);
+        return true;
       } catch (error) {
         console.error('Failed to load device subjects:', error);
         setDeviceSubjects([]);
         setSelectedSubjectType('');
         setSelectedSubjectId('');
         setMountedTools({});
+        return false;
       } finally {
         setLoadingSubjects(false);
       }
@@ -1684,7 +1582,9 @@ function AgentToolsTab() {
   );
 
   const loadData = useCallback(async () => {
-    if (!selectedAgentId) return;
+    if (!effectiveAgentId) return;
+    const loadId = effectiveAgentId;
+    const isStale = () => effectiveAgentIdRef.current !== loadId;
     setLoading(true);
     setLoadError(null);
     setSaveError(null);
@@ -1693,14 +1593,15 @@ function AgentToolsTab() {
       await getModelService().loadConfig();
       const [catResult, configResult, skillsResult, agentSkillsResult, devicesResult, bindingResult, modelResult] = await Promise.allSettled([
         settings.getToolCategories(),
-        settings.getAgentToolsConfig(selectedAgentId),
+        settings.getAgentToolsConfig(effectiveAgentId),
         settings.getSkills(true),
-        settings.getAgentSkills(selectedAgentId),
+        settings.getAgentSkills(effectiveAgentId),
         api.devices.listForUser(),
-        api.getAgentBinding(selectedAgentId),
-        api.getAgentModel(selectedAgentId),
+        api.getAgentBinding(effectiveAgentId),
+        api.getAgentModel(effectiveAgentId),
       ]);
 
+      if (isStale()) return;
       const errors: string[] = [];
 
       const catRes = catResult.status === 'fulfilled' ? catResult.value : null;
@@ -1737,11 +1638,12 @@ function AgentToolsTab() {
       }
       if (bindingRes?.device_id) {
         setBindingDeviceId(bindingRes.device_id);
-        await loadSubjectsForDevice(bindingRes.device_id, {
+        const subjectsOk = await loadSubjectsForDevice(bindingRes.device_id, {
           subjectType: bindingRes.subject_type,
           subjectId: bindingRes.subject_id,
           mountedTools: bindingRes.mounted_tools,
         });
+        if (!subjectsOk) errors.push('device subjects');
       } else {
         setBindingDeviceId('');
         setDeviceSubjects([]);
@@ -1755,17 +1657,22 @@ function AgentToolsTab() {
       }
 
       // Load prompts preview
+      if (isStale()) return;
       try {
-        const p = await settings.getPromptsPreview(selectedAgentId);
+        const p = await settings.getPromptsPreview(effectiveAgentId);
+        if (isStale()) return;
         setPrompts(p);
       } catch {
+        if (isStale()) return;
         setPrompts(null);
         setLoadError(prev => prev ?? 'Prompts preview load failed');
       }
 
       // Load bootstrap files
+      if (isStale()) return;
       try {
-        const bootstrapFiles = await settings.getBootstrapFiles(selectedAgentId);
+        const bootstrapFiles = await settings.getBootstrapFiles(effectiveAgentId);
+        if (isStale()) return;
         setSoulMd(bootstrapFiles.soul_md || '');
         setHeartbeatMd(bootstrapFiles.heartbeat_md || '');
         setMemoryMd(bootstrapFiles.memory_md || '');
@@ -1775,17 +1682,18 @@ function AgentToolsTab() {
         setActiveHoursTimezone(bootstrapFiles.active_hours_timezone || 'Asia/Shanghai');
       } catch (e) {
         console.error('Failed to load bootstrap files:', e);
+        if (isStale()) return;
         setLoadError(prev => prev ?? 'Bootstrap files load failed');
       }
     } catch (e) {
       console.error('Failed to load agent tools data:', e);
-      setLoadError(String(e));
+      if (!isStale()) setLoadError(String(e));
     } finally {
       setLoading(false);
     }
   // settings 来自 useSettings()，每次渲染都是新对象，放进去会导致 loadData 无限重跑
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadSubjectsForDevice, selectedAgentId]);
+  }, [loadSubjectsForDevice, effectiveAgentId]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -1796,18 +1704,18 @@ function AgentToolsTab() {
   }, [currentAgentId, selectedAgentId]);
 
   const handleSave = async () => {
-    if (!selectedAgentId) return;
+    if (!effectiveAgentId) return;
     setSaving(true);
     setSaveError(null);
     setSaveInfo(null);
     try {
       const saveTasks: Promise<unknown>[] = [
-        settings.saveAgentToolsConfig(selectedAgentId, {
+        settings.saveAgentToolsConfig(effectiveAgentId, {
           disabled_tools: disabledTools,
           custom_instructions: customInstructions,
         }),
-        settings.setAgentSkills(selectedAgentId, assignedSkillIds),
-        settings.saveBootstrapFiles(selectedAgentId, {
+        settings.setAgentSkills(effectiveAgentId, assignedSkillIds),
+        settings.saveBootstrapFiles(effectiveAgentId, {
           soul_md: soulMd,
           heartbeat_md: heartbeatMd,
           // memory_md 和 user_md 是 Agent 维护的，用户不应该编辑
@@ -1819,7 +1727,7 @@ function AgentToolsTab() {
 
       if (bindingDeviceId && selectedSubjectType) {
         saveTasks.push(
-          api.setAgentBinding(selectedAgentId, {
+          api.setAgentBinding(effectiveAgentId, {
             device_id: bindingDeviceId,
             subject_type: selectedSubjectType,
             subject_id: selectedSubjectId,
@@ -1830,7 +1738,7 @@ function AgentToolsTab() {
         );
       } else if (currentBinding) {
         saveTasks.push(
-          api.clearAgentBinding(selectedAgentId).then(() => {
+          api.clearAgentBinding(effectiveAgentId).then(() => {
             setCurrentBinding(null);
           })
         );
@@ -1839,7 +1747,7 @@ function AgentToolsTab() {
       await Promise.all(saveTasks);
       // Reload prompts preview after save
       try {
-        const p = await settings.getPromptsPreview(selectedAgentId);
+        const p = await settings.getPromptsPreview(effectiveAgentId);
         setPrompts(p);
       } catch { /* ignore */ }
       setSaveInfo('Configuration saved');
@@ -1927,22 +1835,23 @@ function AgentToolsTab() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header with agent selector */}
-      <div className="px-4 py-3 border-b border-nb-border flex items-center justify-between flex-shrink-0">
-        <h3 className="text-sm font-medium text-nb-text">Agent Tools</h3>
-        <select
-          value={selectedAgentId}
-          onChange={e => setSelectedAgentId(e.target.value)}
-          className="bg-nb-surface-2 border border-nb-border rounded px-2 py-1 text-xs text-nb-text max-w-[200px]"
-        >
-          <option value="">Select Agent...</option>
-          {agents.map(a => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
-      </div>
+      {!hideAgentSelector && (
+        <div className="px-4 py-3 border-b border-nb-border flex items-center justify-between flex-shrink-0">
+          <h3 className="text-sm font-medium text-nb-text">Agent Tools</h3>
+          <select
+            value={selectedAgentId}
+            onChange={e => setSelectedAgentId(e.target.value)}
+            className="bg-nb-surface-2 border border-nb-border rounded px-2 py-1 text-xs text-nb-text max-w-[200px]"
+          >
+            <option value="">Select Agent...</option>
+            {agents.map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
-      {!selectedAgentId ? (
+      {!effectiveAgentId ? (
         <div className="flex-1 flex items-center justify-center">
           <p className="text-xs text-nb-text-muted">Select an agent to configure</p>
         </div>
@@ -1971,7 +1880,7 @@ function AgentToolsTab() {
                   setAgentModelComposite(v);
                   if (v) {
                     try {
-                      await getModelService().setModel(selectedAgentId, v);
+                      await getModelService().setModel(effectiveAgentId, v);
                     } catch (err) {
                       console.error('Failed to set agent model:', err);
                       setAgentModelComposite(agentModelComposite);
@@ -2332,6 +2241,40 @@ function AgentToolsTab() {
                 </div>
               </div>
             </div>
+
+            {/* Delete Agent Section */}
+            <div className="space-y-4 pt-4 border-t border-nb-border mt-6">
+              <h4 className="text-xs font-medium text-nb-text">删除 Agent</h4>
+              <p className="text-[10px] text-nb-text-muted">
+                删除此 Agent 将同时删除关联的虚拟机和所有数据，此操作不可恢复。
+              </p>
+              <button
+                onClick={async () => {
+                  const agent = agents.find(a => a.id === effectiveAgentId);
+                  if (!agent) return;
+                  if (!confirm(`确定删除 "${agent.name}" 吗？这将同时删除关联的虚拟机和所有数据。`)) return;
+                  setDeleting(true);
+                  try {
+                    try {
+                      const statuses = await vmService.getAllStatus();
+                      if (statuses?.[agent.id]?.running) {
+                        await vmService.stop(agent.id);
+                        await new Promise(r => setTimeout(r, 1000));
+                      }
+                    } catch { /* ignore */ }
+                    await deleteAgent(agent.id);
+                  } catch (e) {
+                    alert(`删除失败: ${e instanceof Error ? e.message : String(e)}`);
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                disabled={deleting}
+                className="px-3 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg border border-red-500/30 transition-colors disabled:opacity-50"
+              >
+                {deleting ? '删除中...' : '删除此 Agent'}
+              </button>
+            </div>
           </div>
 
           {/* Save button */}
@@ -2376,10 +2319,12 @@ export function SettingsModal(props: {
   onEmbeddedSubTabSelect?: (tab: SettingsTab) => void;
   /** embeddedMode='content' 时，点击返回 */
   onEmbeddedBack?: () => void;
+  /** embedded 时覆盖标题（如 agent-tools 显示 "Agent名 · 配置"） */
+  embeddedTitle?: string;
   /** 退出登录回调（User 管理用） */
   onLogout?: () => void | Promise<void>;
 }) {
-  const { open, onClose, embedded = false, embeddedMode = 'list', embeddedTab, onEmbeddedSubTabSelect, onEmbeddedBack, onLogout } = props;
+  const { open, onClose, embedded = false, embeddedMode = 'list', embeddedTab, onEmbeddedSubTabSelect, onEmbeddedBack, embeddedTitle, onLogout } = props;
   const settings = useSettings();
 
   // Tab state
@@ -2627,9 +2572,7 @@ export function SettingsModal(props: {
 
   const TAB_ITEMS: { id: SettingsTab; icon: typeof Database; label: string }[] = [
     { id: 'models', icon: Database, label: 'Models' },
-    { id: 'agents', icon: Bot, label: 'Agents' },
     { id: 'skills', icon: Zap, label: 'Skills' },
-    { id: 'agent-tools', icon: Wrench, label: 'Agent Tools' },
     { id: 'cache', icon: Trash2, label: 'Clear Cache' },
     { id: 'user', icon: User, label: 'User' },
   ];
@@ -2671,8 +2614,8 @@ export function SettingsModal(props: {
         : 'absolute left-1/2 top-1/2 w-[720px] max-w-[95vw] max-h-[90vh] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-nb-border bg-nb-surface shadow-xl flex flex-col'
     }
     >
-      {/* Header */}
-      <div className={`flex items-center border-b border-nb-border px-4 py-3 flex-shrink-0 ${embedded ? 'grid grid-cols-[auto_1fr_auto]' : 'justify-between'}`}>
+      {/* Header - h-11 与 Header/DeviceManagerPage 一致 */}
+      <div className={`h-11 flex items-center border-b border-nb-border px-4 flex-shrink-0 ${embedded ? 'grid grid-cols-[auto_1fr_auto]' : 'justify-between'}`}>
         <div className="flex items-center">
           {embedded && embeddedMode === 'content' && onEmbeddedBack && (
             <button
@@ -2686,7 +2629,7 @@ export function SettingsModal(props: {
           )}
         </div>
         <div id="settings-modal-title" data-tauri-drag-region className={`text-sm font-semibold text-nb-text flex items-center ${embedded ? 'justify-center cursor-default min-w-0' : 'flex-1'}`}>
-          {embedded ? TAB_ITEMS.find(t => t.id === effectiveTab)?.label ?? 'Settings' : 'Settings'}
+          {embedded ? (embeddedTitle ?? TAB_ITEMS.find(t => t.id === effectiveTab)?.label ?? 'Settings') : 'Settings'}
         </div>
         <div className={embedded ? 'w-7' : 'hidden'} />
         {!embedded && (
@@ -2716,17 +2659,6 @@ export function SettingsModal(props: {
               <span>Models</span>
             </button>
             <button
-              onClick={() => setActiveTab('agents')}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
-                effectiveTab === 'agents'
-                  ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
-                  : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
-              }`}
-            >
-              <Bot size={16} />
-              <span>Agents</span>
-            </button>
-            <button
               onClick={() => setActiveTab('skills')}
               className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
                 effectiveTab === 'skills'
@@ -2736,17 +2668,6 @@ export function SettingsModal(props: {
             >
               <Zap size={16} />
               <span>Skills</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('agent-tools')}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
-                effectiveTab === 'agent-tools'
-                  ? 'bg-nb-accent/10 text-nb-accent border-r-2 border-nb-accent'
-                  : 'text-nb-text-muted hover:text-nb-text hover:bg-nb-surface-2'
-              }`}
-            >
-              <Wrench size={16} />
-              <span>Agent Tools</span>
             </button>
             <button
               onClick={() => setActiveTab('cache')}
@@ -2889,19 +2810,14 @@ export function SettingsModal(props: {
               </>
             )}
 
-            {/* Agents Tab */}
-            {effectiveTab === 'agents' && (
-              <AgentsTab />
-            )}
-
             {/* Skills Tab */}
             {effectiveTab === 'skills' && (
               <SkillsTab />
             )}
 
-            {/* Agent Tools Tab */}
+            {/* Agent Tools Tab - 从 Agents tab 嵌入时隐藏 agent 选择器（已在标题栏显示） */}
             {effectiveTab === 'agent-tools' && (
-              <AgentToolsTab />
+              <AgentToolsTab hideAgentSelector={embedded && embeddedMode === 'content' && embeddedTab === 'agent-tools'} />
             )}
 
             {/* Cache Cleanup Tab */}

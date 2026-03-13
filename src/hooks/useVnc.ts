@@ -84,8 +84,15 @@ export function useVnc(
     const t = transportRef.current;
     if (!t || !containerRef.current) return;
     if (!mountedRef.current) return;
-    // 已连接：仅更新 options，不重建 RFB（展开时 viewOnly 变化会触发 effect，重建会导致 "Unexpected server connection while connecting"）
-    if (rfbRef.current) {
+    // 已连接且 transport 未变：仅更新 options，不重建 RFB（展开时 viewOnly 变化会触发 effect，重建会导致 "Unexpected server connection while connecting"）
+    // transport 变化时（切 device、切 subuser/maindesk）必须断开旧连接、建立新连接
+    const transportId = typeof t !== 'string' && 'resourceId' in t
+      ? `${(t as VncBridgeTransport).resourceId}:${(t as VncBridgeTransport).username ?? 'main'}`
+      : '';
+    const lastId = lastTransportRef.current && typeof lastTransportRef.current !== 'string' && 'resourceId' in lastTransportRef.current
+      ? `${(lastTransportRef.current as VncBridgeTransport).resourceId}:${(lastTransportRef.current as VncBridgeTransport).username ?? 'main'}`
+      : '';
+    if (rfbRef.current && lastId === transportId) {
       rfbRef.current.viewOnly = viewOnly;
       rfbRef.current.scaleViewport = scaleViewport;
       rfbRef.current.clipViewport = clipViewport;

@@ -188,6 +188,72 @@ async fn get_ssh_port_from_gateway(agent_id: &str) -> Result<u16, String> {
     Err("SSH port not found in agent configuration".to_string())
 }
 
+/// 获取 data_dir 路径（与 start_vm 一致）
+fn get_data_dir() -> PathBuf {
+    std::env::var("NOVAIC_DATA_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            PathBuf::from(home).join("Library/Application Support/com.novaic.app")
+        })
+}
+
+/// List all managed VM IDs (running + stopped) - for vm_status_report.
+/// Enumerates data_dir/devices/* (setup 创建) 和 data_dir/agents/*，合并 running 的 VM。
+///
+/// GET /api/vms/managed-ids
+/// Response: ["agent-id-1", "agent-id-2"]
+pub async fn list_managed_vm_ids() -> Json<Vec<String>> {
+    let data_dir = get_data_dir();
+    let mut ids = Vec::new();
+
+    // devices/：setup 创建的 Linux VM 数据目录（与 setup.rs local_data_path 一致）
+    let devices_dir = data_dir.join("devices");
+    if devices_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&devices_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !name.is_empty() && !name.starts_with('.') {
+                            ids.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // agents/：兼容旧路径
+    let agents_dir = data_dir.join("agents");
+    if agents_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !name.is_empty() && !name.starts_with('.') && !ids.contains(&name.to_string()) {
+                            ids.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 合并 running 的 VM（可能目录尚未创建）
+    let running = discover_running_vms();
+    for (agent_id, _) in running {
+        if !ids.contains(&agent_id) {
+            ids.push(agent_id);
+        }
+    }
+    tracing::debug!("[list_managed_vm_ids] Found {} managed VM(s)", ids.len());
+    Json(ids)
+}
+
 /// List all VMs - discovers running VMs by scanning QMP socket files
 pub async fn list_vms(
     State(_state): State<CombinedState>,

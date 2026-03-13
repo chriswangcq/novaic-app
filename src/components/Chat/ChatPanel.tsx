@@ -19,6 +19,8 @@ export function ChatPanel() {
   const { logs, logSubagents } = useLogs();
   const { currentAgentId } = useAgent();
   const { logExpanded, setLogExpanded, logHeightRatio, setLogHeightRatio } = useLayout();
+  const chatViewShowExecutionLog = useAppStore(s => s.chatViewShowExecutionLog);
+  const chatViewShowSubagents = useAppStore(s => s.chatViewShowSubagents);
   const [unreadCount, setUnreadCount] = useState(0);
   const scrollToBottomRef = useRef<(() => void) | null>(null);
   const clearUnreadRef = useRef<(() => void) | null>(null);
@@ -52,7 +54,7 @@ export function ChatPanel() {
   }, [setLogHeightRatio]);
 
   const mainAgentMeta = logSubagents.find(s => s.type === 'main');
-  const showMainAgentLogPreview = currentAgentId && logs.length > 0 && mainAgentMeta?.status !== 'sleeping';
+  const showMainAgentLogPreview = chatViewShowExecutionLog && currentAgentId && logs.length > 0 && mainAgentMeta?.status !== 'sleeping';
 
   return (
     <div className="relative flex flex-col h-full bg-nb-bg/50">
@@ -61,7 +63,7 @@ export function ChatPanel() {
         <div
           className="min-h-0 flex flex-col relative"
           style={
-            logExpanded
+            chatViewShowExecutionLog && logExpanded
               ? { flex: 1 - logHeightRatio, minHeight: 0 }
               : { flex: 1, minHeight: 0 }
           }
@@ -90,7 +92,7 @@ export function ChatPanel() {
             </div>
           )}
         </div>
-        {logExpanded && (
+        {chatViewShowExecutionLog && logExpanded && (
           <>
             {isLgOrAbove && (
               <Resizer
@@ -130,7 +132,7 @@ export function ChatPanel() {
 
       {/* 底部：Subagent 列表 + 输入框 */}
       <div className="shrink-0 flex flex-col border-t border-nb-border/40">
-        {!logExpanded && (
+        {chatViewShowSubagents && !logExpanded && (
           <div className="w-full px-4 pt-1 pb-0 min-w-0 flex justify-center">
             <SubagentList />
           </div>

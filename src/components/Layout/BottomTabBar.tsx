@@ -3,10 +3,11 @@
  * 仅在低于 LAYOUT_THRESHOLD 时、处于第二栏（AgentDrawer）时显示
  */
 
-import { Bot, HardDrive, Settings } from 'lucide-react';
+import { MessageCircle, Bot, HardDrive, Settings } from 'lucide-react';
 import type { PrimaryTab } from './PrimaryNav';
 
 const TABS: { id: PrimaryTab; icon: typeof Bot; label: string }[] = [
+  { id: 'chats', icon: MessageCircle, label: 'Chats' },
   { id: 'agents', icon: Bot, label: 'Agents' },
   { id: 'devices', icon: HardDrive, label: 'Devices' },
   { id: 'setting', icon: Settings, label: '设置' },

@@ -1015,7 +1015,7 @@ export const api = {
      */
     getMyDevices: async (currentAppInstanceId?: string): Promise<{
       devices: Array<{ device_id: string; pc_client_id?: string; is_local?: boolean; online?: boolean }>;
-      by_app_instance: unknown[];
+      by_app_instance: Array<{ app_instance_id: string; machine_label: string; is_local?: boolean; devices: Array<{ device_id: string; online?: boolean }> }>;
     }> => {
       const params = new URLSearchParams();
       if (currentAppInstanceId) params.set('current_app_instance_id', currentAppInstanceId);
@@ -1065,16 +1065,6 @@ export const api = {
      */
     listForUser: async (): Promise<{ devices: Device[] }> => {
       return invoke('gateway_get', { path: '/api/devices' });
-    },
-
-    /**
-     * List all devices for an agent
-     * @deprecated 该 API 不存在（404）。Device 按 User 组织，Agent 只通过 Binding 引用。
-     * 替代方案：优先使用 useAgentDevice(agentId) 获取绑定设备；或 listForUser() + api.agents.getAgentBinding(agentId)。
-     * 计划 Phase 2 移除。
-     */
-    list: async (agentId: string): Promise<{ devices: Device[] }> => {
-      return invoke('gateway_get', { path: `/api/agents/${agentId}/devices` });
     },
 
     /**

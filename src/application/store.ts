@@ -127,6 +127,10 @@ export interface AppState {
 
   // UI
   settingsOpen: boolean;
+  /** Chat 页面视图选项（右上角 ... 弹窗） */
+  chatViewShowDevice: boolean;
+  chatViewShowExecutionLog: boolean;
+  chatViewShowSubagents: boolean;
 
   // Layout
   layoutMode: LayoutMode;
@@ -189,6 +193,9 @@ export const useAppStore = create<Store>((set) => ({
   addAndroidDeviceModalOpen: false,
   addVmSubuserDeviceId: null,
   settingsOpen:       false,
+  chatViewShowDevice:  true,
+  chatViewShowExecutionLog: true,
+  chatViewShowSubagents: true,
   ...defaultLayout(),
 
   // ── Setters ────────────────────────────────────────────────────────────────

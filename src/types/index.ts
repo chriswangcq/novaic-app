@@ -26,6 +26,8 @@ export interface DeviceConfig {
   ports: Record<string, number>;
   /** P2-8: 设备所属物理 PC（setup 时记录，多 PC 路由用） */
   pc_client_id?: string;
+  /** P4-1: 设备是否可用（pc_client 在线且 device 运行中），API 返回 */
+  available?: boolean;
 }
 
 /**
