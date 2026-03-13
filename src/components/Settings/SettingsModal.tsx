@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Eye, Edit3, Smartphone, User, LogOut } from 'lucide-react';
-import type { ApiKeyInfo, CandidateModel, AICAgent } from '../../services/api';
+import type { ApiKeyInfo, CandidateModel } from '../../services/api';
 import { useAgent } from '../hooks/useAgent';
 import { useSettings } from '../hooks/useSettings';
 import { useModels } from '../hooks/useModels';
