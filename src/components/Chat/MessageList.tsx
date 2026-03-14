@@ -27,7 +27,6 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
   const lastMessageCountRef = useRef(messages.length);
   const lastMessageIdRef = useRef<string | null>(null);
   const prevIsLoadingMoreRef = useRef(false);
-  const [isReady, setIsReady] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const hasInitialScrolled = useRef(false);
 
@@ -179,20 +178,12 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
 
   useLayoutEffect(() => {
     hasInitialScrolled.current = false;
-    setIsReady(false);
     setUnreadCount(0);
     lastMessageIdRef.current = null;
     prevIsLoadingMoreRef.current = false;
   }, [currentAgentId]);
 
   // ── 初始滚动到底部 ────────────────────────────────────────────────────────
-  //
-  // 彻底修复：不使用 setTimeout + cleanup 模式。
-  // 问题：messages.length 在依赖数组里 → SSE 每条新消息都触发 cleanup →
-  // clearTimeout 取消 timer → isReady 永远 false → 消息区 opacity-0。
-  //
-  // 方案：消息首次到来时同步设 isReady=true + hasInitialScrolled=true，
-  // 用 rAF（不可被 useEffect cleanup 取消）完成滚动。
 
   const scrollToBottomFnRef = useRef(scrollToBottom);
   scrollToBottomFnRef.current = scrollToBottom;
@@ -200,13 +191,9 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
   useEffect(() => {
     if (!hasInitialScrolled.current && messages.length > 0) {
       hasInitialScrolled.current = true;
-      setIsReady(true);
-      // rAF ensures virtualizer has measured items before scrolling
       requestAnimationFrame(() => {
         scrollToBottomFnRef.current('auto');
       });
-    } else if (messages.length === 0) {
-      setIsReady(true);
     }
   }, [messages.length]);
 
@@ -257,10 +244,15 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
 
   const virtualItems = virtualizer.getVirtualItems();
 
+  // Diagnostic: log when virtual list renders 0 items despite having messages
+  if (virtualItems.length === 0 && messages.length > 0) {
+    console.warn('[MessageList] 0 virtualItems but', messages.length, 'messages. getTotalSize=', virtualizer.getTotalSize(), 'scrollEl height=', parentRef.current?.clientHeight);
+  }
+
   return (
     <div
       ref={parentRef}
-      className={`h-full overflow-auto px-4 pb-3 relative ${isReady ? 'opacity-100' : 'opacity-0'}`}
+      className="flex-1 min-h-0 overflow-auto px-4 pb-3 relative"
       style={{ transition: 'none', paddingTop: hasLogs ? '90px' : '12px' }}
       onScroll={handleScroll}
     >
