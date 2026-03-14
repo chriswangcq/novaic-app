@@ -22,6 +22,8 @@ export interface UserStreamHandlers {
   onChatOpen: () => void;
   onChatError: () => void;
   onLogsError: () => void;
+  onAgentMetadataUpdated?: (agentId: string, action: string) => void;
+  onDeviceMetadataUpdated?: (deviceId: string, action: string) => void;
 }
 
 // ── SSE Manager ───────────────────────────────────────────────────────────────
@@ -68,6 +70,16 @@ export class SSEManager {
         case 'SUBAGENT_COMPLETED':
         case 'SUBAGENT_SEND':
         case 'SYSTEM_WAKE':
+          break;
+        case 'AGENT_METADATA_UPDATED':
+          if (msg.agent_id && handlers.onAgentMetadataUpdated) {
+            handlers.onAgentMetadataUpdated(msg.agent_id, (msg as any).action || 'updated');
+          }
+          break;
+        case 'DEVICE_METADATA_UPDATED':
+          if ((msg as any).device_id && handlers.onDeviceMetadataUpdated) {
+            handlers.onDeviceMetadataUpdated((msg as any).device_id, (msg as any).action || 'updated');
+          }
           break;
       }
     } catch (e) {

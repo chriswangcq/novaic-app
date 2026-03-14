@@ -7,6 +7,13 @@
  */
 import { api } from '../../services/api';
 
+// ── Global TTL Caches for static/low-frequency settings ───────────────────
+let _toolsCache: any = null;
+let _toolsFetchTime = 0;
+let _builtinSkillsCache: any = null;
+let _builtinSkillsFetchTime = 0;
+const CACHE_TTL = 1000 * 60 * 15; // 15 minutes
+
 export function useSettings() {
   return {
     // ── Global config (API keys + candidate models) ──────────────────────────
@@ -26,14 +33,32 @@ export function useSettings() {
     cleanupGarbage:       (...args: Parameters<typeof api.cleanupGarbage>)      => api.cleanupGarbage(...args),
 
     // ── Skills ────────────────────────────────────────────────────────────────
-    getSkills:            (includeBuiltin: boolean)                   => api.getSkills(includeBuiltin),
+    getSkills:            async (includeBuiltin: boolean)             => {
+      if (includeBuiltin && _builtinSkillsCache && Date.now() - _builtinSkillsFetchTime < CACHE_TTL) {
+        return _builtinSkillsCache;
+      }
+      const res = await api.getSkills(includeBuiltin);
+      if (includeBuiltin) {
+        _builtinSkillsCache = res;
+        _builtinSkillsFetchTime = Date.now();
+      }
+      return res;
+    },
     createSkill:          (data: Parameters<typeof api.createSkill>[0])         => api.createSkill(data),
     updateSkill:          (id: string, data: Parameters<typeof api.updateSkill>[1]) => api.updateSkill(id, data),
     deleteSkill:          (id: string)                                => api.deleteSkill(id),
     forkSkill:            (id: string, newName?: string)              => api.forkSkill(id, newName),
 
     // ── Agent tools & skills assignment ──────────────────────────────────────
-    getToolCategories:    ()                                           => api.getToolCategories(),
+    getToolCategories:    async ()                                     => {
+      if (_toolsCache && Date.now() - _toolsFetchTime < CACHE_TTL) {
+        return _toolsCache;
+      }
+      const res = await api.getToolCategories();
+      _toolsCache = res;
+      _toolsFetchTime = Date.now();
+      return res;
+    },
     getAgentToolsConfig:  (agentId: string)                           => api.getAgentToolsConfig(agentId),
     saveAgentToolsConfig: (agentId: string, data: Parameters<typeof api.saveAgentToolsConfig>[1]) => api.saveAgentToolsConfig(agentId, data),
     getAgentSkills:       (agentId: string)                           => api.getAgentSkills(agentId),

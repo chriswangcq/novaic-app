@@ -728,6 +728,8 @@ interface DeviceManagerPageProps {
   onBackToChat?: () => void;
 }
 
+import { useDevicesFromDB } from '../../hooks/useDevicesFromDB';
+
 export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceManagerPageProps) {
   const selectedDeviceId = useAppStore(s => s.selectedDeviceId);
   const sharedSelectedVmUser = useAppStore(s => s.selectedVmUser);
@@ -736,7 +738,10 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
   const addAndroidOpen = useAppStore(s => s.addAndroidDeviceModalOpen);
   const addVmSubuserDeviceId = useAppStore(s => s.addVmSubuserDeviceId);
   const patchState = useAppStore(s => s.patchState);
-  const [devices, setDevices]             = useState<Device[]>([]);
+  
+  const dbDevices = useDevicesFromDB();
+  const [networkDevices, setNetworkDevices] = useState<Device[]>([]);
+  const devices = networkDevices.length > 0 ? networkDevices : dbDevices;
   const [loading, setLoading]             = useState(false);
   const [error, setError]                 = useState<string | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
@@ -750,14 +755,20 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
     try {
       const res = await api.devices.listForUser();
       const next = res.devices ?? [];
-      setDevices(next);
+      setNetworkDevices(next);
       patchState({ deviceManagerDevices: next });
+      import('../../db/deviceRepo').then(repo => {
+        import('../../services/auth').then(({ getCachedUser }) => {
+          const userId = getCachedUser()?.user_id;
+          if (userId && next.length > 0) repo.putDevices(userId, next);
+        });
+      });
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load devices');
       // Fallback: use devices from store (may have been loaded by AgentDrawer)
       const fromStore = useAppStore.getState().deviceManagerDevices;
       if (fromStore?.length) {
-        setDevices(fromStore);
+        setNetworkDevices(fromStore);
         setError(null);
       }
     } finally {
@@ -770,7 +781,7 @@ export function DeviceManagerPage({ isPageMode = false, onBackToChat }: DeviceMa
   // When our load failed but AgentDrawer later loaded devices, use store data
   useEffect(() => {
     if (error && deviceManagerDevices?.length) {
-      setDevices(deviceManagerDevices);
+      setNetworkDevices(deviceManagerDevices);
       setError(null);
     }
   }, [error, deviceManagerDevices]);

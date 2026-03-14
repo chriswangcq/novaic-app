@@ -9,6 +9,7 @@ import { clearLogFilter } from './logFilterStore';
 import { clearLogInputCache } from './logInputCacheStore';
 import { api } from '../services/api';
 import * as prefsRepo from '../db/prefsRepo';
+import * as agentRepo from '../db/agentRepo';
 import * as setup from '../services/setup';
 import { vmService } from '../services/vm';
 import type { SyncService } from './syncService';
@@ -26,7 +27,11 @@ export class AgentService {
     private modelService: ModelService,
     private messageService: MessageService,
     private logService: LogService,
-  ) {}
+  ) {
+    this.syncService.onReconnect(() => {
+      this.loadAgents().catch(e => console.error('[AgentService] delta sync failed after reconnect:', e));
+    });
+  }
 
   // ── Bootstrap (app startup) ───────────────────────────────────────────────
 
@@ -53,21 +58,41 @@ export class AgentService {
 
   async loadAgents(): Promise<void> {
     try {
-      const response = await api.listAgents();
+      const cursor = await prefsRepo.getSyncCursor(this.userId, 'agents');
+      const response = await api.listAgents(cursor ? { updated_after: cursor } : undefined);
+      
+      // Update IDB with any fetched delta
+      if (response.agents.length > 0) {
+        await agentRepo.putAgents(this.userId, response.agents);
+        // Find the newest updated_at locally to establish next cursor
+        const maxDate = response.agents.reduce((max, a) => {
+          const d = new Date(a.created_at || 0).getTime();
+          return d > max ? d : max;
+        }, 0);
+        await prefsRepo.setSyncCursor(this.userId, 'agents', new Date(maxDate).toISOString());
+      } else if (!cursor && response.agents.length === 0) {
+        await agentRepo.deleteAllAgents(this.userId);
+      }
+
+      // Read merged list out of local DB
+      const mergedList = await agentRepo.getAgents(this.userId);
+      // Sort descending by creation
+      mergedList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
       const { agents: current, currentAgentId, isInitialized } = useAppStore.getState();
 
       const changed =
-        current.length !== response.agents.length ||
+        current.length !== mergedList.length ||
         current.some((a, i) => {
-          const n = response.agents[i];
+          const n = mergedList[i];
           if (!n || a.id !== n.id || a.name !== n.name || a.created_at !== n.created_at) return true;
           return a.android?.device_serial !== n.android?.device_serial ||
                  a.android?.avd_name !== n.android?.avd_name;
         });
 
-      if (changed) useAppStore.getState().setAgents(response.agents);
+      if (changed) useAppStore.getState().setAgents(mergedList);
 
-      if (!response.agents.length) {
+      if (!mergedList.length) {
         clearMessagePagination();
         clearLogPagination();
         clearLogFilter();
@@ -78,11 +103,11 @@ export class AgentService {
         return;
       }
 
-      const exists = response.agents.some(a => a.id === currentAgentId);
+      const exists = mergedList.some(a => a.id === currentAgentId);
       if (!currentAgentId || !exists) {
         const stored = await prefsRepo.getSelectedAgent(this.userId);
-        const storedExists = stored && response.agents.some(a => a.id === stored);
-        const target = storedExists ? stored! : response.agents[0].id;
+        const storedExists = stored && mergedList.some(a => a.id === stored);
+        const target = storedExists ? stored! : mergedList[0].id;
 
         if (isInitialized) {
           await this.selectAgent(target);

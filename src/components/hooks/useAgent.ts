@@ -3,14 +3,19 @@
  */
 import { useAppStore } from '../../application/store';
 import { getAgentService } from '../../application';
+import { useAgentsFromDB } from '../../hooks/useAgentsFromDB';
 import type { CreateAgentRequest, AICAgent } from '../../services/api';
 import type { SetupProgressInfo } from '../../types';
 
 export function useAgent() {
-  const agents             = useAppStore(s => s.agents);
+  const storeAgents        = useAppStore(s => s.agents);
+  const dbAgents           = useAgentsFromDB();
   const currentAgentId     = useAppStore(s => s.currentAgentId);
   const createModalOpen    = useAppStore(s => s.createAgentModalOpen);
   const isInitialized      = useAppStore(s => s.isInitialized);
+
+  // SWR Strategy: Prefer DB list if available, otherwise fallback to memory store
+  const agents = dbAgents.length > 0 ? dbAgents : storeAgents;
 
   const svc = getAgentService();
 

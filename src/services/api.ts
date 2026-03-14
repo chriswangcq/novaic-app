@@ -465,9 +465,13 @@ export const api = {
 
   /**
    * List all AIC agents
+   * @param options.updated_after Optional timestamp (ISO string) for delta syncing
    */
-  async listAgents(): Promise<AgentListResponse> {
-    return invoke<AgentListResponse>('gateway_get', { path: '/api/agents' });
+  async listAgents(options?: { updated_after?: string }): Promise<AgentListResponse> {
+    const path = options?.updated_after
+      ? `/api/agents?updated_after=${encodeURIComponent(options.updated_after)}`
+      : '/api/agents';
+    return invoke<AgentListResponse>('gateway_get', { path });
   },
 
   /**
@@ -1063,8 +1067,9 @@ export const api = {
     /**
      * List all devices for the current user (across all agents)
      */
-    listForUser: async (): Promise<{ devices: Device[] }> => {
-      return invoke('gateway_get', { path: '/api/devices' });
+    listForUser: async (params?: { updated_after?: string }): Promise<{ devices: Device[] }> => {
+      const qs = params?.updated_after ? `?updated_after=${encodeURIComponent(params.updated_after)}` : '';
+      return invoke('gateway_get', { path: `/api/devices${qs}` });
     },
 
     /**

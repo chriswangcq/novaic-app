@@ -59,3 +59,12 @@ export async function getLayout(userId: string): Promise<unknown | null> {
 export async function setLayout(userId: string, layout: unknown): Promise<void> {
   await set(userId, PREF_KEYS.LAYOUT, layout);
 }
+
+// ── Sync Cursors ─────────────────────────────────────────────────────────────
+
+export async function getSyncCursor(userId: string, entity: string): Promise<string | null> {
+  return get<string>(userId, `sync_cursor_${entity}`);
+}
+export async function setSyncCursor(userId: string, entity: string, cursor: string): Promise<void> {
+  await set(userId, `sync_cursor_${entity}`, cursor);
+}

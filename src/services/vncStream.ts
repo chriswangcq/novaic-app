@@ -151,9 +151,9 @@ async function connectStream(streamKey: string, pcClientId?: string) {
       console.log(`${VNC_FLOW} [2-vncStream] getVncTransport streamKey=${streamKey} pcClientId=${pcClientId ?? 'null'}`);
       state.transportOrUrl = await vmService.getVncTransport(streamKey, '', pcClientId).catch((err: any) => {
         console.error(`${VNC_FLOW} [2-vncStream] getVncTransport 失败 streamKey=${streamKey}`, err);
-        notifySubscribers(state, 'error', err?.message || '获取 VNC 传输失败');
-        state.status = 'error';
-        notifySubscribers(state, 'status');
+        notifySubscribers(state!, 'error', err?.message || '获取 VNC 传输失败');
+        state!.status = 'error';
+        notifySubscribers(state!, 'status');
         throw err;
       });
       console.log(`${VNC_FLOW} [2-vncStream] getVncTransport 成功 transportOrUrl=${typeof state.transportOrUrl === 'string' ? state.transportOrUrl : '(VncBridgeTransport)'}`);

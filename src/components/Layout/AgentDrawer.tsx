@@ -88,6 +88,8 @@ function FloorAddButton({ onAddLinux, onAddAndroid }: { onAddLinux: () => void; 
   );
 }
 
+import { useDevicesFromDB } from '../../hooks/useDevicesFromDB';
+
 export function AgentDrawer({ isOpen, onClose, onSelectChat, onSelectAgentForTools, onSelectAgent, onCreateNew, resizerPlacement = 'internal', activeView, onOpenDevices, asPrimaryPage = false, primaryTab = 'chats', onOpenSettings: _onOpenSettings, settingsSubTab, onSettingsSubTabSelect }: AgentDrawerProps) {
   const selectChat = onSelectChat ?? onSelectAgent ?? (() => {});
   const selectAgentForTools = onSelectAgentForTools ?? onSelectAgent ?? (() => {});
@@ -105,7 +107,11 @@ export function AgentDrawer({ isOpen, onClose, onSelectChat, onSelectAgentForToo
   const openAndroidDeviceModal = () => useAppStore.getState().patchState({ addAndroidDeviceModalOpen: true });
   const openVmSubuserModal = (deviceId: string) => useAppStore.getState().patchState({ addVmSubuserDeviceId: deviceId });
   const [lastMessages, setLastMessages] = useState<Record<string, string>>({});
-  const [devices, setDevices] = useState<Device[]>([]);
+  
+  const dbDevices = useDevicesFromDB();
+  const [networkDevices, setNetworkDevices] = useState<Device[]>([]);
+  const devices = networkDevices.length > 0 ? networkDevices : dbDevices;
+  
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [byAppInstance, setByAppInstance] = useState<Array<{ app_instance_id: string; machine_label: string; is_local?: boolean; devices: Array<{ device_id: string; online?: boolean }> }>>([]);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -134,13 +140,16 @@ export function AgentDrawer({ isOpen, onClose, onSelectChat, onSelectAgentForToo
         console.error('[AgentDrawer] loadDevices: p2p.getMyDevices failed', myDevicesSettled.reason);
       }
       const next = devicesRes?.devices ?? [];
-      setDevices(next);
+      setNetworkDevices(next);
       setDeviceManagerDevices(next);
+      if (userId && next.length > 0) {
+        import('../../db/deviceRepo').then(repo => repo.putDevices(userId, next));
+      }
       const floors = myDevicesRes?.by_app_instance ?? [];
       setByAppInstance(Array.isArray(floors) ? floors : []);
     } catch (e) {
       console.error('[AgentDrawer] loadDevices unexpected error', e);
-      setDevices([]);
+      setNetworkDevices([]);
       setDeviceManagerDevices([]);
       setByAppInstance([]);
     } finally {

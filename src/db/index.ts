@@ -5,7 +5,7 @@
 
 import { openDB, deleteDB, type IDBPDatabase } from 'idb';
 
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 let _db: IDBPDatabase | null = null;
 let _dbUserId: string | null = null;
@@ -39,6 +39,12 @@ export async function getDb(userId: string): Promise<IDBPDatabase> {
       // v2 → v3: add file cache store
       if (oldVersion < 3) {
         db.createObjectStore('files', { keyPath: 'id' });
+      }
+
+      // v3 → v4: add agents and devices stores for list caching
+      if (oldVersion < 4) {
+        db.createObjectStore('agents', { keyPath: 'id' });
+        db.createObjectStore('devices', { keyPath: 'id' });
       }
     },
   });
