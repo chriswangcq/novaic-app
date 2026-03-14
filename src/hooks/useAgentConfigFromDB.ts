@@ -13,14 +13,14 @@ import { getCachedUser } from '../services/auth';
 
 export function useAgentConfigFromDB(agentId: string | null): AgentConfigRecord | null {
   const [config, setConfig] = useState<AgentConfigRecord | null>(null);
-  const user = getCachedUser();
+  // getCachedUser() returns a NEW object each call — extract stable user_id to avoid infinite re-render
+  const userId = getCachedUser()?.user_id ?? null;
 
   useEffect(() => {
-    if (!user || !agentId) {
+    if (!userId || !agentId) {
       setConfig(null);
       return;
     }
-    const userId = user.user_id;
 
     // Load from DB immediately
     const load = async () => {
@@ -37,7 +37,8 @@ export function useAgentConfigFromDB(agentId: string | null): AgentConfigRecord 
     return subscribe(userId, agentId, () => {
       load();
     });
-  }, [user, agentId]);
+  }, [userId, agentId]);
 
   return config;
 }
+
