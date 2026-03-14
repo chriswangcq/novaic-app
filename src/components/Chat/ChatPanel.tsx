@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Terminal, ChevronUp } from 'lucide-react';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
@@ -26,6 +26,19 @@ export function ChatPanel() {
   const clearUnreadRef = useRef<(() => void) | null>(null);
   const mainAreaRef = useRef<HTMLDivElement>(null);
   const isLgOrAbove = useIsLgOrAbove();
+
+  const [keyboardActive, setKeyboardActive] = useState(false);
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const check = () => {
+      const diff = window.innerHeight - vv.height;
+      setKeyboardActive(diff > 100);
+    };
+    vv.addEventListener('resize', check);
+    return () => vv.removeEventListener('resize', check);
+  }, []);
 
   const stableSetUnreadCount = useCallback((count: number) => {
     setUnreadCount(count);
@@ -130,14 +143,14 @@ export function ChatPanel() {
         )}
       </div>
 
-      {/* 底部：Subagent 列表 + 输入框 */}
+      {/* 底部：Subagent 列表 + 输入框 — 键盘激活时隐藏 SubagentList、减少内边距 */}
       <div className="shrink-0 flex flex-col border-t border-nb-border/40">
-        {chatViewShowSubagents && !logExpanded && (
+        {chatViewShowSubagents && !logExpanded && !keyboardActive && (
           <div className="w-full px-4 pt-1 pb-0 min-w-0 flex justify-center">
             <SubagentList />
           </div>
         )}
-        <div className="flex items-stretch bg-nb-bg/80 pb-4">
+        <div className={`flex items-stretch bg-nb-bg/80 ${keyboardActive ? 'pb-0' : 'pb-4'}`}>
           <div className="flex-1 min-w-0 flex flex-col items-center">
             <ChatInput
               onSend={sendMessage}

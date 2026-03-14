@@ -2,6 +2,7 @@
  * NarrowHeader - 窄态顶部空 header
  * PC（macOS）：红绿灯区域（h-11 拖拽区）
  * 手机：系统预留（safe-area-inset-top 刘海/状态栏）
+ * 始终显示，为内容提供 safe-area 间距
  */
 
 import { useMemo } from 'react';

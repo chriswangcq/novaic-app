@@ -142,6 +142,9 @@ fn spawn_app_instance_ready_task(
 const OTA_ALLOWED_HOSTS: &[&str] = &["relay.gradievo.com", "api.gradievo.com"];
 
 fn is_ota_enabled() -> bool {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        return true;
+    }
     std::env::var("NOVAIC_OTA_ENABLED")
         .ok()
         .map(|s| {

@@ -350,7 +350,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectChat, onSelectAgentForToo
   const chatsContent = (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="shrink-0 border-b border-nb-border">
-        <div className={`flex items-center px-3 py-2 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
+        <div className={`h-11 flex items-center px-3 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
           <div className={asPrimaryPage ? '' : 'hidden'} />
           <span
             data-tauri-drag-region
@@ -406,7 +406,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectChat, onSelectAgentForToo
   const agentsContent = (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="shrink-0 border-b border-nb-border">
-        <div className={`flex items-center px-3 py-2 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
+        <div className={`h-11 flex items-center px-3 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
           <div className={asPrimaryPage ? '' : 'hidden'} />
           <span
             data-tauri-drag-region
@@ -472,7 +472,7 @@ export function AgentDrawer({ isOpen, onClose, onSelectChat, onSelectAgentForToo
   const devicesContent = (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="shrink-0 border-b border-nb-border">
-        <div className={`flex items-center px-3 py-2 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
+        <div className={`h-11 flex items-center px-3 ${asPrimaryPage ? 'grid grid-cols-[1fr_auto_1fr]' : 'justify-between'}`}>
           <div className={asPrimaryPage ? '' : 'hidden'} />
           <span
             data-tauri-drag-region

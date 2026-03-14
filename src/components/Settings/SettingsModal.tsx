@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
-import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Eye, Edit3, Smartphone, User, LogOut } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Eye, Edit3, Smartphone, User, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import type { ApiKeyInfo, CandidateModel } from '../../services/api';
 import { useAgent } from '../hooks/useAgent';
 import { useSettings } from '../hooks/useSettings';
@@ -2580,17 +2580,27 @@ export function SettingsModal(props: {
   if (embedded && embeddedMode === 'list') {
     return (
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-nb-surface">
-        <div className="flex items-center justify-center border-b border-nb-border px-4 py-3 flex-shrink-0">
-          <div data-tauri-drag-region className="text-sm font-semibold text-nb-text cursor-default">Settings</div>
+        <div className="shrink-0 border-b border-nb-border">
+          <div className="h-11 grid grid-cols-[1fr_auto_1fr] items-center px-3">
+            <div />
+            <span
+              data-tauri-drag-region
+              className="flex items-center gap-2.5 text-sm font-medium text-nb-text cursor-default min-w-0 justify-center"
+            >
+              <SettingsIcon size={16} strokeWidth={1.6} />
+              Settings
+            </span>
+            <div />
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto py-2.5">
+        <div className="flex-1 overflow-y-auto py-2.5 px-2.5">
           {TAB_ITEMS.map(({ id, icon: Icon, label }) => {
             const isSelected = embeddedTab === id;
             return (
               <button
                 key={id}
                 onClick={() => { setActiveTab(id); onEmbeddedSubTabSelect?.(id); }}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors rounded-lg mx-2 ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm transition-colors rounded-lg ${
                   isSelected ? 'bg-white/10 text-nb-text' : 'text-nb-text-secondary hover:text-nb-text hover:bg-white/[0.04]'
                 }`}
               >

@@ -42,7 +42,11 @@ export function ChatInput({
   const hasAgent = !!currentAgentId;
 
   useEffect(() => {
-    textareaRef.current?.focus();
+    // 移动端不自动聚焦，避免键盘自动弹出
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (!isMobile) {
+      textareaRef.current?.focus();
+    }
   }, []);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -108,7 +112,7 @@ export function ChatInput({
   };
 
   return (
-    <div className="px-4 pt-2 pb-4 flex flex-col items-center gap-2 relative">
+    <div className={`px-4 pt-2 flex flex-col items-center gap-2 relative ${isFocused ? 'pb-1' : 'pb-4'}`}>
       {/* 新消息提示胶囊按钮 - 在输入框上方 */}
       {unreadCount > 0 && (
         <button

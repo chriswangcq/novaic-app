@@ -102,7 +102,7 @@ export function Header(props: HeaderProps) {
     <>
       <header
         className={`h-11 bg-nb-surface/95 backdrop-blur-sm border-b border-nb-border/60
-                    no-select shrink-0 pr-2
+                    no-select shrink-0 sticky top-0 z-10 pr-2
                     ${isNarrow ? 'grid grid-cols-[1fr_auto_1fr] items-center' : 'flex items-center'}
                     ${compact ? 'pl-2' : isMacOS ? 'pl-[76px]' : 'pl-2'}`}
         onMouseDown={handleHeaderMouseDown}

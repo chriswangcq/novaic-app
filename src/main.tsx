@@ -27,17 +27,39 @@ if (typeof window !== 'undefined' && window.console?.error) {
   };
 }
 
-// iOS/移动端：键盘弹出时缩小视口高度，避免整页上推
+// iOS/移动端：跟踪视口高度 CSS 变量，供各层独立使用
+// 不再直接修改 html.height，避免触发 iOS 文档重排和滚动
 const vv = typeof window !== 'undefined' ? window.visualViewport : null;
 if (vv) {
-  const setViewportHeight = () => {
-    const h = vv.height;
-    document.documentElement.style.setProperty('--visual-viewport-height', `${h}px`);
-    document.documentElement.style.height = `${h}px`;
+  const update = () => {
+    document.documentElement.style.setProperty('--visual-viewport-height', `${vv.height}px`);
+    // iOS WKWebView：键盘弹出时强制回顶部，防止页面被推
+    if (window.innerHeight - vv.height > 100) {
+      window.scrollTo(0, 0);
+    }
   };
-  vv.addEventListener('resize', setViewportHeight);
-  vv.addEventListener('scroll', setViewportHeight);
-  setViewportHeight();
+  vv.addEventListener('resize', update);
+  vv.addEventListener('scroll', update);
+  update();
+}
+
+// iOS WKWebView：阻止 document 级别的触摸滚动，只允许可滚动容器内部滚动
+// 这防止了触摸 header/输入框 时整个页面被原生滚动推动
+if (typeof document !== 'undefined') {
+  document.addEventListener('touchmove', (e: TouchEvent) => {
+    let target = e.target as HTMLElement | null;
+    while (target && target !== document.body && target !== document.documentElement) {
+      const style = window.getComputedStyle(target);
+      const overflowY = style.overflowY;
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        // 在可滚动容器内，允许滚动
+        return;
+      }
+      target = target.parentElement;
+    }
+    // 不在可滚动容器内，阻止触摸滚动
+    e.preventDefault();
+  }, { passive: false });
 }
 
 // OTA 场景：纯浏览器打开 CDN URL 时 __TAURI__ 不存在，需显示 Fallback 避免 invoke 报错

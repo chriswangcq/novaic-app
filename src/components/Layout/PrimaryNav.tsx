@@ -20,7 +20,7 @@ const TABS: { id: PrimaryTab; icon: typeof Bot; label: string }[] = [
   { id: 'chats', icon: MessageCircle, label: 'Chats' },
   { id: 'agents', icon: Bot, label: 'Agents' },
   { id: 'devices', icon: HardDrive, label: 'Devices' },
-  { id: 'setting', icon: Settings, label: '设置' },
+  { id: 'setting', icon: Settings, label: 'Settings' },
 ];
 
 export function PrimaryNav({ activeTab, onTabChange, hideTabs = false }: PrimaryNavProps) {

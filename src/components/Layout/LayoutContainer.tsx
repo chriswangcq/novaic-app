@@ -6,7 +6,7 @@
  * - 低于阈值（手机式）：tab 移到底部，第二栏时底 tab 可见，第三栏时底 tab 隐藏、可返回
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { PrimaryNav, type PrimaryTab } from './PrimaryNav';
 import { BottomTabBar } from './BottomTabBar';
 import { NarrowHeader } from './NarrowHeader';
@@ -63,6 +63,23 @@ export function LayoutContainer({
   const chatViewShowDevice = useAppStore(s => s.chatViewShowDevice);
   const [primaryTab, setPrimaryTab] = useState<PrimaryTab>('chats');
   const [settingsSubTab, setSettingsSubTab] = useState<SettingsTab | null>(null);
+
+  // iOS WKWebView：键盘弹出时强制回顶部，防止文档被推
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      if (window.innerHeight - vv.height > 100) {
+        window.scrollTo(0, 0);
+      }
+    };
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
 
   const clearAgentSelection = () => useAppStore.getState().patchState({ currentAgentId: null });
 
@@ -145,10 +162,27 @@ export function LayoutContainer({
   }
 
   // ── 手机式：第三栏（Main）底 tab 不可见，可返回第二栏 ─────────────────────────────
+  // position:fixed + 原生注入的 --keyboard-height 实现键盘适配
+  // 原生端移除 WKWebView 键盘观察者（防 header 滚动）+ 自己监听键盘注入 CSS 变量
   if (!isPcLayout && isThirdColumn) {
     return (
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden" style={{ '--drawer-width': `${drawerWidth}px` } as React.CSSProperties}>
-        <NarrowHeader />
+      <div
+        className="flex flex-col overflow-hidden"
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 'var(--keyboard-height, 0px)',
+          zIndex: 10,
+          background: '#0d0d0d',
+          '--drawer-width': `${drawerWidth}px`,
+        } as React.CSSProperties}
+      >
+        {/* 锁定顶部：safe-area + 由各子页 Header 负责自己的 shrink-0 */}
+        <div className="sticky top-0 z-20 shrink-0">
+          <NarrowHeader />
+        </div>
         <main className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-0">
           {primaryTab === 'setting' && settingsSubTab ? (
             <SettingsModal

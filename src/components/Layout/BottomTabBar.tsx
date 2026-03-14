@@ -10,7 +10,7 @@ const TABS: { id: PrimaryTab; icon: typeof Bot; label: string }[] = [
   { id: 'chats', icon: MessageCircle, label: 'Chats' },
   { id: 'agents', icon: Bot, label: 'Agents' },
   { id: 'devices', icon: HardDrive, label: 'Devices' },
-  { id: 'setting', icon: Settings, label: '设置' },
+  { id: 'setting', icon: Settings, label: 'Settings' },
 ];
 
 interface BottomTabBarProps {
@@ -38,10 +38,10 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
         );
       })}
       </div>
-      {/* 底部安全区：适配 iPhone 等带 Home Indicator 的设备 */}
+      {/* 底部安全区：适配 iPhone 等带 Home Indicator 的设备（缩小 40%） */}
       <div
-        className="min-h-[12px] bg-nb-surface/95"
-        style={{ height: 'max(env(safe-area-inset-bottom), 12px)' }}
+        className="bg-nb-surface/95"
+        style={{ height: 'calc(max(env(safe-area-inset-bottom, 0px), 7px) * 0.6)' }}
       />
     </div>
   );

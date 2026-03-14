@@ -23,10 +23,8 @@
 
 /* Base styles */
 html {
-  height: 100%;
-  /* 100dvh + JS polyfill: 键盘弹出时视口高度缩小，内容区随之缩小而非整页上推 */
   height: 100dvh;
-  height: var(--visual-viewport-height, 100dvh);
+  overflow: hidden;
 }
 body, #root {
   height: 100%;
