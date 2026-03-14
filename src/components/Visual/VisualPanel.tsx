@@ -53,7 +53,13 @@ export function VisualPanel({ isThumbnail = false }: VisualPanelProps) {
   const [isResizing, setIsResizing] = useState(false);
   const [isLogsCollapsed, setIsLogsCollapsed] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>('linux');
+  const [vncActivated, setVncActivated] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // 切换 agent 时重置
+  useEffect(() => {
+    setVncActivated(false);
+  }, [currentAgentId]);
 
   // C4: 使用 useAgentDevice 替代已废弃的 agent.devices
   const hasLinux = device?.type === 'linux';
@@ -117,10 +123,24 @@ export function VisualPanel({ isThumbnail = false }: VisualPanelProps) {
     setIsLogsCollapsed(prev => !prev);
   }, []);
 
-  // Thumbnail mode: just show VNC, click to expand
+  // Thumbnail mode: compact placeholder or VNC preview, click to expand
   if (isThumbnail) {
+    if (!vncActivated) {
+      return (
+        <div className="h-full w-full flex flex-col items-center justify-center bg-black/80 gap-2">
+          <Monitor size={24} className="text-white/30" />
+          <button
+            onClick={(e) => { e.stopPropagation(); setVncActivated(true); }}
+            className="px-3 py-1.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-xs text-white/70 hover:text-white/90 transition-all flex items-center gap-1.5"
+          >
+            <Monitor size={12} />
+            Connect
+          </button>
+        </div>
+      );
+    }
     return (
-      <div 
+      <div
         className="h-full w-full cursor-pointer"
         onClick={() => setLayoutMode('normal')}
       >
