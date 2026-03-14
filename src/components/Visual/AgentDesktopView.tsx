@@ -26,16 +26,14 @@ export function AgentDesktopView({ agentId, onClose, viewOnly = false, embedded 
   const { vncTarget, isLoading, error } = useAgentDevice(agentId);
   const [transport, setTransport] = useState<VncTransport | null>(null);
   const [transportError, setTransportError] = useState<string | null>(null);
-  const [userActivated, setUserActivated] = useState(false);
 
   // 切换 agent 时重置
   useEffect(() => {
-    setUserActivated(false);
     setTransport(null);
     setTransportError(null);
   }, [agentId]);
 
-  // M1 + P0-5: requestId 避免竞态；仅在 userActivated 后才建连
+  // M1 + P0-5: requestId 避免竞态
   const requestIdRef = useRef(0);
   const vncTargetRef = useRef(vncTarget);
   vncTargetRef.current = vncTarget;
@@ -46,7 +44,7 @@ export function AgentDesktopView({ agentId, onClose, viewOnly = false, embedded 
   useEffect(() => {
     const reqId = ++requestIdRef.current;
     const target = vncTargetRef.current;
-    if (!userActivated || !vncTargetKey || !target) {
+    if (!vncTargetKey || !target) {
       setTransport(null);
       setTransportError(null);
       return;
@@ -59,7 +57,7 @@ export function AgentDesktopView({ agentId, onClose, viewOnly = false, embedded 
       .catch((e) => {
         if (reqId === requestIdRef.current) setTransportError(e instanceof Error ? e.message : '创建传输失败');
       });
-  }, [userActivated, vncTargetKey]);
+  }, [vncTargetKey]);
 
   const renderOverlay = useCallback((ctx: { status: string; errorMsg: string; connect: () => Promise<void>; transportReady: boolean }) => {
     return <VncConnectionOverlay status={ctx.status as import('../../hooks/useVnc').VncSessionStatus} errorMsg={ctx.errorMsg} connect={ctx.connect} transportReady={ctx.transportReady} />;
@@ -101,22 +99,7 @@ export function AgentDesktopView({ agentId, onClose, viewOnly = false, embedded 
     );
   }
 
-  // idle 状态：等待用户点击连接
-  if (!userActivated) {
-    return (
-      <div className="flex flex-col h-full items-center justify-center bg-black text-nb-text-secondary gap-3">
-        <Monitor size={40} className="opacity-40" />
-        <p className="text-sm text-white/50">Agent Desktop</p>
-        <button
-          onClick={() => setUserActivated(true)}
-          className="mt-1 px-5 py-2.5 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-sm text-white/80 transition-all flex items-center gap-2 hover:scale-[1.02]"
-        >
-          <Monitor size={15} />
-          Connect to Remote Desktop
-        </button>
-      </div>
-    );
-  }
+
 
   const retryTransport = useCallback(() => {
     setTransportError(null);
