@@ -211,15 +211,18 @@ export function useVnc(
     console.log(`${VNC_FLOW} [3-useVnc] effect 运行 transport=${hasTransport}(${transportId}) containerReady=${containerReady} containerRef=${hasContainer} canConnect=${canConnect}`);
     if (canConnect) {
       doConnect();
-    } else {
-      if (!hasTransport) {
-        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 transport → disconnect() lastTransportRef=${lastTransportRef.current ? '有' : '无'}`);
-        disconnect();
-      } else if (!containerReady) {
-        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：containerReady=false，不 disconnect（等待容器）`);
-      } else if (!hasContainer) {
-        console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 containerRef，不 disconnect（等待 ref）`);
-      }
+    } else if (!hasTransport && lastTransportRef.current) {
+      // 仅在之前有连接时才 disconnect（切走场景）
+      // 首次挂载 transport 还在异步创建时，保持 status='connecting' 不变
+      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：transport 从有到无 → disconnect()`);
+      disconnect();
+    } else if (!hasTransport) {
+      // 首次挂载，transport 尚未就绪，保持 connecting 状态（显示 spinner 而非 Reconnect 按钮）
+      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：等待 transport（首次挂载/重建中）`);
+    } else if (!containerReady) {
+      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：containerReady=false，不 disconnect（等待容器）`);
+    } else if (!hasContainer) {
+      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 containerRef，不 disconnect（等待 ref）`);
     }
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
