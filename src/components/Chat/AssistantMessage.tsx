@@ -1,4 +1,4 @@
-import { Component, ReactNode, ErrorInfo, useState } from 'react';
+import { Component, ReactNode, ErrorInfo, memo } from 'react';
 import { Message } from '../../types';
 import { Markdown } from './Markdown';
 import { Sparkles, AlertTriangle, ChevronDown } from 'lucide-react';
@@ -71,8 +71,7 @@ function extractContent(data: unknown): string {
   }
 }
 
-function AssistantMessageInner({ message, showHeader = true }: AssistantMessageProps) {
-  const [isHovered, setIsHovered] = useState(false);
+const AssistantMessageInner = memo(function AssistantMessageInner({ message, showHeader = true }: AssistantMessageProps) {
   const events = message.events || [];
   const isStreaming = message.isStreaming;
   const { expand } = useMessages();
@@ -88,21 +87,14 @@ function AssistantMessageInner({ message, showHeader = true }: AssistantMessageP
   };
 
   return (
-    <div 
-      className="group py-1"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
+    <div className="group py-1">
       {/* Header: icon + label - left aligned (只在需要时显示) */}
       {showHeader && (
         <div className="flex items-center gap-1.5 mb-1">
           <Sparkles size={12} className="text-nb-text-muted" />
           <span className="text-[11px] font-medium text-nb-text-secondary uppercase tracking-wide">Agent</span>
-          {/* 时间戳 - hover 显示 */}
-          <span className={`
-            text-[10px] text-nb-text-secondary ml-1 transition-opacity duration-200
-            ${isHovered ? 'opacity-100' : 'opacity-0'}
-          `}>
+          {/* 时间戳 - hover 显示 (CSS-only) */}
+          <span className="text-[10px] text-nb-text-secondary ml-1 transition-opacity duration-200 opacity-0 group-hover:opacity-100">
             {formatMessageTime(message.timestamp)}
           </span>
         </div>
@@ -158,6 +150,7 @@ function AssistantMessageInner({ message, showHeader = true }: AssistantMessageP
                       alt={caption || 'Image'} 
                       className="max-w-full rounded-lg border border-nb-border"
                       style={{ maxHeight: '400px', objectFit: 'contain' }}
+                      loading="lazy"
                     />
                     {caption && (
                       <p className="text-[11px] text-nb-text-secondary">{caption}</p>
@@ -217,7 +210,7 @@ function AssistantMessageInner({ message, showHeader = true }: AssistantMessageP
       </div>
     </div>
   );
-}
+});
 
 export function AssistantMessage(props: AssistantMessageProps) {
   return (

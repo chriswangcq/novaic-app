@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo } from 'react';
 import { Message, MessageStatus } from '../../types';
 import { Check, CheckCheck, Clock, AlertCircle, ChevronDown } from 'lucide-react';
 import { Markdown } from './Markdown';
@@ -19,8 +19,7 @@ const statusConfig: Record<MessageStatus, { icon: typeof Check; text: string; cl
   error: { icon: AlertCircle, text: '发送失败', className: 'text-nb-error' },
 };
 
-export function UserMessage({ message, showHeader = true, showStatus = true }: UserMessageProps) {
-  const [isHovered, setIsHovered] = useState(false);
+export const UserMessage = memo(function UserMessage({ message, showHeader = true, showStatus = true }: UserMessageProps) {
   const status = message.status || 'delivered';
   const statusInfo = statusConfig[status];
   const StatusIcon = statusInfo.icon;
@@ -34,11 +33,7 @@ export function UserMessage({ message, showHeader = true, showStatus = true }: U
   const forceShowStatus = status === 'sending' || status === 'error' || showStatus;
   
   return (
-    <div 
-      className="group py-1"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
+    <div className="group py-1">
       {/* Header: label - right aligned (只在需要时显示) */}
       {showHeader && (
         <div className="flex items-center gap-1.5 mb-1 justify-end">
@@ -62,11 +57,11 @@ export function UserMessage({ message, showHeader = true, showStatus = true }: U
         )}
       </div>
 
-      {/* Message status - 组内最后一条常显，其他 hover 显示 */}
+      {/* Message status - 组内最后一条常显，其他 hover 显示 (CSS-only) */}
       <div className={`
         flex items-center gap-1 mt-1 justify-end text-[10px] transition-opacity duration-200
         ${statusInfo.className}
-        ${forceShowStatus || isHovered ? 'opacity-100' : 'opacity-0'}
+        ${forceShowStatus ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
       `}>
         <StatusIcon size={11} className={status === 'sending' ? 'animate-pulse' : ''} />
         <span>{statusInfo.text}</span>
@@ -80,4 +75,4 @@ export function UserMessage({ message, showHeader = true, showStatus = true }: U
       )}
     </div>
   );
-}
+});

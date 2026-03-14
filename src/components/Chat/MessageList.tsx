@@ -293,6 +293,7 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
                 (() => {
                   const msgIndex = virtualRow.index - 1;
                   const message = messages[msgIndex];
+                  if (!message) return null;
                   const showHeader = messageShowHeader[msgIndex];
                   const showStatus = messageShowStatus[msgIndex];
                   return (
