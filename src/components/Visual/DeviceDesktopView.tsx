@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  Loader2, AlertCircle, X, Play, Square, Users, RefreshCw,
+  Loader2, AlertCircle, X, Play, Square, Users, RefreshCw, Monitor,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { createVncTransport } from '../../services/vncTransport';
@@ -101,6 +101,7 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
     () => (isMaindesk && device?.status === 'running' ? 'running' : 'unknown')
   );
   const [, setStartError] = useState<string | null>(null);
+  const [userActivated, setUserActivated] = useState(false);
 
   // 日志：deviceStatus 变化（排查切回 maindesk 连不上）
   const prevDeviceStatusRef = useRef(deviceStatus);
@@ -133,36 +134,26 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
     return () => { cancelled = true; };
   }, [deviceId, pcClientId, isMaindesk]);
 
-  // M1 + P0-5: requestId 避免竞态；vncTarget=null 时先递增 requestId
+  // M1 + P0-5: requestId 避免竞态；仅在 userActivated 后才建连
   const requestIdRef = useRef(0);
   useEffect(() => {
     const reqId = ++requestIdRef.current;
-    if (!vncTarget) {
-      console.log('[VNC-FLOW] [DeviceDesktopView] effect 跳过：无 vncTarget → setTransport(null) reqId=', reqId, 'subjectType=', subjectType, 'deviceId=', deviceId);
+    if (!userActivated || !vncTarget) {
       setTransport(null);
       setTransportError(null);
       return;
     }
-    // 不再要求 deviceStatus===running 才建连，maindesk/subuser 统一：有 vncTarget 即尝试连接
-    console.log('[VNC-FLOW] [DeviceDesktopView] effect 调用 createVncTransport reqId=', reqId, 'resourceId=', vncTarget.resourceId, 'username=', vncTarget.username || '(maindesk)');
     setTransportError(null);
     createVncTransport(vncTarget)
       .then((t) => {
-        if (reqId === requestIdRef.current) {
-          console.log('[VNC-FLOW] [DeviceDesktopView] createVncTransport 成功 resourceId=', vncTarget.resourceId, 'reqId=', reqId);
-          setTransport(t);
-        } else {
-          console.log('[VNC-FLOW] [DeviceDesktopView] createVncTransport 成功但 reqId 已过期，丢弃 resourceId=', vncTarget.resourceId);
-        }
+        if (reqId === requestIdRef.current) setTransport(t);
       })
       .catch((e) => {
         if (reqId === requestIdRef.current) {
-          console.error('[VNC-FLOW] [DeviceDesktopView] createVncTransport 失败 resourceId=', vncTarget.resourceId, e);
           setTransportError(e instanceof Error ? e.message : '创建传输失败');
         }
       });
-    // 仅依赖 vncTarget：deviceStatus 变化不应触发 createVncTransport 重跑，否则会关闭刚建立的连接
-  }, [vncTarget]);
+  }, [userActivated, vncTarget]);
 
   // M5: 可取消的 startDevice delay
   const startAbortRef = useRef<AbortController | null>(null);
@@ -234,6 +225,26 @@ export function DeviceDesktopView(props: DeviceDesktopViewProps) {
           className="px-4 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-sm text-white/80 transition-colors flex items-center gap-2"
         >
           <RefreshCw size={14} /> Retry
+        </button>
+      </div>
+    );
+  }
+
+  // idle 状态：等待用户点击连接
+  if (!userActivated) {
+    const label = isMaindesk
+      ? (device?.name || 'Linux VM')
+      : (username || 'Sub-user Desktop');
+    return (
+      <div className="flex flex-col h-full items-center justify-center bg-black text-nb-text-secondary gap-3">
+        <Monitor size={40} className="opacity-40" />
+        <p className="text-sm text-white/50">{label}</p>
+        <button
+          onClick={() => setUserActivated(true)}
+          className="mt-1 px-5 py-2.5 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-sm text-white/80 transition-all flex items-center gap-2 hover:scale-[1.02]"
+        >
+          <Monitor size={15} />
+          Connect to Remote Desktop
         </button>
       </div>
     );
