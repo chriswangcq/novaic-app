@@ -271,6 +271,46 @@ function DeviceCard({ subjectCard, agentId: _agentId, onStartVm: _onStartVm, bot
         zIndex: expanded ? 9999 : 50,
       };
 
+  // 未激活时显示紧凑 chip（类似 StoppedDeviceChip），点击后才渲染预览卡
+  if (!vncActivated) {
+    const chipH = FLOATING_PANEL_LAYOUT.chipH;
+    const chipW = getPreviewSize(deviceInfo.type).width;
+    const displayName = binding.subject_label || deviceInfo.name;
+    const chipStyle = inline
+      ? { minWidth: 100, height: chipH, borderRadius: 12 }
+      : {
+          left: window.innerWidth - FLOATING_PANEL_LAYOUT.right - chipW,
+          top: topOffset != null ? topOffset : window.innerHeight - bottomOffset - chipH,
+          width: chipW,
+          height: chipH,
+          borderRadius: 12,
+          zIndex: 50,
+        };
+
+    return (
+      <div
+        className={`flex items-center gap-2 px-2.5 border border-nb-border/50 bg-nb-surface/70
+                   backdrop-blur-sm cursor-default select-none
+                   ${inline ? 'relative shrink-0 w-fit' : 'fixed'} transition-[top] duration-300`}
+        style={chipStyle}
+      >
+        <div className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md bg-nb-surface-hover text-nb-text-muted">
+          {isAndroid ? <Smartphone size={13} /> : <Monitor size={13} />}
+        </div>
+        <span className="flex-1 min-w-0 text-[11px] text-nb-text-muted truncate leading-tight">
+          {displayName}
+        </span>
+        <button
+          onClick={(e) => { e.stopPropagation(); setVncActivated(true); }}
+          title="连接远程桌面"
+          className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-blue-500/20 hover:bg-blue-500/40 text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          <Monitor size={11} />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <>
       {expanded && createPortal(
@@ -301,21 +341,7 @@ function DeviceCard({ subjectCard, agentId: _agentId, onStartVm: _onStartVm, bot
         style={cardStyle}
       >
         <div className="w-full h-full bg-black overflow-hidden relative group/card rounded-[inherit]">
-          {/* 未激活时显示简洁图标（预览态）；激活后渲染 DeviceDesktopView */}
-          {!vncActivated && !expanded ? (
-            <div
-              className="w-full h-full flex items-center justify-center bg-black cursor-pointer"
-              onClick={(e) => { e.stopPropagation(); setVncActivated(true); }}
-              title="Connect to Remote Desktop"
-            >
-              <div className="w-8 h-8 rounded-full bg-white/[0.06] flex items-center justify-center">
-                {isAndroid
-                  ? <Smartphone size={14} className="text-green-400/50" />
-                  : <Monitor size={14} className="text-blue-400/50" />
-                }
-              </div>
-            </div>
-          ) : isMain ? (
+          {isMain ? (
             <div className="w-full h-full">
               <DeviceDesktopView
                 subjectType="main"
