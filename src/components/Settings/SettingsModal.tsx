@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, Fragment } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Eye, Edit3, Smartphone, User, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import type { ApiKeyInfo, CandidateModel } from '../../services/api';
@@ -1464,7 +1464,6 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
   useEffect(() => {
     effectiveAgentIdRef.current = effectiveAgentId;
   }, [effectiveAgentId]);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1587,7 +1586,6 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
     if (!effectiveAgentId) return;
     const loadId = effectiveAgentId;
     const isStale = () => effectiveAgentIdRef.current !== loadId;
-    setLoading(true);
     setLoadError(null);
     setSaveError(null);
     setSaveInfo(null);
@@ -1671,23 +1669,14 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
         setLoadError(`部分配置加载失败: ${errors.join(', ')}`);
       }
 
-      // Load prompts preview
-      if (isStale()) return;
-      try {
-        const p = await settings.getPromptsPreview(effectiveAgentId);
+        const [p, bootstrapFiles] = await Promise.all([
+          settings.getPromptsPreview(effectiveAgentId),
+          settings.getBootstrapFiles(effectiveAgentId)
+        ]);
+        
         if (isStale()) return;
         setPrompts(p);
-      } catch {
-        if (isStale()) return;
-        setPrompts(null);
-        setLoadError(prev => prev ?? 'Prompts preview load failed');
-      }
-
-      // Load bootstrap files
-      if (isStale()) return;
-      try {
-        const bootstrapFiles = await settings.getBootstrapFiles(effectiveAgentId);
-        if (isStale()) return;
+        
         setSoulMd(bootstrapFiles.soul_md || '');
         setHeartbeatMd(bootstrapFiles.heartbeat_md || '');
         setMemoryMd(bootstrapFiles.memory_md || '');
@@ -1695,22 +1684,25 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
         setActiveHoursStart(bootstrapFiles.active_hours_start || '09:00');
         setActiveHoursEnd(bootstrapFiles.active_hours_end || '22:00');
         setActiveHoursTimezone(bootstrapFiles.active_hours_timezone || 'Asia/Shanghai');
-      } catch (e) {
-        console.error('Failed to load bootstrap files:', e);
-        if (isStale()) return;
-        setLoadError(prev => prev ?? 'Bootstrap files load failed');
-      }
     } catch (e) {
       console.error('Failed to load agent tools data:', e);
       if (!isStale()) setLoadError(String(e));
-    } finally {
-      setLoading(false);
     }
   // settings 来自 useSettings()，每次渲染都是新对象，放进去会导致 loadData 无限重跑
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadSubjectsForDevice, effectiveAgentId]);
-
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    setCustomInstructions('');
+    setDisabledTools([]);
+    setSoulMd('');
+    setHeartbeatMd('');
+    setMemoryMd('');
+    setUserMd('');
+    setAssignedSkillIds([]);
+    setMountedTools({});
+    
+    loadData(); 
+  }, [loadData, effectiveAgentId]);
 
   useEffect(() => {
     if (currentAgentId && !selectedAgentId) {
@@ -1870,12 +1862,8 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
         <div className="flex-1 flex items-center justify-center">
           <p className="text-xs text-nb-text-muted">Select an agent to configure</p>
         </div>
-      ) : loading ? (
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-xs text-nb-text-muted">Loading...</p>
-        </div>
       ) : (
-        <>
+        <Fragment key={effectiveAgentId}>
           <div className="flex-1 overflow-y-auto p-4 space-y-5">
             {loadError && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
@@ -2314,7 +2302,7 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
               {saving ? 'Saving...' : 'Save Configuration'}
             </button>
           </div>
-        </>
+        </Fragment>
       )}
     </div>
   );

@@ -156,10 +156,8 @@ export class SyncService {
   // ── Switch agent — load only, no SSE reconnect ────────────────────────────
 
   async switchAgent(agentId: string): Promise<void> {
-    await Promise.all([
-      this.msgService.load(agentId),
-      this.logService.load(agentId),
-    ]);
+    this.msgService.load(agentId).catch(console.warn);
+    this.logService.load(agentId).catch(console.warn);
   }
 
   // ── Disconnect (on logout) ─────────────────────────────────────────────────
