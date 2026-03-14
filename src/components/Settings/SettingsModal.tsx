@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef, Fragment } from 'react';
+import { useAgentConfigFromDB } from '../../hooks/useAgentConfigFromDB';
+import * as agentConfigRepo from '../../db/agentConfigRepo';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { ChevronDown, ChevronLeft, ChevronRight, Search, Plus, X, Trash2, Database, HardDrive, Monitor, Zap, Eye, Edit3, Smartphone, User, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import type { ApiKeyInfo, CandidateModel } from '../../services/api';
@@ -1582,35 +1584,88 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
     []
   );
 
-  const loadData = useCallback(async () => {
+  // ── DB-first read: subscribe to agent config from IndexedDB ──────────────
+  const cachedConfig = useAgentConfigFromDB(effectiveAgentId);
+
+  // Phase 1: When cachedConfig arrives from DB, populate state instantly
+  useEffect(() => {
+    if (!cachedConfig) return;
+    setCategories(cachedConfig.categories || {});
+    setDisabledTools(cachedConfig.disabled_tools || []);
+    setCustomInstructions(cachedConfig.custom_instructions || '');
+    setAllSkills(cachedConfig.all_skills || []);
+    setAssignedSkillIds(cachedConfig.assigned_skill_ids || []);
+    setSoulMd(cachedConfig.soul_md || '');
+    setHeartbeatMd(cachedConfig.heartbeat_md || '');
+    setMemoryMd(cachedConfig.memory_md || '');
+    setUserMd(cachedConfig.user_md || '');
+    setActiveHoursStart(cachedConfig.active_hours_start || '09:00');
+    setActiveHoursEnd(cachedConfig.active_hours_end || '22:00');
+    setActiveHoursTimezone(cachedConfig.active_hours_timezone || 'Asia/Shanghai');
+    setPrompts(cachedConfig.prompts || null);
+  }, [cachedConfig]);
+
+  // Phase 1b: binding, model, devices from Zustand/IDB (already synced)
+  useEffect(() => {
+    if (!effectiveAgentId) return;
+    // Binding comes from agent list (already in IDB)
+    const agent = useAppStore.getState().agents.find(a => a.id === effectiveAgentId);
+    const binding = agent?.binding ?? null;
+    setCurrentBinding(binding);
+    if (binding?.device_id) {
+      setBindingDeviceId(binding.device_id);
+      loadSubjectsForDevice(binding.device_id, {
+        subjectType: binding.subject_type,
+        subjectId: binding.subject_id,
+        mountedTools: binding.mounted_tools,
+      }).catch(() => {});
+    } else {
+      setBindingDeviceId('');
+      setDeviceSubjects([]);
+      setSelectedSubjectType('');
+      setSelectedSubjectId('');
+      setMountedTools({});
+    }
+    // Model from agent record + available models
+    if (agent?.model_id) {
+      const m = useAppStore.getState().availableModels.find(m => m.id === agent.model_id);
+      if (m) {
+        setAgentModelComposite(`${(m as any).api_key_id}:${agent.model_id}`);
+      } else {
+        setAgentModelComposite('');
+      }
+    } else {
+      setAgentModelComposite('');
+    }
+    // Devices from IDB
+    const userId = getCachedUser()?.user_id;
+    if (userId) {
+      getDevices(userId).then(d => setDevices(d)).catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveAgentId, loadSubjectsForDevice]);
+
+  // ── Phase 2: Background revalidate — fetch API → write to IDB ───────────
+  const revalidate = useCallback(async () => {
     if (!effectiveAgentId) return;
     const loadId = effectiveAgentId;
     const isStale = () => effectiveAgentIdRef.current !== loadId;
+    const userId = getCachedUser()?.user_id;
+    if (!userId) return;
+
     setLoadError(null);
     setSaveError(null);
     setSaveInfo(null);
+
     try {
       await getModelService().loadConfig();
-      const [catResult, configResult, skillsResult, agentSkillsResult, devicesResult, bindingResult, modelResult] = await Promise.allSettled([
+      const [catResult, configResult, skillsResult, agentSkillsResult, promptsResult, bootstrapResult] = await Promise.allSettled([
         settings.getToolCategories(),
         settings.getAgentToolsConfig(effectiveAgentId),
         settings.getSkills(true),
         settings.getAgentSkills(effectiveAgentId),
-        getDevices(getCachedUser()!.user_id).then(devices => ({ devices })).catch(() => api.devices.listForUser()),
-        Promise.resolve().then(() => {
-          const b = useAppStore.getState().agents.find(a => a.id === effectiveAgentId)?.binding;
-          return b ? b : api.getAgentBinding(effectiveAgentId);
-        }),
-        Promise.resolve().then(() => {
-          const agent = useAppStore.getState().agents.find(a => a.id === effectiveAgentId);
-          if (agent?.model_id) {
-            const m = useAppStore.getState().availableModels.find(m => m.id === agent.model_id);
-            if (m) {
-              return { agent_id: effectiveAgentId, model_id: agent.model_id, model: m as any };
-            }
-          }
-          return api.getAgentModel(effectiveAgentId);
-        }),
+        settings.getPromptsPreview(effectiveAgentId),
+        settings.getBootstrapFiles(effectiveAgentId),
       ]);
 
       if (isStale()) return;
@@ -1618,91 +1673,84 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
 
       const catRes = catResult.status === 'fulfilled' ? catResult.value : null;
       if (!catRes) errors.push('tools categories');
-      setCategories(catRes?.categories || {});
 
       const configRes = configResult.status === 'fulfilled' ? configResult.value : null;
       if (!configRes) errors.push('tools config');
-      setDisabledTools(configRes?.disabled_tools || []);
-      setCustomInstructions(configRes?.custom_instructions || '');
 
       const skillsRes = skillsResult.status === 'fulfilled' ? skillsResult.value : null;
       if (!skillsRes) errors.push('skills');
-      setAllSkills(skillsRes?.skills || []);
 
       const agentSkillsRes = agentSkillsResult.status === 'fulfilled' ? agentSkillsResult.value : null;
       if (!agentSkillsRes) errors.push('agent skills');
-      setAssignedSkillIds(((agentSkillsRes?.skills) || []).map((s: any) => s.id));
 
-      const devicesRes = devicesResult.status === 'fulfilled' ? devicesResult.value : null;
-      if (!devicesRes) errors.push('devices');
-      const nextDevices = devicesRes?.devices || [];
-      setDevices(nextDevices);
+      const promptsRes = promptsResult.status === 'fulfilled' ? promptsResult.value : null;
+      const bootstrapRes = bootstrapResult.status === 'fulfilled' ? bootstrapResult.value : null;
+
+      if (errors.length > 0) {
+        setLoadError(`部分配置加载失败: ${errors.join(', ')}`);
+      }
+
+      // Write merged result to IDB → subscription will re-render UI
+      await agentConfigRepo.putAgentConfig(userId, {
+        agent_id: effectiveAgentId,
+        disabled_tools: configRes?.disabled_tools || [],
+        custom_instructions: configRes?.custom_instructions || '',
+        categories: catRes?.categories || {},
+        all_skills: skillsRes?.skills || [],
+        assigned_skill_ids: ((agentSkillsRes?.skills) || []).map((s: any) => s.id),
+        soul_md: bootstrapRes?.soul_md || '',
+        heartbeat_md: bootstrapRes?.heartbeat_md || '',
+        memory_md: bootstrapRes?.memory_md || '',
+        user_md: bootstrapRes?.user_md || '',
+        active_hours_start: bootstrapRes?.active_hours_start || '09:00',
+        active_hours_end: bootstrapRes?.active_hours_end || '22:00',
+        active_hours_timezone: bootstrapRes?.active_hours_timezone || 'Asia/Shanghai',
+        prompts: promptsRes || null,
+        fetched_at: Date.now(),
+      });
+
+      // Also refresh binding & model from API → write to agent IDB
+      // (binding comes from getAgentBinding, written back to agent record)
+      const [bindingResult, modelResult] = await Promise.allSettled([
+        api.getAgentBinding(effectiveAgentId),
+        api.getAgentModel(effectiveAgentId),
+      ]);
+      if (isStale()) return;
 
       const bindingRes = bindingResult.status === 'fulfilled' ? bindingResult.value : null;
-      if (bindingResult.status === 'rejected') errors.push('device binding');
       setCurrentBinding(bindingRes);
-
-      const modelRes = modelResult.status === 'fulfilled' ? modelResult.value : null;
-      if (modelRes?.model_id && modelRes?.model) {
-        setAgentModelComposite(`${modelRes.model.api_key_id}:${modelRes.model_id}`);
-      } else {
-        setAgentModelComposite('');
-      }
       if (bindingRes?.device_id) {
         setBindingDeviceId(bindingRes.device_id);
         loadSubjectsForDevice(bindingRes.device_id, {
           subjectType: bindingRes.subject_type,
           subjectId: bindingRes.subject_id,
           mountedTools: bindingRes.mounted_tools,
-        }).catch(() => {
-           setLoadError(prev => prev ? prev + ', device subjects' : 'device subjects loading failed');
-        });
-      } else {
-        setBindingDeviceId('');
-        setDeviceSubjects([]);
-        setSelectedSubjectType('');
-        setSelectedSubjectId('');
-        setMountedTools({});
+        }).catch(() => {});
       }
 
-      if (errors.length > 0) {
-        setLoadError(`部分配置加载失败: ${errors.join(', ')}`);
+      const modelRes = modelResult.status === 'fulfilled' ? modelResult.value : null;
+      if (modelRes?.model_id && modelRes?.model) {
+        setAgentModelComposite(`${modelRes.model.api_key_id}:${modelRes.model_id}`);
       }
 
-        const [p, bootstrapFiles] = await Promise.all([
-          settings.getPromptsPreview(effectiveAgentId),
-          settings.getBootstrapFiles(effectiveAgentId)
-        ]);
-        
-        if (isStale()) return;
-        setPrompts(p);
-        
-        setSoulMd(bootstrapFiles.soul_md || '');
-        setHeartbeatMd(bootstrapFiles.heartbeat_md || '');
-        setMemoryMd(bootstrapFiles.memory_md || '');
-        setUserMd(bootstrapFiles.user_md || '');
-        setActiveHoursStart(bootstrapFiles.active_hours_start || '09:00');
-        setActiveHoursEnd(bootstrapFiles.active_hours_end || '22:00');
-        setActiveHoursTimezone(bootstrapFiles.active_hours_timezone || 'Asia/Shanghai');
+      // Refresh devices list into IDB
+      api.devices.listForUser().then(res => {
+        if (res.devices && userId) {
+          import('../../db/deviceRepo').then(repo => repo.putDevices(userId, res.devices));
+          setDevices(res.devices);
+        }
+      }).catch(() => {});
     } catch (e) {
-      console.error('Failed to load agent tools data:', e);
+      console.error('Failed to revalidate agent tools data:', e);
       if (!isStale()) setLoadError(String(e));
     }
-  // settings 来自 useSettings()，每次渲染都是新对象，放进去会导致 loadData 无限重跑
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadSubjectsForDevice, effectiveAgentId]);
+
+  // Phase 2 trigger: fire revalidation on agent change
   useEffect(() => {
-    setCustomInstructions('');
-    setDisabledTools([]);
-    setSoulMd('');
-    setHeartbeatMd('');
-    setMemoryMd('');
-    setUserMd('');
-    setAssignedSkillIds([]);
-    setMountedTools({});
-    
-    loadData(); 
-  }, [loadData, effectiveAgentId]);
+    revalidate();
+  }, [revalidate]);
 
   useEffect(() => {
     if (currentAgentId && !selectedAgentId) {
@@ -1753,10 +1801,27 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
 
       await Promise.all(saveTasks);
       // Reload prompts preview after save
+      let freshPrompts = prompts;
       try {
-        const p = await settings.getPromptsPreview(effectiveAgentId);
-        setPrompts(p);
+        freshPrompts = await settings.getPromptsPreview(effectiveAgentId);
+        setPrompts(freshPrompts);
       } catch { /* ignore */ }
+      // Write-through: persist saved config to IDB so future reads are instant
+      const userId = getCachedUser()?.user_id;
+      if (userId) {
+        agentConfigRepo.patchAgentConfig(userId, effectiveAgentId, {
+          disabled_tools: disabledTools,
+          custom_instructions: customInstructions,
+          assigned_skill_ids: assignedSkillIds,
+          soul_md: soulMd,
+          heartbeat_md: heartbeatMd,
+          active_hours_start: activeHoursStart,
+          active_hours_end: activeHoursEnd,
+          active_hours_timezone: activeHoursTimezone,
+          prompts: freshPrompts,
+          fetched_at: Date.now(),
+        }).catch(console.warn);
+      }
       setSaveInfo('Configuration saved');
     } catch (e) {
       console.error('Failed to save:', e);

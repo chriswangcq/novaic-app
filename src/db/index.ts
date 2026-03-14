@@ -5,7 +5,7 @@
 
 import { openDB, deleteDB, type IDBPDatabase } from 'idb';
 
-export const DB_VERSION = 4;
+export const DB_VERSION = 5;
 
 let _db: IDBPDatabase | null = null;
 let _dbUserId: string | null = null;
@@ -45,6 +45,11 @@ export async function getDb(userId: string): Promise<IDBPDatabase> {
       if (oldVersion < 4) {
         db.createObjectStore('agents', { keyPath: 'id' });
         db.createObjectStore('devices', { keyPath: 'id' });
+      }
+
+      // v4 → v5: add agent_configs store for per-agent settings cache
+      if (oldVersion < 5) {
+        db.createObjectStore('agent_configs', { keyPath: 'agent_id' });
       }
     },
   });
