@@ -159,6 +159,7 @@ function DeviceCard({ subjectCard, agentId: _agentId, onStartVm: _onStartVm, bot
   const [expanded,       setExpanded]       = useState(false);
   const [operating,      setOperating]      = useState(false);
   const [showPowerMenu,  setShowPowerMenu]  = useState(false);
+  const [vncActivated,   setVncActivated]   = useState(false);
 
   const getPreviewRect = useCallback(() => {
     if (topOffset != null) return previewRectTop(deviceInfo.type, topOffset);
@@ -215,6 +216,7 @@ function DeviceCard({ subjectCard, agentId: _agentId, onStartVm: _onStartVm, bot
   }, [expanded, operating]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const expand = useCallback(() => {
+    setVncActivated(true);
     setRect(overlayRect(deviceInfo.type, inline ? 0 : spacerWidth));
     setExpanded(true);
     setTimeout(() => window.dispatchEvent(new Event('resize')), 380);
@@ -299,7 +301,21 @@ function DeviceCard({ subjectCard, agentId: _agentId, onStartVm: _onStartVm, bot
         style={cardStyle}
       >
         <div className="w-full h-full bg-black overflow-hidden relative group/card rounded-[inherit]">
-          {isMain ? (
+          {/* 未激活时显示简洁图标（预览态）；激活后渲染 DeviceDesktopView */}
+          {!vncActivated && !expanded ? (
+            <div
+              className="w-full h-full flex items-center justify-center bg-black cursor-pointer"
+              onClick={(e) => { e.stopPropagation(); setVncActivated(true); }}
+              title="Connect to Remote Desktop"
+            >
+              <div className="w-8 h-8 rounded-full bg-white/[0.06] flex items-center justify-center">
+                {isAndroid
+                  ? <Smartphone size={14} className="text-green-400/50" />
+                  : <Monitor size={14} className="text-blue-400/50" />
+                }
+              </div>
+            </div>
+          ) : isMain ? (
             <div className="w-full h-full">
               <DeviceDesktopView
                 subjectType="main"
