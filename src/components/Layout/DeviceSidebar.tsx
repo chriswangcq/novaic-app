@@ -43,7 +43,7 @@ interface DeviceCardProps {
 
 function DeviceCard({ 
   device, 
-  deviceForVnc,
+  deviceForVnc: _deviceForVnc,
   onStart,
   onStop,
   onOpenDisplay,
@@ -119,13 +119,10 @@ function DeviceCard({
               className="w-full overflow-hidden rounded border border-nb-border bg-black relative"
               style={{ aspectRatio: device.type === 'linux' ? '16/10' : '9/20' }}
             >
-              {device.type === 'linux' && deviceForVnc ? (
-                <DeviceDesktopView
-                  subjectType="main"
-                  device={deviceForVnc}
-                  embedded
-                  viewOnly
-                />
+              {device.type === 'linux' ? (
+                <div className="w-full h-full flex items-center justify-center bg-black">
+                  <Monitor size={20} className="text-blue-400/60" />
+                </div>
               ) : device.type === 'android' ? (
                 <ScrcpyView 
                   deviceSerial={device.serial} 
