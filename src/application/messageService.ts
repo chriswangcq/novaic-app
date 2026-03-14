@@ -52,8 +52,8 @@ export class MessageService {
     // 1. Read from DB (useMessagesFromDB subscribes; we still need deltaSync)
     await msgRepo.getMessages(this.userId, agentId, { limit: PAGINATION_CONFIG.CHAT_HISTORY_LIMIT }).catch(() => []);
 
-    // 2. Sync from server — awaited so messages are ready before UI renders.
-    await this._deltaSync(agentId, isCurrent).catch(err => console.warn('[MessageService] deltaSync:', err));
+    // 2. Sync from server in the background so we don't block UI renders.
+    this._deltaSync(agentId, isCurrent).catch(err => console.warn('[MessageService] deltaSync:', err));
   }
 
   private async _deltaSync(agentId: string, isCurrent: () => boolean): Promise<void> {

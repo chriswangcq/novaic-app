@@ -128,7 +128,7 @@ export class AgentService {
     if (currentAgentId === agentId) return;
 
     useAppStore.getState().setCurrentAgentId(agentId);
-    await prefsRepo.setSelectedAgent(this.userId, agentId);
+    prefsRepo.setSelectedAgent(this.userId, agentId).catch(console.error);
 
     await Promise.all([
       this.syncService.switchAgent(agentId),
