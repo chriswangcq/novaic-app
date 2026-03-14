@@ -187,25 +187,28 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
 
   // ── 初始滚动到底部 ────────────────────────────────────────────────────────
   //
-  // 关键修复：isReady 的设置不依赖 scrollToBottom（它随 messages.length 变化），
-  // 否则 SSE 流式消息到来时 timer 被反复取消，isReady 永远 false → 消息区 opacity-0。
-  // 用 ref 调用 scrollToBottom 避免依赖不稳定。
+  // 彻底修复：不使用 setTimeout + cleanup 模式。
+  // 问题：messages.length 在依赖数组里 → SSE 每条新消息都触发 cleanup →
+  // clearTimeout 取消 timer → isReady 永远 false → 消息区 opacity-0。
+  //
+  // 方案：消息首次到来时同步设 isReady=true + hasInitialScrolled=true，
+  // 用 rAF（不可被 useEffect cleanup 取消）完成滚动。
 
   const scrollToBottomFnRef = useRef(scrollToBottom);
   scrollToBottomFnRef.current = scrollToBottom;
 
   useEffect(() => {
     if (!hasInitialScrolled.current && messages.length > 0) {
-      const timer = setTimeout(() => {
+      hasInitialScrolled.current = true;
+      setIsReady(true);
+      // rAF ensures virtualizer has measured items before scrolling
+      requestAnimationFrame(() => {
         scrollToBottomFnRef.current('auto');
-        hasInitialScrolled.current = true;
-        setIsReady(true);
-      }, 0);
-      return () => clearTimeout(timer);
+      });
     } else if (messages.length === 0) {
       setIsReady(true);
     }
-  }, [messages.length]); // ← 不再依赖 scrollToBottom
+  }, [messages.length]);
 
   // ── 新消息智能滚动 ────────────────────────────────────────────────────────
 
