@@ -13,11 +13,11 @@ import type { AICAgent } from '../services/api';
  */
 export function useAgentsFromDB() {
   const [agents, setAgents] = useState<AICAgent[]>([]);
-  const user = getCachedUser();
+  // getCachedUser() returns a NEW object each call — extract stable user_id to avoid infinite re-render
+  const userId = getCachedUser()?.user_id ?? null;
 
   useEffect(() => {
-    if (!user) return;
-    const userId = user.user_id;
+    if (!userId) return;
 
     // Load initial data
     const fetch = async () => {
@@ -36,7 +36,7 @@ export function useAgentsFromDB() {
     return subscribe(userId, () => {
       fetch();
     });
-  }, [user]);
+  }, [userId]);
 
   return agents;
 }

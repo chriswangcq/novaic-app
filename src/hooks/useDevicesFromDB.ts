@@ -12,11 +12,11 @@ import type { Device } from '../types';
  */
 export function useDevicesFromDB() {
   const [devices, setDevices] = useState<Device[]>([]);
-  const user = getCachedUser();
+  // getCachedUser() returns a NEW object each call — extract stable user_id to avoid infinite re-render
+  const userId = getCachedUser()?.user_id ?? null;
 
   useEffect(() => {
-    if (!user) return;
-    const userId = user.user_id;
+    if (!userId) return;
 
     // Load initial data
     const fetch = async () => {
@@ -35,7 +35,7 @@ export function useDevicesFromDB() {
     return subscribe(userId, () => {
       fetch();
     });
-  }, [user]);
+  }, [userId]);
 
   return devices;
 }
