@@ -9,6 +9,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 import type { AgentDeviceBinding } from '../services/api';
 import type { Device } from '../types';
+import { useAppStore } from '../application/store';
+import { getDevice } from '../db/deviceRepo';
+import { getCachedUser } from '../services/auth';
 
 export interface AgentBindingState {
   binding: AgentDeviceBinding | null;
@@ -41,7 +44,7 @@ export function useAgentBinding(
     setError(null);
 
     try {
-      let b: AgentDeviceBinding | null = initialBinding ?? null;
+      let b: AgentDeviceBinding | null = initialBinding ?? useAppStore.getState().agents.find(a => a.id === agentId)?.binding ?? null;
       if (!b) {
         b = await api.getAgentBinding(agentId);
       }
@@ -53,7 +56,14 @@ export function useAgentBinding(
         return;
       }
 
-      const d = await api.devices.get(b.device_id);
+      const user = getCachedUser();
+      let d: Device | null = null;
+      if (user) {
+         d = await getDevice(user.user_id, b.device_id);
+      }
+      if (!d) {
+         d = await api.devices.get(b.device_id);
+      }
       setDevice(d);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

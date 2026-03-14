@@ -13,6 +13,8 @@ import type { Device } from '../types';
 import type { VncTarget } from '../types/vnc';
 import { statusKey } from '../utils/deviceStatusKey';
 import { useAppStore } from '../application/store';
+import { getDevice } from '../db/deviceRepo';
+import { getCachedUser } from '../services/auth';
 
 export interface UseAgentDeviceResult {
   binding: AgentDeviceBinding | null;
@@ -82,8 +84,11 @@ export function useAgentDevice(agentId: string | null): UseAgentDeviceResult {
     setError(null);
     try {
       const appInstanceId = useAppStore.getState().appInstanceId;
+      const cachedAgent = useAppStore.getState().agents.find(a => a.id === requestFor);
+      const cachedBinding = cachedAgent?.binding ?? null;
+
       const [b, pcResult] = await Promise.all([
-        api.getAgentBinding(requestFor),
+        cachedBinding ? Promise.resolve(cachedBinding) : api.getAgentBinding(requestFor),
         appInstanceId ? api.p2p.resolveCurrentPcClientId(appInstanceId) : Promise.resolve({ pcClientId: undefined }),
       ]);
       const pcClientId = pcResult?.pcClientId;
@@ -96,7 +101,20 @@ export function useAgentDevice(agentId: string | null): UseAgentDeviceResult {
         setIsLoading(false);
         return;
       }
-      const d = await getDeviceCached(b.device_id, pcClientId);
+      let d: Device | null = null;
+      if (b) {
+        // First try to load from IndexedDB to avoid API request
+        const user = getCachedUser();
+        if (user) {
+          d = await getDevice(user.user_id, b.device_id);
+        }
+        
+        // Fallback to API/Cache
+        if (!d) {
+          d = await getDeviceCached(b.device_id, pcClientId);
+        }
+      }
+
       if (agentIdRef.current !== requestFor) return;
       setDevice(d);
       const target = bindingToVncTarget(b, d);

@@ -2,6 +2,8 @@
  * NB-CC Type Definitions
  */
 
+import type { AgentDeviceBinding } from '../services/api';
+
 export { RFB_OPTIONS, type VncTarget } from './vnc';
 
 // ==================== Unified Device Types ====================
@@ -384,6 +386,9 @@ export interface AICAgent {
   };
   // 统一设备列表（新架构）
   devices?: Device[];
+
+  binding?: AgentDeviceBinding | null;
+  model_id?: string;
 }
 
 /**

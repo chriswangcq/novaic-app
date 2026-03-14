@@ -1031,11 +1031,16 @@ export const api = {
      * 失败时重试 2–3 次（间隔 500ms），缓解 appInstanceId 与 DeviceRegistry 双重异步。
      * 失败时返回 errorMessage 区分根因：appInstanceId 未同步、Cloud Bridge 未连、设备列表为空。
      */
+    __pcClientCache: null as { id: string, ts: number } | null,
     resolveCurrentPcClientId: async (
       appInstanceId: string | null
     ): Promise<{ pcClientId?: string; errorMessage?: string }> => {
       if (!appInstanceId) {
         return { errorMessage: 'appInstanceId 未同步，请稍后重试' };
+      }
+      const CACHE_TTL = 30000;
+      if (api.p2p.__pcClientCache && Date.now() - api.p2p.__pcClientCache.ts < CACHE_TTL) {
+        return { pcClientId: api.p2p.__pcClientCache.id };
       }
       const maxAttempts = 3;
       const intervalMs = 500;
@@ -1048,7 +1053,10 @@ export const api = {
           }
           const local = res.devices.find((d) => d.is_local);
           const id = local?.device_id ?? local?.pc_client_id ?? res.devices[0]?.device_id;
-          if (id) return { pcClientId: id };
+          if (id) {
+            api.p2p.__pcClientCache = { id, ts: Date.now() };
+            return { pcClientId: id };
+          }
           lastError = '未找到可用的 PC 设备，请确保 Tauri 应用已连接';
         } catch {
           lastError = 'Cloud Bridge 未连接或网络异常，请检查网络后重试';

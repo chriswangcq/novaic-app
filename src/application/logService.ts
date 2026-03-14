@@ -71,8 +71,7 @@ export class LogService {
     }
 
     if (!isCurrent()) return;
-    await this.fetchSubagentTree(agentId);
-    if (!isCurrent()) return;
+    this.fetchSubagentTree(agentId).catch(console.warn);
   }
 
   // ── Handle SSE log_batch ───────────────────────────────────────────────────

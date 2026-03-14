@@ -130,8 +130,10 @@ export class AgentService {
     useAppStore.getState().setCurrentAgentId(agentId);
     await prefsRepo.setSelectedAgent(this.userId, agentId);
 
-    await this.syncService.switchAgent(agentId);
-    await this.modelService.loadForAgent(agentId);
+    await Promise.all([
+      this.syncService.switchAgent(agentId),
+      this.modelService.loadForAgent(agentId),
+    ]);
   }
 
   // ── CRUD ──────────────────────────────────────────────────────────────────

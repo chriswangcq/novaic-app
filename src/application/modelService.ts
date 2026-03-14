@@ -30,6 +30,22 @@ export class ModelService {
   }
 
   async loadForAgent(agentId: string): Promise<void> {
+    const agents = useAppStore.getState().agents;
+    const availableModels = useAppStore.getState().availableModels;
+    
+    // Fast path: use cached model_id from agent
+    const agent = agents.find(a => a.id === agentId);
+    if (agent?.model_id) {
+      const m = availableModels.find(m => m.id === agent.model_id);
+      if (m) {
+        const composite = `${m.api_key_id}:${agent.model_id}`;
+        useAppStore.getState().patchState({ selectedModel: composite });
+        prefsRepo.setSelectedModel(this.userId, composite).catch(console.error);
+        return; // Fast path successful
+      }
+    }
+
+    // Slow path fallback (done without waiting by the caller ideally, but we await here for safety of fallback)
     try {
       const mc = await api.getAgentModel(agentId);
       if (mc?.model_id && mc.model) {
@@ -37,7 +53,9 @@ export class ModelService {
         useAppStore.getState().patchState({ selectedModel: composite });
         await prefsRepo.setSelectedModel(this.userId, composite);
       }
-    } catch {}
+    } catch (e) {
+      console.error('[ModelService] loadForAgent API fallback failed:', e);
+    }
   }
 
   async setModel(agentId: string | null, model: string): Promise<void> {
