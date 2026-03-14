@@ -21,9 +21,6 @@ export function ChatPanel() {
   const { logExpanded, setLogExpanded, logHeightRatio, setLogHeightRatio } = useLayout();
   const chatViewShowExecutionLog = useAppStore(s => s.chatViewShowExecutionLog);
   const chatViewShowSubagents = useAppStore(s => s.chatViewShowSubagents);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const scrollToBottomRef = useRef<(() => void) | null>(null);
-  const clearUnreadRef = useRef<(() => void) | null>(null);
   const mainAreaRef = useRef<HTMLDivElement>(null);
   const isLgOrAbove = useIsLgOrAbove();
 
@@ -38,15 +35,6 @@ export function ChatPanel() {
     };
     vv.addEventListener('resize', check);
     return () => vv.removeEventListener('resize', check);
-  }, []);
-
-  const stableSetUnreadCount = useCallback((count: number) => {
-    setUnreadCount(count);
-  }, []);
-
-  const handleScrollToBottom = useCallback(() => {
-    clearUnreadRef.current?.();
-    scrollToBottomRef.current?.();
   }, []);
 
   const handleLogResize = useCallback(
@@ -81,12 +69,7 @@ export function ChatPanel() {
               : { flex: 1, minHeight: 0 }
           }
         >
-          <MessageList
-            messages={messages}
-            onUnreadCountChange={stableSetUnreadCount}
-            scrollToBottomRef={scrollToBottomRef}
-            clearUnreadRef={clearUnreadRef}
-          />
+          <MessageList messages={messages} />
           {/* 主 Agent 日志：漂浮在 MessageList 顶部，比消息区窄，边缘渐变透明；隐藏时不占高度 */}
           {!logExpanded && showMainAgentLogPreview && (
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[88%] max-w-2xl pointer-events-none z-10">
@@ -152,11 +135,7 @@ export function ChatPanel() {
         )}
         <div className={`flex items-stretch bg-nb-bg/80 ${keyboardActive ? 'pb-0' : 'pb-4'}`}>
           <div className="flex-1 min-w-0 flex flex-col items-center">
-            <ChatInput
-              onSend={sendMessage}
-              unreadCount={unreadCount}
-              onScrollToBottom={handleScrollToBottom}
-            />
+            <ChatInput onSend={sendMessage} />
           </div>
         </div>
       </div>

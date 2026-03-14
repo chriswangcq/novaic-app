@@ -1,6 +1,8 @@
 import { useState, useRef, KeyboardEvent, useEffect, useCallback } from 'react';
 import { ArrowUp, Bot, X, ArrowDown, Paperclip } from 'lucide-react';
 import { useAgent } from '../hooks/useAgent';
+import { useAppStore } from '../../application/store';
+import { scrollToBottom } from '../../application/chatScrollRegistry';
 
 const MAX_ATTACHMENTS = 5;
 const MAX_FILE_SIZE_MB = 500; // 支持大文件（如 APK）
@@ -21,15 +23,11 @@ const ALLOWED_TYPES = [
 interface ChatInputProps {
   onSend: (content: string, attachments?: File[]) => void;
   placeholder?: string;
-  unreadCount?: number;
-  onScrollToBottom?: () => void;
 }
 
 export function ChatInput({ 
   onSend, 
   placeholder = "Ask anything...",
-  unreadCount = 0,
-  onScrollToBottom
 }: ChatInputProps) {
   const [content, setContent] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -40,6 +38,7 @@ export function ChatInput({
 
   const { currentAgentId } = useAgent();
   const hasAgent = !!currentAgentId;
+  const unreadCount = useAppStore(s => s.chatUnreadCount);
 
   useEffect(() => {
     // 移动端不自动聚焦，避免键盘自动弹出
@@ -116,9 +115,7 @@ export function ChatInput({
       {/* 新消息提示胶囊按钮 - 在输入框上方 */}
       {unreadCount > 0 && (
         <button
-          onClick={() => {
-            onScrollToBottom?.();
-          }}
+          onClick={scrollToBottom}
           className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-4 py-2 bg-white/10 hover:bg-white/15 hover:scale-105 text-white text-sm rounded-full shadow-lg flex items-center gap-2 z-10 transition-all animate-fade-in border border-white/20"
         >
           <span>{unreadCount}条新消息</span>
@@ -227,4 +224,3 @@ export function ChatInput({
     </div>
   );
 }
-

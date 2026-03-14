@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useState, useMemo } from 'react';
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Message } from '../../types';
 import { UserMessage } from './UserMessage';
@@ -9,6 +9,8 @@ import { useAgent } from '../hooks/useAgent';
 import { useLogs } from '../hooks/useLogs';
 import { useVirtualList } from '../../hooks/useVirtualList';
 import { useScrollPagination } from '../../hooks/useScrollPagination';
+import { useAppStore } from '../../application/store';
+import { registerScrollToBottom, unregisterScrollToBottom } from '../../application/chatScrollRegistry';
 import { MESSAGE_ESTIMATE_SIZE, MESSAGE_OVERSCAN } from '../../constants/scroll';
 import type { VirtualItem } from '@tanstack/virtual-core';
 import type { Virtualizer } from '@tanstack/react-virtual';
@@ -18,17 +20,14 @@ const HEADER_SLOT_HEIGHT = 40;
 
 interface MessageListProps {
   messages: Message[];
-  onUnreadCountChange?: (count: number) => void;
-  scrollToBottomRef?: React.MutableRefObject<(() => void) | null>;
-  clearUnreadRef?: React.MutableRefObject<(() => void) | null>;
 }
 
-export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, clearUnreadRef }: MessageListProps) {
+export function MessageList({ messages }: MessageListProps) {
   const lastMessageCountRef = useRef(messages.length);
   const lastMessageIdRef = useRef<string | null>(null);
   const prevIsLoadingMoreRef = useRef(false);
-  const [unreadCount, setUnreadCount] = useState(0);
   const hasInitialScrolled = useRef(false);
+  const patchState = useAppStore(s => s.patchState);
 
   const { hasMore: hasMoreMessages, isLoadingMore, loadMore: loadMoreMessages } = useMessages();
   const { currentAgentId } = useAgent();
@@ -161,27 +160,24 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
     });
   }, [virtualizer, messages.length]);
 
-  const clearUnread = useCallback(() => setUnreadCount(0), []);
-
-  // ── 暴露给父组件的函数 ────────────────────────────────────────────────────
+  // ── 注册 scrollToBottom 到全局 registry（任何组件可调用，无需 prop drilling）──
 
   useEffect(() => {
-    if (scrollToBottomRef) scrollToBottomRef.current = () => scrollToBottom('auto');
-    if (clearUnreadRef) clearUnreadRef.current = clearUnread;
-  }, [scrollToBottom, scrollToBottomRef, clearUnread, clearUnreadRef]);
-
-  useEffect(() => {
-    onUnreadCountChange?.(unreadCount);
-  }, [unreadCount, onUnreadCountChange]);
+    registerScrollToBottom(() => {
+      scrollToBottom('auto');
+      patchState({ chatUnreadCount: 0 });
+    });
+    return () => unregisterScrollToBottom();
+  }, [scrollToBottom, patchState]);
 
   // ── 切换 Agent 时重置 ─────────────────────────────────────────────────────
 
   useLayoutEffect(() => {
     hasInitialScrolled.current = false;
-    setUnreadCount(0);
+    patchState({ chatUnreadCount: 0 });
     lastMessageIdRef.current = null;
     prevIsLoadingMoreRef.current = false;
-  }, [currentAgentId]);
+  }, [currentAgentId, patchState]);
 
   // ── 初始滚动到底部 ────────────────────────────────────────────────────────
 
@@ -210,14 +206,14 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
       if (latestMessage.id !== prevMessageId && !isLoadingMore && !justFinishedLoadingMore) {
         if (latestMessage.role === 'user') {
           scrollToBottom('auto');
-          setUnreadCount(0);
+          patchState({ chatUnreadCount: 0 });
         } else {
           rafId = requestAnimationFrame(() => {
             if (shouldClearUnread()) {
               scrollToBottom('auto');
-              setUnreadCount(0);
+              patchState({ chatUnreadCount: 0 });
             } else {
-              setUnreadCount(prev => prev + 1);
+              patchState({ chatUnreadCount: useAppStore.getState().chatUnreadCount + 1 });
             }
           });
         }
@@ -235,8 +231,10 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
 
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     handlePaginationScroll(e);
-    if (unreadCount > 0 && shouldClearUnread()) setUnreadCount(0);
-  }, [handlePaginationScroll, unreadCount, shouldClearUnread]);
+    if (useAppStore.getState().chatUnreadCount > 0 && shouldClearUnread()) {
+      patchState({ chatUnreadCount: 0 });
+    }
+  }, [handlePaginationScroll, shouldClearUnread, patchState]);
 
   // ── Empty state ───────────────────────────────────────────────────────────
 

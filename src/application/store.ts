@@ -131,6 +131,8 @@ export interface AppState {
   chatViewShowDevice: boolean;
   chatViewShowExecutionLog: boolean;
   chatViewShowSubagents: boolean;
+  /** 未读消息数（只在滚动离开底部时累计） */
+  chatUnreadCount: number;
 
   // Layout
   layoutMode: LayoutMode;
@@ -196,6 +198,7 @@ export const useAppStore = create<Store>((set) => ({
   chatViewShowDevice:  true,
   chatViewShowExecutionLog: true,
   chatViewShowSubagents: true,
+  chatUnreadCount: 0,
   ...defaultLayout(),
 
   // ── Setters ────────────────────────────────────────────────────────────────
