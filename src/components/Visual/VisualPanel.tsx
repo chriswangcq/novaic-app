@@ -127,15 +127,14 @@ export function VisualPanel({ isThumbnail = false }: VisualPanelProps) {
   if (isThumbnail) {
     if (!vncActivated) {
       return (
-        <div className="h-full w-full flex flex-col items-center justify-center bg-black/80 gap-2">
-          <Monitor size={24} className="text-white/30" />
-          <button
-            onClick={(e) => { e.stopPropagation(); setVncActivated(true); }}
-            className="px-3 py-1.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-xs text-white/70 hover:text-white/90 transition-all flex items-center gap-1.5"
-          >
-            <Monitor size={12} />
-            Connect
-          </button>
+        <div
+          className="h-full w-full flex items-center justify-center bg-black cursor-pointer group"
+          onClick={() => setVncActivated(true)}
+          title="Connect to Remote Desktop"
+        >
+          <div className="w-10 h-10 rounded-full bg-white/[0.06] group-hover:bg-white/[0.12] flex items-center justify-center transition-all group-hover:scale-110">
+            <Monitor size={18} className="text-white/40 group-hover:text-white/70 transition-colors" />
+          </div>
         </div>
       );
     }
