@@ -186,11 +186,18 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
   }, [currentAgentId]);
 
   // ── 初始滚动到底部 ────────────────────────────────────────────────────────
+  //
+  // 关键修复：isReady 的设置不依赖 scrollToBottom（它随 messages.length 变化），
+  // 否则 SSE 流式消息到来时 timer 被反复取消，isReady 永远 false → 消息区 opacity-0。
+  // 用 ref 调用 scrollToBottom 避免依赖不稳定。
+
+  const scrollToBottomFnRef = useRef(scrollToBottom);
+  scrollToBottomFnRef.current = scrollToBottom;
 
   useEffect(() => {
     if (!hasInitialScrolled.current && messages.length > 0) {
       const timer = setTimeout(() => {
-        scrollToBottom('auto');
+        scrollToBottomFnRef.current('auto');
         hasInitialScrolled.current = true;
         setIsReady(true);
       }, 0);
@@ -198,7 +205,7 @@ export function MessageList({ messages, onUnreadCountChange, scrollToBottomRef, 
     } else if (messages.length === 0) {
       setIsReady(true);
     }
-  }, [messages.length, scrollToBottom]);
+  }, [messages.length]); // ← 不再依赖 scrollToBottom
 
   // ── 新消息智能滚动 ────────────────────────────────────────────────────────
 
