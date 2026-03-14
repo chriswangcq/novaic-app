@@ -12,6 +12,8 @@ import { getCachedUser } from '../../services/auth';
 import { clearLocalDb } from '../../db';
 import { Markdown } from '../Chat/Markdown';
 import type { Device } from '../../types';
+import { getDevices } from '../../db/deviceRepo';
+import { useAppStore } from '../../application/store';
 
 // ==================== Tab Types ====================
 
@@ -1596,9 +1598,21 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
         settings.getAgentToolsConfig(effectiveAgentId),
         settings.getSkills(true),
         settings.getAgentSkills(effectiveAgentId),
-        api.devices.listForUser(),
-        api.getAgentBinding(effectiveAgentId),
-        api.getAgentModel(effectiveAgentId),
+        getDevices(getCachedUser()!.user_id).then(devices => ({ devices })).catch(() => api.devices.listForUser()),
+        Promise.resolve().then(() => {
+          const b = useAppStore.getState().agents.find(a => a.id === effectiveAgentId)?.binding;
+          return b ? b : api.getAgentBinding(effectiveAgentId);
+        }),
+        Promise.resolve().then(() => {
+          const agent = useAppStore.getState().agents.find(a => a.id === effectiveAgentId);
+          if (agent?.model_id) {
+            const m = useAppStore.getState().availableModels.find(m => m.id === agent.model_id);
+            if (m) {
+              return { agent_id: effectiveAgentId, model_id: agent.model_id, model: m as any };
+            }
+          }
+          return api.getAgentModel(effectiveAgentId);
+        }),
       ]);
 
       if (isStale()) return;
@@ -1638,12 +1652,13 @@ function AgentToolsTab({ hideAgentSelector = false }: { hideAgentSelector?: bool
       }
       if (bindingRes?.device_id) {
         setBindingDeviceId(bindingRes.device_id);
-        const subjectsOk = await loadSubjectsForDevice(bindingRes.device_id, {
+        loadSubjectsForDevice(bindingRes.device_id, {
           subjectType: bindingRes.subject_type,
           subjectId: bindingRes.subject_id,
           mountedTools: bindingRes.mounted_tools,
+        }).catch(() => {
+           setLoadError(prev => prev ? prev + ', device subjects' : 'device subjects loading failed');
         });
-        if (!subjectsOk) errors.push('device subjects');
       } else {
         setBindingDeviceId('');
         setDeviceSubjects([]);
