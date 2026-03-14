@@ -205,28 +205,13 @@ export function useVnc(
     const hasTransport = !!transport;
     const hasContainer = !!containerRef.current;
     const canConnect = hasTransport && containerReady && hasContainer;
-    const transportId = transport && typeof transport !== 'string' && 'resourceId' in transport
-      ? `${(transport as VncBridgeTransport).resourceId?.slice(0, 8)}:${(transport as VncBridgeTransport).username || 'main'}`
-      : 'null';
-    console.log(`${VNC_FLOW} [3-useVnc] effect 运行 transport=${hasTransport}(${transportId}) containerReady=${containerReady} containerRef=${hasContainer} canConnect=${canConnect}`);
     if (canConnect) {
       doConnect();
-    } else if (!hasTransport && lastTransportRef.current) {
-      // 仅在之前有连接时才 disconnect（切走场景）
-      // 首次挂载 transport 还在异步创建时，保持 status='connecting' 不变
-      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：transport 从有到无 → disconnect()`);
-      disconnect();
     } else if (!hasTransport) {
-      // 首次挂载，transport 尚未就绪，保持 connecting 状态（显示 spinner 而非 Reconnect 按钮）
-      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：等待 transport（首次挂载/重建中）`);
-    } else if (!containerReady) {
-      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：containerReady=false，不 disconnect（等待容器）`);
-    } else if (!hasContainer) {
-      console.log(`${VNC_FLOW} [3-useVnc] effect 跳过：无 containerRef，不 disconnect（等待 ref）`);
+      disconnect();
     }
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-      // 仅清理定时器；disconnect 由 mount effect 的 unmount 负责，避免 effect 因 doConnect 依赖重跑时误关 transport
     };
   }, [transport, containerReady, doConnect, disconnect]);
 
